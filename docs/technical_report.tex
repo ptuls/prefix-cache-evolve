@@ -1,0 +1,2148 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=0.82in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,fit,shapes.geometric}
+\usepackage{hyperref}
+
+\definecolor{navy}{HTML}{17365D}
+\definecolor{blue}{HTML}{2F75B5}
+\definecolor{lightblue}{HTML}{D9EAF7}
+\definecolor{green}{HTML}{548235}
+\definecolor{lightgreen}{HTML}{E2F0D9}
+\definecolor{orange}{HTML}{C65911}
+\definecolor{lightorange}{HTML}{FCE4D6}
+\definecolor{red}{HTML}{C00000}
+\definecolor{graybg}{HTML}{F3F5F7}
+\definecolor{darkgray}{HTML}{404040}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=navy,
+  urlcolor=blue,
+  citecolor=navy,
+  pdftitle={Prefix KV-Cache Policy Evolution: Simulator, Verifier, and Search Architecture}
+}
+
+\lstdefinestyle{python}{
+  language=Python,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{navy}\bfseries,
+  commentstyle=\color{green},
+  stringstyle=\color{orange},
+  backgroundcolor=\color{graybg},
+  frame=single,
+  rulecolor=\color{lightblue},
+  breaklines=true,
+  showstringspaces=false,
+  columns=fullflexible,
+  keepspaces=true,
+  xleftmargin=0.5em,
+  xrightmargin=0.5em
+}
+
+\lstdefinestyle{shell}{
+  language=bash,
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{graybg},
+  frame=single,
+  rulecolor=\color{lightblue},
+  breaklines=true,
+  showstringspaces=false,
+  columns=fullflexible,
+  keepspaces=true
+}
+
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\filepath}[1]{\nolinkurl{#1}}
+\newcommand{\identifier}[1]{\nolinkurl{#1}}
+\newcommand{\metric}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\important}[1]{\textbf{\color{navy}#1}}
+\newcommand{\risk}[1]{\textbf{\color{red}#1}}
+\newcommand{\good}[1]{\textbf{\color{green}#1}}
+
+\setlist[itemize]{leftmargin=1.35em,itemsep=0.25em,topsep=0.35em}
+\setlist[enumerate]{leftmargin=1.55em,itemsep=0.25em,topsep=0.35em}
+\setlength{\emergencystretch}{2em}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.55em}
+
+\title{\textbf{\color{navy}Prefix KV-Cache Policy Evolution}\\
+\large Simulator, Verifier, Workload, and Search Architecture}
+\author{Technical Design Report}
+\date{June 6, 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This report documents the prefix KV-cache policy optimization system implemented in
+\filepath{/Users/paul.t/work/prefix-cache-evolve}.  The system searches for deployable,
+compact admission and eviction scoring policies for an LLM prefix cache.  It combines
+a deterministic prefix-tree simulator, a multi-workload verifier, deployable and
+future-knowledge baselines, an AST-based complexity penalty, and an LLM-driven code
+evolution loop.
+
+It also positions the implementation against current KV-cache algorithms: production
+exact-prefix designs, semantic-adaptive and workflow-aware replacement research,
+distributed and tiered caches, non-prefix RAG reuse, and within-request KV reduction.
+The comparison identifies which results are directly comparable and translates the
+remaining state of the art into a prioritized simulator roadmap.
+
+The current deployable compact policy ranks second in the full reporting panel, behind
+the constrained next-use oracle and ahead of all deployable credibility baselines.
+After quarantining recurrence-heavy structure probes from selection, it scores
+\(57.788\), compared with \(87.777\) for the reporting-only oracle and \(53.426\) for
+TinyLFU-LRU.  Its validation token hit rate is \(0.644\).  The held-out structure probe
+and hidden panel expose the remaining generalization weakness even when selection
+improves.  A subsequent structured-search iteration fixed canonical primitive adoption
+and found a mutation that improved raw validation and both probe-family hit rates, but
+the mutation still lost after complexity and regressed aggregate probe and hidden
+scores.  The compact policy therefore remains the recommended seed.
+
+The report emphasizes implementation details and trust boundaries: what the policy can
+observe, what the simulator owns, what future information is quarantined for verifier
+audits and oracle baselines, how each trial is scored, and how candidate source is
+generated, isolated, evaluated, ranked, and persisted.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{System Purpose and Design Goals}
+
+\subsection{Problem statement}
+
+Prefix KV caching reuses prefill computation when a new request begins with a token
+prefix that is already resident.  A serving system with finite cache capacity must make
+two coupled decisions:
+
+\begin{enumerate}
+  \item \textbf{Admission:} after computing a missing prefix block, should that block be
+  retained?
+  \item \textbf{Eviction:} when capacity is exceeded, which legal resident block should
+  be removed?
+\end{enumerate}
+
+The optimization target is not simply the highest average hit rate.  A usable policy
+must generalize across request families, capacities, random seeds, phase changes,
+multi-tenant traffic, scan pollution, long-running decodes, and priority classes.  It
+must also remain implementable and understandable.  The verifier therefore rewards
+reuse and service quality while penalizing churn, unfairness, wasted admissions,
+avoidable eviction decisions, and source complexity.
+
+\subsection{Primary design goals}
+
+\begin{itemize}
+  \item \important{Determinism.} Every workload is reproducible from a family name,
+  request count, block size, and random seed.
+  \item \important{Deployability.} Candidate policies receive only information that
+  could be maintained online.  Future-reuse fields are \code{None} for deployable
+  candidates.
+  \item \important{Simulator ownership.} Candidate code produces scores; it does not
+  mutate cache state, choose illegal victims, or bypass prefix-tree invariants.
+  \item \important{Robust ranking.} Validation spans multiple families, two capacities,
+  and three seeds.  The score includes mean behavior, weakest workload-capacity
+  behavior, and worst-seed behavior.
+  \item \important{Interpretability.} The verifier emits fine-grained metrics and a
+  top-level score breakdown rather than only a scalar.
+  \item \important{Compact policies.} Complexity is charged with an unbounded concave
+  AST-node penalty, with a bounded subsidy for canonical composable primitives, so dead
+  hooks and unnecessary state remain costly.
+  \item \important{Probe and hidden quarantine.} Recurrence-heavy structure probes are
+  evaluated with normal runs but excluded from candidate selection; hidden families
+  remain behind a separate final-reporting path.
+\end{itemize}
+
+\subsection{Non-goals}
+
+The simulator is not a cycle-accurate GPU model.  It does not model allocator
+fragmentation, per-layer byte footprints, host offload, multi-node routing, GPU kernel
+contention, or real wall-clock latency.  Its purpose is to make policy quality
+measurable under controlled, varied prefix-reuse patterns before hardware-specific
+evaluation.
+
+\section{Architecture Overview}
+
+\subsection{Major components}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  node distance=0.75cm and 1.0cm,
+  box/.style={draw=navy, rounded corners, fill=lightblue, align=center,
+              minimum height=0.8cm, text width=3.0cm},
+  verify/.style={draw=green, rounded corners, fill=lightgreen, align=center,
+                 minimum height=0.8cm, text width=3.0cm},
+  search/.style={draw=orange, rounded corners, fill=lightorange, align=center,
+                 minimum height=0.8cm, text width=3.0cm},
+  arrow/.style={-{Latex[length=2.5mm]}, thick, draw=darkgray}
+]
+  \node[search] (config) {YAML configuration\\and policy prompt};
+  \node[search, right=of config] (levi) {Levi code evolution\\generation and mutation};
+  \node[box, right=of levi] (candidate) {Candidate source\\policy factory};
+
+  \node[verify, below=of candidate] (entry) {Isolated evaluator\\source loading, timeout};
+  \node[verify, left=of entry] (evaluator) {Prefix KV-cache evaluator\\trial matrix and aggregation};
+  \node[box, left=of evaluator] (sim) {Deterministic simulator\\prefix tree and cache state};
+
+  \node[box, below=of sim] (workloads) {Synthetic workloads\\train, validation, hidden};
+  \node[verify, right=of workloads] (metrics) {Trial metrics\\score and diagnostics};
+  \node[verify, right=of metrics] (artifacts) {Reports and artifacts\\best program, JSON, Markdown};
+
+  \draw[arrow] (config) -- (levi);
+  \draw[arrow] (levi) -- (candidate);
+  \draw[arrow] (candidate) -- (entry);
+  \draw[arrow] (entry) -- (evaluator);
+  \draw[arrow] (evaluator) -- (sim);
+  \draw[arrow] (workloads) -- (sim);
+  \draw[arrow] (sim) -- (metrics);
+  \draw[arrow] (metrics) -- (evaluator);
+  \draw[arrow] (evaluator) -- (entry);
+  \draw[arrow] (entry) -- (levi);
+  \draw[arrow] (metrics) -- (artifacts);
+\end{tikzpicture}
+\caption{System-level data flow.  The candidate emits scores; the simulator owns all
+state transitions.  The evaluator converts trial metrics into the scalar returned to
+Levi while preserving detailed artifacts.}
+\label{fig:architecture}
+\end{figure}
+
+\subsection{Relevant source files}
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.34\textwidth}
+                  >{\raggedright\arraybackslash}p{0.60\textwidth}}
+\toprule
+\textbf{Path} & \textbf{Responsibility} \\
+\midrule
+\endhead
+\filepath{src/prefix_cache_evolve/evaluators/prefix_kv_cache.py} &
+Core data model, deterministic simulator, metrics, workloads, baselines, complexity
+calculation, aggregation, and scoring. \\
+\filepath{src/prefix_cache_evolve/problems/prefix_kv_cache/evaluator.py} &
+Levi-facing isolated entry points for path, source, callable, and hidden evaluation. \\
+\filepath{src/prefix_cache_evolve/problems/prefix_kv_cache/runner.py} &
+CLI, evolution workflow construction, artifact persistence, baseline reports, hidden
+reports, and plots. \\
+\filepath{configs/prefix_kv_cache.yaml} &
+Evolution prompt, model and pipeline configuration, workload panel, and score weights. \\
+\filepath{src/prefix_cache_evolve/workflow/execution.py} &
+Adapter between Levi's \code{evolve_code} API and the repository's evaluator result
+format. \\
+\filepath{src/prefix_cache_evolve/workflow/configuration.py} &
+YAML loading and conversion into arguments forwarded to Levi. \\
+\filepath{src/prefix_cache_evolve/problems/prefix_kv_cache/compact_seed.py} &
+Current compact deployable policy and recommended evolution seed. \\
+\filepath{scripts/tune_prefix_kv_compact.py} &
+Reproducible coefficient sweep for the compact policy family. \\
+\filepath{tests/test_prefix_kv_cache_evaluator.py} &
+Functional PyTest coverage for policies, simulator invariants, metrics, workloads,
+ranking behavior, reports, and evolution integration. \\
+\bottomrule
+\end{longtable}
+
+\section{Candidate Contract and Trust Boundary}
+
+\subsection{Required interface}
+
+A candidate module must expose a compatible \code{build_candidate} or
+\code{candidate_factory} factory.  The returned policy implements two scoring methods
+and exactly three lifecycle callbacks:
+
+\begin{lstlisting}[style=python]
+def on_request_start(request: RequestInfo, now: int) -> None: ...
+def on_cache_hit(block: PrefixBlockInfo, request: RequestInfo, now: int) -> None: ...
+def on_cache_miss(block: PrefixBlockInfo, request: RequestInfo, now: int) -> None: ...
+
+def score_admission(block: PrefixBlockInfo, now: int) -> float: ...
+def score_eviction(block: PrefixBlockInfo, now: int) -> float: ...
+\end{lstlisting}
+
+Admission occurs only when \code{score_admission > 0}.  During eviction, the simulator
+calls \code{score_eviction} for every legal victim and evicts the block with the
+\emph{highest} score.  Therefore a high eviction score means ``evict sooner.''
+
+\subsection{Candidate-visible request metadata}
+
+\begin{tabularx}{\textwidth}{>{\ttfamily}p{0.31\textwidth} X}
+\toprule
+\normalfont\textbf{Field} & \textbf{Meaning} \\
+\midrule
+request\_id & Stable request identifier within a generated workload. \\
+tenant\_id & Tenant namespace.  Prefix hashes include tenant identity, so cross-tenant
+sharing is intentionally disabled. \\
+session\_id & Request-only session metadata.  Blocks do not expose a session ID. \\
+prompt\_length & Prompt length in tokens. \\
+priority & Non-negative QoS signal.  It is not guaranteed to correlate with reuse. \\
+request\_type & Descriptive synthetic request class.  Policies are instructed not to
+hard-code workload names. \\
+prompt\_tokens & Present in the type but empty in generated candidate-visible requests,
+preventing content fingerprinting. \\
+predicted\_output\_length & Optional online estimate.  The true output length remains
+simulator-internal. \\
+recent\_admission\_pressure & Bounded 32-request online mean indicating how often prior
+requests reached cache capacity.  It contains no workload-family label. \\
+recent\_miss\_rate & Bounded 32-request online mean of prior per-request token miss
+rates. \\
+\bottomrule
+\end{tabularx}
+
+\subsection{Candidate-visible block metadata}
+
+\begin{longtable}{>{\ttfamily}p{0.29\textwidth}
+                  >{\raggedright\arraybackslash}p{0.65\textwidth}}
+\toprule
+\normalfont\textbf{Field} & \textbf{Meaning} \\
+\midrule
+\endhead
+block\_id, prefix\_hash & Stable block key.  Candidate state should be keyed by one of
+these values, never by Python object identity. \\
+parent\_hash & Parent prefix block, or \code{None} for a root block. \\
+depth & One-indexed block depth in the request prefix. \\
+start\_token, end\_token, token\_count & Position and size of the block.  The final
+block can be partial. \\
+tenant\_id & Owning tenant. \\
+created\_at, last\_accessed\_at & Logical arrival steps. \\
+prev\_last\_accessed\_at & Previous observed prompt-chain access step, or \code{None}
+before a prior access exists.  Online-computable from past and current arrivals. \\
+last\_access\_gap & Logical-step distance from the current access to the previous
+observed access, or \code{None} on first access. \\
+access\_gap\_mean, access\_gap\_var & Fixed-state exponentially weighted first and
+second-moment recurrence summary.  Both remain \code{None} until two gaps exist. \\
+hit\_count & Historical hit count over the block's lifetime. \\
+descendant\_count & Number of known descendant prefixes materialized so far. \\
+active\_ref\_count & Number of active requests pinning the block. \\
+subtree\_hit\_rate & Online hit rate aggregated over the block and all known
+descendants. \\
+subtree\_active\_ref\_count & Online active-reference total over the block and all known
+descendants. \\
+estimated\_recompute\_cost & Prefix-depth-sensitive deterministic recomputation cost. \\
+\identifier{estimated_future_reuse}, \identifier{estimated_next_reuse_distance} &
+\code{None} for deployable candidates; populated only for explicitly reporting-only
+future-knowledge baselines. \\
+\bottomrule
+\end{longtable}
+
+\subsection{Composable online primitives}
+
+Candidates may optionally import \code{MultiTimescaleDecay} and \code{decay_vector}
+from \filepath{prefix_cache_evolve.problems.prefix_kv_cache.primitives}.
+\code{MultiTimescaleDecay} maintains one to eight fixed-width exponential-decay
+accumulators per key, bounds retained keys with deterministic least-recently-touched
+eviction, and exposes \code{observe}, \code{observe_vector}, \code{values}, and
+\code{combine}.  \code{observe} adds one amount to every channel, whereas
+\code{observe_vector} adds a distinct amount per channel.  The latter lets a policy
+represent bounded reuse, miss, or other online signals in one canonical state object
+instead of hand-rolling several decay dictionaries.
+\code{decay_vector} is the pure stateless counterpart.  These primitives expand the
+search space toward multi-timescale state without exposing future reuse or workload
+identity.
+
+\subsection{What candidate code cannot control}
+
+The simulator, not the policy, owns:
+
+\begin{itemize}
+  \item prefix hashing and prefix-tree structure;
+  \item cache residency and capacity;
+  \item active decode pins and release events;
+  \item legal-victim filtering;
+  \item admission rollback after pin-induced capacity failure;
+  \item hit, miss, recompute, latency, churn, fairness, and audit accounting;
+  \item hidden workload selection and future-knowledge audits.
+\end{itemize}
+
+Candidate methods returning non-numeric, boolean, infinite, or NaN scores are invalid.
+Exceptions in factories, callbacks, or score functions also produce structured invalid
+results.
+
+\section{Simulator Design}
+
+\subsection{Request and block construction}
+
+Each workload produces a tuple of internal \code{WorkloadRequest} objects.  A request
+contains candidate-visible \code{RequestInfo}, the simulator-only true output length,
+the internal prompt tokens, and an optional logical arrival step.
+
+The prompt is divided into blocks of \code{block_size_tokens}, currently eight.  For
+each block depth \(d\), the simulator hashes the cumulative prefix:
+
+\begin{equation}
+  h_d = \operatorname{BLAKE2b}_{64}
+        \left(\operatorname{repr}\left(
+        \text{tenant\_id}, (t_1,\ldots,t_{\min(dB,L)})
+        \right)\right),
+\end{equation}
+
+where \(B\) is the block size and \(L\) is prompt length.  Including the tenant ID
+prevents accidental cross-tenant reuse.  Hashing the cumulative prefix rather than the
+individual chunk ensures that identical chunks at different positions are not treated
+as reusable prefix blocks.
+
+The simulator materializes a rooted prefix tree lazily.  Internal block state includes
+parent and child links, known descendant counts, global hit history, active reference
+count, residency, and per-residency admission-accounting fields.
+
+\subsection{Prefix-contiguous matching}
+
+A request can reuse only the largest root-contiguous resident prefix.  Matching stops at
+the first non-resident block:
+
+\begin{equation}
+  m(r) = \max\left\{k:
+  b_1,\ldots,b_k \text{ are resident}\right\}.
+\end{equation}
+
+The simulator also enforces prefix-contiguous admission.  A block cannot be admitted
+unless its parent is resident.  If admission is rejected or forced to bypass at depth
+\(d\), deeper blocks remain misses and are not considered for admission.  This models
+the reachability constraints of a real prefix cache rather than a generic unordered
+object cache.
+
+\subsection{Logical time and decode pinning}
+
+The \code{now} argument is a logical arrival step, not wall-clock time.  Arrival steps
+are monotonic but may repeat to model microbursts.  Requests without explicit arrival
+steps default to sequential indices.
+
+After a request begins, every hit or newly admitted block on its prefix is pinned for:
+
+\begin{equation}
+  D(r) = \max\left(1,
+    \left\lceil\frac{\text{true output length}(r)}
+                         {\text{active tokens per step}}\right\rceil
+  \right).
+\end{equation}
+
+The default active generation rate is 64 tokens per logical step.  Release events
+decrement active references when their logical time arrives.  Active blocks are never
+legal eviction victims.  The candidate may see a predicted output length, but the true
+length used for pinning is not exposed.
+
+\subsection{Per-request state machine}
+
+\begin{figure}[H]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  node distance=0.55cm and 0.75cm,
+  state/.style={draw=navy, rounded corners, fill=lightblue, align=center,
+                text width=3.15cm, minimum height=0.72cm},
+  decision/.style={draw=orange, diamond, fill=lightorange, align=center,
+                   aspect=2.0, text width=2.1cm},
+  terminal/.style={draw=green, rounded corners, fill=lightgreen, align=center,
+                   text width=3.15cm, minimum height=0.72cm},
+  arrow/.style={-{Latex[length=2.3mm]}, thick, draw=darkgray}
+]
+  \node[state] (advance) {Advance logical time; release expired pins};
+  \node[state, below=of advance] (materialize) {Materialize request prefix chain};
+  \node[state, below=of materialize] (start) {Call\\{\ttfamily on\_request\_}\\
+  {\ttfamily start}};
+  \node[state, below=of start] (match) {Match root-contiguous resident prefix};
+  \node[state, below=of match] (hits) {Update and pin hits; call\\\code{on_cache_hit}};
+  \node[state, right=1.8cm of hits] (miss) {For each remaining block: charge miss and call
+  \code{on_cache_miss}};
+  \node[decision, below=of miss] (admitq) {Admission score positive?};
+  \node[state, below left=0.75cm and 1.6cm of admitq] (bypass) {Record policy bypass;
+  block deeper admission};
+  \node[state, below right=0.75cm and 1.6cm of admitq] (tentative) {Tentatively admit and
+  pin};
+  \node[decision, below=of tentative] (over) {Over capacity?};
+  \node[decision, below=of over] (victimq) {Inactive resident leaf exists?};
+  \node[state, below left=0.75cm and 1.8cm of victimq] (evict) {Score legal leaves; evict
+  highest};
+  \node[state, below right=0.75cm and 1.8cm of victimq] (forced) {Rollback new block;
+  forced bypass};
+  \node[terminal, below=4.3cm of bypass] (record) {Record request latency, churn,
+  occupancy, QoS, and structural metrics};
+
+  \draw[arrow] (advance) -- (materialize);
+  \draw[arrow] (materialize) -- (start);
+  \draw[arrow] (start) -- (match);
+  \draw[arrow] (match) -- (hits);
+  \draw[arrow] (hits) -- (miss);
+  \draw[arrow] (miss) -- (admitq);
+  \draw[arrow] (admitq) -- node[above left]{no} (bypass);
+  \draw[arrow] (admitq) -- node[above right]{yes} (tentative);
+  \draw[arrow] (tentative) -- (over);
+  \draw[arrow] (over) -- node[right]{yes} (victimq);
+  \draw[arrow] (over.east) -- ++(0.8,0) |- node[pos=0.25,right]{no} (record.east);
+  \draw[arrow] (victimq) -- node[above left]{yes} (evict);
+  \draw[arrow] (evict.east) -- ++(0.8,0) |- (over.west);
+  \draw[arrow] (victimq) -- node[above right]{no} (forced);
+  \draw[arrow] (bypass) -- (record);
+  \draw[arrow] (forced) -- (record);
+\end{tikzpicture}
+}
+\caption{Per-request simulator flow.  Miss callbacks continue for the remaining chain
+even after admission becomes blocked, but deeper blocks are not scored for admission.}
+\label{fig:request-flow}
+\end{figure}
+
+\subsection{Admission semantics}
+
+For the first missed block whose parent path is still admissible:
+
+\begin{enumerate}
+  \item The simulator calls \code{score_admission}.
+  \item A score at or below zero rejects the block, records deliberate policy bypass,
+  and prevents deeper admission.
+  \item A positive score tentatively makes the block resident and pins it.
+  \item If capacity is exceeded, the simulator repeatedly evicts legal victims.
+  \item If no legal victim exists because all leaves are pinned, the tentative block is
+  rolled back and the rest of the request is forced to bypass.
+\end{enumerate}
+
+The newly admitted block is pinned before victim selection and therefore cannot
+immediately evict itself.  An admission can evict one or more blocks and still fail if
+the remaining over-capacity state has no legal victim.  The verifier counts those
+evictions in churn and latency even though the new block is rolled back.
+
+\subsection{Eviction legality}
+
+Only inactive resident leaves are legal victims.  Interior nodes cannot be evicted
+because doing so would make resident descendants unreachable.  Active leaves cannot be
+evicted because an ongoing decode references them.
+
+The legal set at time \(t\) is:
+
+\begin{equation}
+  \mathcal{V}_t =
+  \left\{b:
+  b.\text{resident}
+  \land b.\text{resident\_children}=\varnothing
+  \land b.\text{active\_ref\_count}=0
+  \right\}.
+\end{equation}
+
+The simulator computes the policy score for every \(b\in\mathcal{V}_t\) and evicts:
+
+\begin{equation}
+  b^\star = \arg\max_{b\in\mathcal{V}_t}
+             \operatorname{score\_eviction}(b,t).
+\end{equation}
+
+\subsection{Cost and latency proxy}
+
+The estimated recomputation cost of a block is depth-sensitive:
+
+\begin{equation}
+  c(b) = b.\text{end\_token}\cdot c_{\text{prefill-token}},
+\end{equation}
+
+with \(c_{\text{prefill-token}}=1\) by default.  Summing this value across missed blocks
+approximates the growing attention cost of recomputing progressively deeper prefixes.
+
+For a request \(r\), the deterministic latency proxy is:
+
+\begin{equation}
+  \ell(r) =
+  \sum_{b\in\text{misses}(r)} c(b)
+  + 0.035\cdot\text{lookup blocks}(r)
+  + 0.2\cdot\text{evictions}(r).
+\end{equation}
+
+A lookup probes all matched blocks and one failed block when the full prefix is not
+resident.  The simulator reports p50, p95, and p99 latency proxies, high-priority tail
+latency, recovery-phase latency, and p95 recompute cost.
+
+\subsection{Useful and wasted admission accounting}
+\label{sec:admission-accounting}
+
+Admission quality is tracked per \emph{residency interval}, not per globally known
+block.  Internal state contains:
+
+\begin{lstlisting}[style=python]
+admission_tracked: bool
+resident_hit_count: int
+\end{lstlisting}
+
+When a block is tentatively made resident, these fields reset.  The interval becomes
+tracked only after the block survives capacity enforcement.  Each later cache hit while
+resident increments \code{resident_hit_count}.  The miss that caused the admission is
+not a hit.
+
+When a tracked block is evicted, or when the trial ends while it remains resident:
+
+\begin{align}
+  \text{useful admission} &\iff \text{resident hit count} > 0,\\
+  \text{wasted admission} &\iff \text{resident hit count} = 0.
+\end{align}
+
+Rejected and forced-bypass attempts are neither useful nor wasted admissions because
+they never became successful admissions.  If a block is admitted, evicted, and later
+admitted again, the two intervals are classified independently.
+
+The binary rates are:
+
+\begin{equation}
+  A_{\text{useful}} =
+  \frac{N_{\text{useful}}}{\max(1,N_{\text{admitted}})},\qquad
+  A_{\text{wasted}} =
+  \frac{N_{\text{wasted}}}{\max(1,N_{\text{admitted}})}.
+\end{equation}
+
+For nonzero admissions the rates sum to one.  The verifier also reports
+\metric{evicted_without_hit_rate}, which narrows the waste metric to admissions evicted
+without an intervening hit.
+
+The binary classification is retained for interpretation, but the verifier now also
+weights admission outcomes by block token count.  For successful residency intervals
+\(i\), let \(s_i\) be the block's token count and \(h_i\) its resident hit count:
+
+\begin{align}
+  T_{\text{admitted}} &= \sum_i s_i,\\
+  T_{\text{useful}} &= \sum_{i:h_i>0}s_i,\qquad
+  T_{\text{wasted}} = \sum_{i:h_i=0}s_i,\\
+  T_{\text{saved-by-admission}} &= \sum_i h_i s_i.
+\end{align}
+
+The token-weighted waste rate is
+\(T_{\text{wasted}}/\max(1,T_{\text{admitted}})\).  It is the admission-waste
+quantity used by the score, so wasting a full block costs more than wasting a partial
+block.  Realized admission utility is reported as:
+
+\begin{equation}
+  U_{\text{admission-token}} =
+  \frac{T_{\text{saved-by-admission}}}
+       {\max(1,N_{\text{admitted}}B)},
+\end{equation}
+
+where \(B\) is the configured block size.  This is the average number of full-block
+equivalent token reuses delivered per successful admitted cache slot.  It distinguishes
+a one-hit full block from a one-hit partial block and credits repeated hits.  The score
+adds a small concave \(\log(1+U_{\text{admission-token}})\) reward, which makes the
+metric actionable without double-counting saved tokens linearly.
+
+\subsection{Verifier-only future audits}
+
+The simulator maintains two future-reuse trackers:
+
+\begin{itemize}
+  \item The \textbf{candidate-visible tracker} is disabled for deployable candidates and
+  enabled only for reporting-only future-reuse baselines.
+  \item The \textbf{audit tracker} is always enabled internally, but its information is
+  never included in candidate-visible block metadata.
+\end{itemize}
+
+The audit tracker supports \emph{avoidable eviction} accounting.  At each eviction, the
+verifier compares the selected victim's next-use distance with every other legal
+victim.  The eviction is avoidable if another legal victim would be reused later:
+
+\begin{equation}
+  E_{\text{avoidable}} =
+  \mathbf{1}\left[
+  d_{\text{next}}(b^\star)
+  < \max_{b\in\mathcal{V}_t\setminus\{b^\star\}}
+      d_{\text{next}}(b)
+  \right].
+\end{equation}
+
+This is a regret diagnostic, not an oracle instruction to the policy.  A
+short-reuse avoidable eviction is additionally recorded when the selected victim is
+reused within eight logical steps while an alternative is reused later than eight
+steps.  The constrained next-use oracle has zero avoidable evictions by construction.
+
+\section{Workload Model}
+
+\subsection{Trial matrix and split policy}
+
+The default full panel uses 96 requests per workload, seeds \((11,23,37)\), block size
+eight, and capacities \((24,48)\).
+
+\begin{center}
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{Split} & \textbf{Families} & \textbf{Capacities} & \textbf{Seeds} &
+\textbf{Trials} \\
+\midrule
+Train & 4 & 2 & 3 & 24 \\
+Validation selection & 10 & 2 & 3 & 60 \\
+Structure-generalization probe & 2 & 2 & 3 & 12 \\
+Normal evaluation, including probe & 16 & 2 & 3 & 96 \\
+Hidden final report & 10 & 2 & 3 & 60 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Each family receives a deterministic seed offset of \(1000(i+1)\), where \(i\) is its
+position within its split.  The main combined score uses validation trials only.
+Training metrics are emitted for diagnosis and prompt context.  Probe metrics are
+reported during normal evaluation but excluded from the combined score, success flag,
+and invalidity surcharge.  Hidden metrics are quarantined behind a separate evaluator
+entry point.
+
+The \code{--quick} mode uses 36 requests and seed \((3,)\).  It is intentionally labeled
+smoke-only because prior runs demonstrated that a single-seed slice can materially
+misrank the field.
+
+\subsection{Workload families}
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.24\textwidth}
+                  >{\raggedright\arraybackslash}p{0.11\textwidth}
+                  >{\raggedright\arraybackslash}p{0.57\textwidth}}
+\toprule
+\textbf{Family} & \textbf{Default split} & \textbf{Behavior and failure mode exposed} \\
+\midrule
+\endhead
+\identifier{shared_system_prompt} & Train &
+Repeated shared system instructions, a small recurring task set, and request-specific
+tails.  Rewards preservation of shallow broadly shared roots. \\
+\identifier{rag_template_reuse} & Train &
+Shared RAG template, position-stable recurring chunks, and query tails.  Avoids
+incorrectly crediting arbitrary repeated chunks outside prefix alignment. \\
+\identifier{long_context_mixed} & Train &
+Recurring documents with varying prefix depths and partial tails.  Stresses
+depth-sensitive recomputation value. \\
+\identifier{session_continuation_growth} & Train &
+Interleaved conversations that grow by one turn per revisit.  Stresses paused deep
+history preservation. \\
+\midrule
+\identifier{agent_trace_branching} & Probe &
+Shared agent roots and schemas with accumulating tool history, branches, and retries.
+Tests trunks, fanout, deep histories, and rollback-like retry behavior. \\
+\identifier{phase_shift_prompts} & Validation &
+Popular prompt family changes halfway through the run.  Exposes stale-history
+overprotection. \\
+\identifier{multi_tenant_skew} & Validation &
+Uneven tenant volume with tenant-specific roots.  Supplies the score's explicit
+max--min tenant fairness penalty. \\
+\identifier{hotset_cold_scan} & Validation &
+Warm hot set, one-off scan, then hot-set return.  Tests pollution resistance and
+recovery. \\
+\identifier{cyclic_working_set_pressure} & Probe &
+Repeatedly traverses working sets near and beyond cache capacity, then expands the
+cycle.  Exposes short-horizon and avoidable eviction regret. \\
+\identifier{concurrent_long_generation} & Validation &
+Batched arrivals and long outputs create overlapping pins and forced-bypass pressure. \\
+\identifier{stochastic_serving_mix} & Validation &
+Interleaves chat, RAG, agent, long-generation, and one-off traffic under changing
+regimes, bursts, and arrival gaps. \\
+\identifier{rolling_template_versions} & Validation &
+Stable version, canary overlap, majority rollout, and rollback.  Tests stale-version
+retirement and active-version warmth. \\
+\identifier{heavy_tailed_prefix_lengths} & Validation &
+Recurring documents with Pareto-like prefix depths.  Tests expensive long-tail
+contexts. \\
+\identifier{priority_burst_recovery} & Validation &
+Recurring high-priority traffic before, during, and after low-priority scan pollution.
+Rewards appropriate priority protection and recovery. \\
+\identifier{priority_one_off_noise} & Validation &
+Reusable normal-priority traffic competes with mostly unique high-priority requests.
+Prevents learning that priority automatically implies reuse. \\
+\midrule
+\identifier{adversarial_unique_prompts} & Hidden &
+Mostly unique prompts.  Exposes admit-everything churn and dead admissions. \\
+\identifier{cross_family_mixture} & Hidden &
+Mixture of shared, phase-shifted, and unique requests. \\
+\identifier{tenant_session_reentry} & Hidden &
+Paused tenant sessions reenter after unrelated traffic with new one-off tails. \\
+\identifier{stochastic_serving_mix_shifted} & Hidden &
+More bursty, more one-off, and different regime weights. \\
+\identifier{rolling_template_versions_shifted} & Hidden &
+Rolls forward to a new version with a changed root. \\
+\identifier{heavy_tailed_prefix_lengths_shifted} & Hidden &
+Heavier tail, more documents, and deeper maximum prefix. \\
+\identifier{priority_burst_recovery_shifted} & Hidden &
+Higher priority range, larger hot set, deeper scans, and stronger burst pressure. \\
+\identifier{cyclic_working_set_pressure_shifted} & Hidden &
+Larger cycles and a different traversal stride. \\
+\identifier{priority_one_off_noise_shifted} & Hidden &
+Higher one-off priority burst ratio and deeper one-off prompts. \\
+\identifier{tenant_phase_shift_cycles_shifted} & Hidden &
+Longer tenant phases, repeated pollution/recovery cycles, and larger delayed reentry
+gaps. \\
+\bottomrule
+\end{longtable}
+
+\section{Verifier and Metrics}
+
+\subsection{Metric taxonomy}
+
+The verifier emits metrics at trial, split, workload, and capacity aggregation levels.
+Important categories include:
+
+\begin{itemize}
+  \item \textbf{Reuse:} token and block hit rate, saved prefill tokens, depth-band hit
+  rates, role-specific hit contributions.
+  \item \textbf{Request service:} per-request p10 and p50 hit rates, worst-quarter and
+  final-quarter token hit, quarter-to-quarter variance.
+  \item \textbf{QoS:} priority-weighted hit rate, high- and low-priority hit rates,
+  high-priority p10 request hit and tail latency.
+  \item \textbf{Admission:} attempts, successful admissions, rejections, policy bypass,
+  forced bypass, binary useful/wasted admissions, admitted/useful/wasted token mass,
+  saved tokens per admitted slot, and evictions without a hit.
+  \item \textbf{Eviction regret:} reuse after eviction, short-distance reuse misses,
+  reuse-distance percentiles, avoidable evictions, and avoidable short-reuse
+  evictions.
+  \item \textbf{Cost and pressure:} recompute tokens and cost, lookup probes, p50/p95/p99
+  latency proxy, churn per 1000 requests, occupancy, active-request peak, and maximum
+  prefill cost.
+  \item \textbf{Fairness:} tenant max--min hit-rate gap, tenant p10 hit rate, and Jain
+  fairness.
+  \item \textbf{Robustness aggregation:} worst trial, p10 across trials, and
+  cross-trial standard deviation.
+  \item \textbf{Validity and complexity:} invalid reason/fraction, timeout and memory
+  failures, and scoring-function AST complexity.
+\end{itemize}
+
+\subsection{Workload-capacity base score}
+
+For one workload-capacity group \(G\), containing three seed trials, define:
+
+\begin{align}
+  B(G) ={}&
+  80\,\overline{H_{\text{tok}}}
+  +60\,\overline{H_{\text{blk}}}
+  +12\,\overline{H_{\text{req,p10}}}
+  +12\,\overline{H_{\text{worst-quarter}}} \nonumber\\
+  &+8\,\overline{H_{\text{high-priority}}}
+  +\overline{\log(1+U_{\text{admission-token}})}
+  -6\,\overline{A_{\text{wasted,tok}}}
+  -8\,\overline{E_{\text{avoidable}}}
+  -C_{\text{latency}}(G).
+\end{align}
+
+The priority term is included only for groups that contain positive-priority requests.
+The automatic latency normalizer is scoped to the same workload-capacity group:
+
+\begin{align}
+  L_{\text{norm}}(G) &=
+  \max_{i\in G}\text{max-prefill-cost}_i,\\
+  C_{\text{latency}}(G) &=
+  \min\left(40,\,
+    35\frac{\overline{\text{p95-latency}}}{\max(1,L_{\text{norm}}(G))}
+  \right).
+\end{align}
+
+This scoping prevents a long-context family from making latency penalties negligible
+for all shorter workloads.
+
+\subsection{Worst-seed blending}
+
+For workload-capacity group \(G\), the verifier computes the group-average base score
+and the minimum single-seed base score:
+
+\begin{equation}
+  S_G = 0.85\,B(G) + 0.15\min_{i\in G}B(\{i\}).
+\end{equation}
+
+This retains a strong mean signal while charging policies whose performance collapses
+on one seed.
+
+\subsection{Combined score}
+
+Let \(\mathcal{G}\) be the 20 validation workload-capacity groups.  Let
+\(\overline{\chi}\) be mean validation churn per 1000 requests, \(F\) be mean tenant
+max--min gap on \code{multi_tenant_skew}, and \(C\) be candidate AST complexity.  The
+combined score is:
+
+\begin{align}
+  S_{\text{combined}} ={}&
+  \frac{1}{|\mathcal{G}|}\sum_{G\in\mathcal{G}} S_G
+  +0.5\min_{G\in\mathcal{G}}S_G \nonumber\\
+  &-\min(25,0.015\,\overline{\chi})
+  -\min(30,80F)
+  -0.065\,C^{0.75}.
+\end{align}
+
+The weakest-workload contribution can be negative.  This is intentional: catastrophic
+behavior on one workload-capacity pair should reduce the total even if the mean is
+strong.
+
+\subsection{Complexity accounting}
+
+Legacy complexity is the number of Python AST nodes in candidate implementation classes
+and functions.  Thin factory wrappers named \code{build_candidate},
+\code{candidate_factory}, or \code{run_demo} are ignored, but nested implementations
+inside them are counted.  A syntax error receives complexity 10,000 before failing
+loading.
+
+The current configuration enables form-aware complexity.  Each statically recognized
+call site using \code{MultiTimescaleDecay} or \code{decay_vector} from the canonical
+primitive module receives a three-node credit, capped at 25\% of raw implementation
+nodes.  The cap prevents primitive calls from making arbitrary code free; repeated dead
+calls still increase effective complexity.  Setting
+\code{form_aware_complexity: false} restores the legacy raw-node schedule.
+
+The penalty \(0.065C^{0.75}\) is:
+
+\begin{itemize}
+  \item \textbf{unbounded}, so large dead implementations never become free;
+  \item \textbf{concave}, so necessary implementation detail is not charged linearly;
+  \item \textbf{behavior-independent}, allowing complexity to break near-ties between
+  policies with similar outcomes.
+  \item \textbf{form-aware but bounded}, mildly favoring reusable online primitives
+  without suppressing the cost of custom control flow or state.
+\end{itemize}
+
+\subsection{Invalid candidates, isolation, and memory}
+
+Candidate evaluation runs in an isolated worker with the operative YAML timeout of
+90 seconds.  Candidate memory is monitored with \code{tracemalloc}; the default peak
+limit is 64 MiB.
+
+Any positive invalid fraction bypasses normal scoring:
+
+\begin{equation}
+  S_{\text{invalid}} =
+  -1000 - 1 - 1000\,f_{\text{invalid}}.
+\end{equation}
+
+This keeps invalid programs below representative valid programs even when the valid
+program is very complex.
+
+\subsection{Baseline and oracle policies}
+
+\begin{longtable}{>{\ttfamily}p{0.24\textwidth}
+                  >{\raggedright\arraybackslash}p{0.16\textwidth}
+                  >{\raggedright\arraybackslash}p{0.52\textwidth}}
+\toprule
+\normalfont\textbf{Policy} & \textbf{Class} & \textbf{Purpose} \\
+\midrule
+\endhead
+\identifier{no_cache} & Deployable & Lower bound and bypass sanity check. \\
+lru & Deployable & Recency baseline; evicts least recently used legal leaf. \\
+lfu & Deployable & Frequency baseline with LRU tie-breaking. \\
+\identifier{depth_prefer_shallow} & Deployable & Protects shallow roots. \\
+\identifier{recompute_greedy} & Deployable & Protects expensive-to-recompute prefixes. \\
+\identifier{cost_aware_lru} & Deployable & Blends recency and recomputation cost. \\
+\identifier{prefix_fanout} & Deployable & Protects prefixes with known descendants. \\
+\identifier{prefix_anchor} & Deployable & Structural anchor heuristic. \\
+\identifier{tinylfu_lru} & Deployable & Selective admission with LRU-style eviction. \\
+\identifier{tenant_fair_lru} & Deployable & Biases eviction toward better-served tenants. \\
+\identifier{future_reuse_heuristic} & Reporting only & Uses future reuse count and next distance;
+not an upper bound. \\
+\identifier{oracle_future_reuse} & Reporting only & Rejects blocks with no future reuse and evicts
+the legal victim whose next use is furthest away.  It is constrained by the simulator's
+prefix-tree, leaf-only, and pinning rules. \\
+\bottomrule
+\end{longtable}
+
+\section{State of the Art in KV-Cache Management}
+\label{sec:state-of-the-art}
+
+\subsection{There is no single ``best KV-cache algorithm''}
+
+As of June 5, 2026, KV-cache research covers several different optimization problems
+that are often reported under the same name.  Their headline speedups are not directly
+comparable: papers use different models, hardware, context lengths, quality constraints,
+arrival processes, baselines, and definitions of cache capacity.  A system that moves
+KV tensors efficiently from SSD solves a different problem from a policy that decides
+which exact-prefix block to evict from GPU memory.
+
+The following taxonomy separates those problems before comparing their techniques:
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.19\textwidth}
+                  >{\raggedright\arraybackslash}p{0.27\textwidth}
+                  >{\raggedright\arraybackslash}p{0.25\textwidth}
+                  >{\raggedright\arraybackslash}p{0.19\textwidth}}
+\toprule
+\textbf{Problem class} & \textbf{Representative systems} & \textbf{Primary decision}
+& \textbf{Relation to this simulator} \\
+\midrule
+\endhead
+Exact cross-request prefix reuse &
+vLLM APC, SGLang RadixAttention, SAECache \cite{vllm-apc,sglang,saecache} &
+Which lossless, exactly reusable prefix blocks remain in a finite accelerator cache? &
+Directly in scope. \\
+Workflow-aware prefix reuse &
+KVFlow, INFERCEPT \cite{kvflow,infercept} &
+Which paused or soon-to-run agent state should be retained, swapped, or prefetched? &
+Partially modeled; workflow schedules and prefetch are absent. \\
+Distributed and tiered caching &
+Preble, Mooncake, MemServe, LMCache, Tutti
+\cite{preble,mooncake,memserve,lmcache,tutti} &
+Where should a request run, and where should its KV state live across GPU, CPU, network,
+and SSD tiers? &
+Out of scope for the current single-cache simulator. \\
+Non-prefix and RAG reuse &
+Prompt Cache, RAGCache, CacheBlend \cite{promptcache,ragcache,cacheblend} &
+How can reusable modules or retrieved chunks be reused when they are not one
+root-contiguous prefix? &
+Out of scope; the simulator intentionally requires exact prefix contiguity. \\
+Within-request KV reduction &
+H2O, KIVI, SnapKV, Quest, LaProx, VeriCache
+\cite{h2o,kivi,snapkv,quest,laprox,vericache} &
+Which tokens, pages, layers, or tensor bits are needed while decoding one long request? &
+A separate problem; it requires model-quality and attention-kernel simulation. \\
+\bottomrule
+\end{longtable}
+
+For the current project, the most relevant comparison set is the first row.  The other
+rows are important because they identify the next simulator dimensions, but they should
+not be mixed into the current prefix-policy leaderboard.
+
+\subsection{Production reference designs: PagedAttention, APC, and RadixAttention}
+
+\paragraph{PagedAttention and block-based allocation.}
+PagedAttention introduced operating-system-style paging for KV memory and flexible
+sharing of non-contiguous physical blocks.  It substantially reduces fragmentation and
+duplication, enabling larger batches and shared KV state, but it is primarily a memory
+layout and allocation mechanism rather than a value-aware replacement policy
+\cite{pagedattention}.  The current simulator assumes that a fixed-size block abstraction
+already exists; it evaluates the policy layer built on top of that abstraction.
+
+\paragraph{vLLM Automatic Prefix Caching.}
+Current vLLM APC identifies a block by hashing its tokens together with its complete
+prefix.  Only blocks with reference count zero are evictable.  The production policy
+uses LRU, with deeper blocks preferred for eviction when last-access times tie
+\cite{vllm-apc}.  This design preserves common ancestors and is equivalent in effect to
+RadixAttention's leaf-first LRU for full-attention models.
+
+\paragraph{SGLang RadixAttention.}
+RadixAttention stores reusable KV state in a radix tree, evicts the least-recently-used
+leaf first, and protects nodes referenced by running requests
+\cite{sglang}.  SGLang couples this cache with cache-aware scheduling and reported up to
+\(6.4\times\) higher throughput than its evaluated serving baselines across structured
+LLM-program workloads.  The simulator closely models RadixAttention's replacement
+constraints: root-contiguous matching, leaf-only eviction, active-reference pinning,
+and common-ancestor preservation.  It does not yet model the scheduler or continuous
+batching effects that contribute to end-to-end SGLang performance.
+
+\paragraph{Practical conclusion.}
+The production reference remains structurally constrained LRU, not a large
+hand-engineered scoring function.  This is an important benchmark property: any evolved
+policy should beat exact APC/Radix-style LRU by enough to justify its extra state,
+scoring work, and operational complexity.
+
+\subsection{Strongest directly relevant research policies}
+
+\paragraph{SAECache: semantic-adaptive prefix eviction.}
+The most directly relevant recent research result is SAECache, a May 2026 preprint
+focused specifically on prefix-cache eviction \cite{saecache}.  Its central observation
+is that blocks associated with system prompts, user queries, tool output, model
+responses, and reasoning traces have very different reuse distributions.  It combines:
+
+\begin{itemize}
+  \item task-specific queues for session reuse and structural/template reuse;
+  \item semantic-aware token weighting learned from eviction feedback;
+  \item online adaptation of timing distributions, position decay, queue weights, and
+  meta-parameters.
+\end{itemize}
+
+SAECache reports \(1.4\times\)--\(2.7\times\) TTFT improvement over production-style
+baselines on its evaluated heterogeneous workloads.  It also reports that fixed
+parameters can degrade by as much as \(2.7\times\) under workload mismatch.  The second
+result is particularly relevant here: it supports the verifier's phase-shift, shifted
+hidden families, and complexity pressure, and it argues for online adaptation rather
+than a permanently tuned coefficient vector.
+
+The current candidate cannot reproduce SAECache faithfully.  Prompt tokens are hidden,
+blocks do not expose generic semantic roles, and the candidate contract has no eviction
+feedback callback.  Adding those signals must preserve the trust boundary: expose
+deployable generic roles such as system, user, tool, assistant, retrieved document, and
+unknown, rather than exposing workload-family names or future reuse.
+
+\paragraph{KVFlow: workflow-aware agent caching.}
+KVFlow targets multi-agent workflows and represents the known execution plan as an Agent
+Step Graph \cite{kvflow}.  A steps-to-execution signal guides fine-grained KV-node
+eviction, while background prefetch overlaps CPU-to-GPU transfer for agents expected to
+run next.  It reports up to \(1.83\times\) speedup for single large-prompt workflows and
+\(2.19\times\) for concurrent workflows relative to SGLang with a hierarchical radix
+cache.
+
+This is not future leakage when the workflow graph is genuinely known to the serving
+system.  It is deployable application metadata.  The current
+\identifier{agent_trace_branching} workload models shared roots, branches, and retries,
+but it does not expose a declared workflow graph, cache tiers, or prefetch overlap.
+Consequently, the evaluator can test generic reuse learning but not KVFlow's central
+algorithm.
+
+\subsection{Systems that expand the effective cache}
+
+Several leading systems improve KV reuse less by inventing a better single-GPU victim
+score and more by changing placement, routing, or storage:
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.16\textwidth}
+                  >{\raggedright\arraybackslash}p{0.37\textwidth}
+                  >{\raggedright\arraybackslash}p{0.19\textwidth}
+                  >{\raggedright\arraybackslash}p{0.17\textwidth}}
+\toprule
+\textbf{System} & \textbf{Core algorithmic contribution} &
+\textbf{Paper-reported result} & \textbf{Missing simulator capability} \\
+\midrule
+\endhead
+Preble &
+Jointly schedules requests and prefixes across GPUs using exploitation versus
+exploration, prompt-sharing features, load, and recomputation cost
+\cite{preble}. &
+\(1.5\times\)--\(14.5\times\) lower average latency and \(2\times\)--\(10\times\)
+lower p99 latency than evaluated systems. &
+Multiple workers, routing, queueing, replication, load. \\
+Mooncake &
+Disaggregates prefill and decode, uses GPU-cluster CPU/DRAM/SSD as a KV cache, and
+schedules for effective throughput under SLOs \cite{mooncake}. &
+Kimi handled 75\% more requests under reported real workloads. &
+SLOs, overload rejection, prefill/decode clusters, tiers. \\
+LMCache &
+Provides a cache layer and control API across GPU, CPU, storage, network, engines, and
+queries; pipelines and batches KV movement \cite{lmcache}. &
+Up to \(15\times\) throughput improvement with vLLM in evaluated workloads. &
+Bytes, transfer bandwidth, remote lookup, overlap, connectors. \\
+Tutti &
+Uses a GPU-centric KV object store and GPU-driven asynchronous SSD I/O with
+slack-aware scheduling \cite{tutti}. &
+78.3\% lower TTFT and \(2\times\) achievable request rate versus evaluated
+GDS-backed SSD LMCache. &
+SSD objects, I/O queues, GPU/CPU contention, slack. \\
+\bottomrule
+\end{longtable}
+
+These results indicate that the globally best serving decision is often joint:
+\emph{admission, eviction, tier placement, prefetch, and request routing}.  A
+single-cache score can still be valuable, but the next major simulator expansion should
+make transfer and placement first-class decisions.
+
+\subsection{Beyond exact prefixes}
+
+Exact-prefix reuse is lossless and simple, but it leaves substantial value unused in
+RAG and modular prompts:
+
+\begin{itemize}
+  \item \textbf{Prompt Cache} explicitly declares reusable prompt modules and preserves
+  positional correctness when those modules appear in prompts \cite{promptcache}.
+  \item \textbf{RAGCache} stores retrieved knowledge states in a GPU/host knowledge tree
+  and uses a RAG-aware replacement policy; it reports up to \(4\times\) lower TTFT and
+  \(2.1\times\) throughput versus its evaluated vLLM--Faiss baseline
+  \cite{ragcache}.
+  \item \textbf{CacheBlend} reuses cached knowledge chunks even when they are not a
+  prefix, selectively recomputing a small token subset to repair cross-chunk attention;
+  it reports \(2.2\times\)--\(3.3\times\) lower TTFT and
+  \(2.8\times\)--\(5\times\) throughput versus full KV recomputation
+  \cite{cacheblend}.
+\end{itemize}
+
+Supporting these methods would require a new simulator mode.  Prefix contiguity could no
+longer be the only legality rule; the model would need module identity, position
+compatibility, selective recomputation cost, retrieval order, and possibly an output
+quality constraint.  Those changes should not be folded silently into the existing
+lossless-prefix score.
+
+\subsection{Within-request KV reduction is a separate benchmark track}
+
+Another major research line reduces the KV state used while decoding a single long
+request.  Representative methods retain attention heavy hitters and recent tokens
+(H2O), quantize keys and values asymmetrically (KIVI), select per-head important prompt
+positions (SnapKV), or load query-relevant KV pages (Quest)
+\cite{h2o,kivi,snapkv,quest}.  More recent preprints include LaProx, which scores token
+importance using output-aware layer-wise approximation, and VeriCache, which drafts with
+a compressed cache but verifies against full KV state to preserve exact outputs
+\cite{laprox,vericache}.
+
+These methods can increase effective capacity and may compose with prefix caching, but
+their correctness criterion is different.  Token dropping, sparse attention, and
+quantization require task-quality or exact-output verification.  They should therefore
+use a separate simulator and verifier rather than competing directly against the current
+lossless prefix-cache policies.
+
+\subsection{What the current simulator covers and what to add next}
+
+\begin{longtable}{>{\raggedright\arraybackslash}p{0.25\textwidth}
+                  >{\raggedright\arraybackslash}p{0.22\textwidth}
+                  >{\raggedright\arraybackslash}p{0.45\textwidth}}
+\toprule
+\textbf{State-of-the-art idea} & \textbf{Current coverage} &
+\textbf{Required addition} \\
+\midrule
+\endhead
+APC/Radix exact prefix matching, inactive-leaf eviction, ancestor preservation &
+Strong &
+Retain and continuously validate an exact production-style LRU baseline, including
+deepest-prefix tie-breaking. \\
+Value-aware and selective admission &
+Strong &
+Continue evolving compact admission and eviction scores; add value-per-byte when block
+sizes become heterogeneous. \\
+Semantic roles and adaptive multi-queue eviction &
+Absent &
+Expose generic deployable block-role metadata, add eviction-feedback hooks, and
+implement a SAECache-inspired adaptive baseline. \\
+Workflow proximity and prefetch &
+Weak &
+Add declared step graphs, pause duration, tier location, transfer time, and overlapped
+prefetch events. \\
+Distributed prompt-aware routing &
+Absent &
+Add multiple cache workers, request queues, routing, replication, per-worker load, and
+network transfer. \\
+GPU/CPU/SSD hierarchy &
+Absent &
+Replace scalar residency with tiers; model byte capacity, bandwidth, latency, pinning,
+promotion, demotion, and asynchronous I/O. \\
+Non-prefix module and RAG-chunk reuse &
+Absent by design &
+Create a separate legality and quality-preserving recomputation mode. \\
+Within-request compression and sparsity &
+Absent by design &
+Create a separate long-context track with quality, exact-output, kernel-time, and memory
+metrics. \\
+\bottomrule
+\end{longtable}
+
+\paragraph{Recommended priority.}
+The highest-value next comparison is a \emph{SAECache-inspired, deployable adaptive
+policy} because it addresses the exact replacement problem already modeled and directly
+tests whether semantic role and online adaptation beat the compact candidate.  The
+second priority is a \emph{tiered workflow simulator} with declared Agent Step Graphs,
+because KVFlow, LMCache, and Tutti show that prefetch and placement can dominate victim
+selection.  Distributed routing and non-prefix reuse are larger, separate expansions.
+
+\section{Evolution System}
+
+\subsection{End-to-end workflow}
+
+The repository wraps Levi's \code{evolve_code} API behind a stable workflow:
+
+\begin{enumerate}
+  \item \code{YamlConfigProvider} loads \filepath{configs/prefix_kv_cache.yaml}.
+  \item \code{ConfigLoader} composes the problem description from the base description,
+  system message, objectives, and search notes.
+  \item \code{EvolutionWorkflow} writes the selected seed program to a temporary file.
+  \item \code{LeviRunner} reads the seed source, creates a \code{LeviScoreFunction}, and
+  calls \code{levi.evolve_code}.
+  \item Levi generates and mutates candidate source under the configured evaluation
+  budget.
+  \item The score adapter recovers candidate source and calls
+  \code{evaluate_source}; source-based evaluation ensures the complexity penalty is
+  applied.
+  \item The evaluator isolates the candidate, builds the 90-trial train/validation
+  panel, returns the combined score, and preserves detailed metrics as artifacts.
+  \item Levi uses \metric{combined_score} as its scalar \code{score}.
+  \item After search, \code{LeviRunner} re-evaluates the best source and normalizes the
+  result into \code{LeviRunResult}.
+  \item The runner saves source, metrics, artifacts, metadata, summary, and a full
+  baseline comparison.
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  node distance=0.55cm,
+  box/.style={draw=navy, rounded corners, fill=lightblue, align=left,
+              text width=12.7cm, minimum height=0.72cm},
+  arrow/.style={-{Latex[length=2.3mm]}, thick, draw=darkgray}
+]
+  \node[box] (one) {1. Load YAML; compose prompt; select seed source.};
+  \node[box, below=of one] (two) {2. Forward budget, models, pipeline, behavior,
+  initialization, and punctuated-equilibrium settings to Levi.};
+  \node[box, below=of two] (three) {3. Levi proposes candidate source; the adapter
+  recovers source rather than only an opaque callable.};
+  \node[box, below=of three] (four) {4. Isolated evaluator computes AST complexity and
+  executes deterministic train/validation trials.};
+  \node[box, below=of four] (five) {5. Combined score and numeric metrics return to Levi;
+  hidden families remain excluded.};
+  \node[box, below=of five] (six) {6. Levi selects parents/inspirations, mutates again,
+  and periodically applies punctuated equilibrium until the evaluation budget ends.};
+  \node[box, below=of six] (seven) {7. Best source is re-evaluated and persisted with a
+  full baseline report.};
+  \draw[arrow] (one) -- (two);
+  \draw[arrow] (two) -- (three);
+  \draw[arrow] (three) -- (four);
+  \draw[arrow] (four) -- (five);
+  \draw[arrow] (five) -- (six);
+  \draw[arrow] (six.east) -- ++(0.7,0) |- (three.east);
+  \draw[arrow] (six) -- (seven);
+\end{tikzpicture}
+\caption{Repository-controlled evolution loop around Levi.}
+\label{fig:evolution}
+\end{figure}
+
+\subsection{Current search configuration}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{>{\ttfamily}p{0.30\textwidth} X}
+\toprule
+\normalfont\textbf{Setting} & \textbf{Current value and effect} \\
+\midrule
+max\_iterations & YAML default 300; CLI \code{--iterations} overrides it and is
+forwarded as Levi's \code{budget_evals}. \\
+mutation\_model & \code{openai/gpt-5.4-mini}, selected from the primary model. \\
+sampler-model pairs & Four \code{gpt-5.4-mini} sampling configurations used by the
+pipeline. \\
+max\_tokens & 12,000, forwarded through the pipeline. \\
+n\_llm\_workers & 4. \\
+n\_eval\_processes & 2, derived from \code{parallel_evaluations}. \\
+eval\_timeout & 90 seconds for isolated candidate evaluation. \\
+n\_parents, n\_inspirations & One parent and one inspiration per mutation step. \\
+init & Zero diverse seeds and eight variants from the supplied compact seed. \\
+punctuated\_equilibrium & Disabled. \\
+behavior & CVT descriptors include code length, cyclomatic complexity, branch count,
+math operators, validation hit rate, churn, and admission waste. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Prompt engineering as an implementation constraint}
+
+The system prompt documents the exact hook contract and candidate-visible schema.  It
+explicitly warns candidates:
+
+\begin{itemize}
+  \item only \code{on_request_start}, \code{on_cache_hit}, and \code{on_cache_miss}
+  fire as lifecycle callbacks;
+  \item \code{id(block)} and guessed attributes are invalid state keys;
+  \item future-reuse fields are unavailable to deployable candidates;
+  \item recurrence, gap-moment, subtree, and regime context fields are online-only;
+  \item canonical bounded multi-timescale primitives are available but optional;
+  \item priority is useful QoS metadata but not proof of reuse;
+  \item request-tail service, worst-quarter service, wasted admissions, avoidable
+  evictions, churn, and complexity affect ranking;
+  \item workload-family names and request-type values must not be hard-coded;
+  \item the structure probe and hidden workloads must not be inspected for candidate
+  selection.
+\end{itemize}
+
+This contract is important because earlier evolved candidates repeatedly created inert
+\code{on_block_*} or \code{on_request_end} machinery.  Under an unbounded complexity
+penalty, unsupported hooks are not only ineffective but directly harmful.
+
+\subsection{Run chronology}
+
+The following run scores were produced under the verifier version active at the time.
+They are useful for search chronology but are \risk{not directly comparable} to the
+current verifier's \(57.788\) score because the workload panel and score terms were
+subsequently strengthened.
+
+\begin{center}
+\scriptsize
+\begin{tabularx}{\textwidth}{@{}lrrrrrX@{}}
+\toprule
+\textbf{Run ID} & \textbf{Evals} & \textbf{Score} & \textbf{Runtime} &
+\textbf{Cost} & \textbf{Archive} & \textbf{Interpretation} \\
+\midrule
+20260605T075913Z & 100 & 27.052 & 1454.4 s & \$2.173 & 50 &
+Budget was consumed by broad initialization; little useful iterative evolution. \\
+20260605T081118Z & 98 & 32.128 & 500.7 s & \$0.710 & 1 &
+Corrected iterative run from the compact seed; found a stronger but complex policy. \\
+manual simplification & -- & 35.927 & -- & -- & -- &
+Removed inert/future-reuse/defensive branches while preserving behavior; complexity
+dropped from 808 to 422 AST nodes. \\
+20260605T082345Z & 98 & 35.927 & 535.7 s & \$0.692 & 1 &
+No generated mutation beat the simplified incumbent. \\
+coefficient sweep & 180 samples & 38.703 old-verifier final & -- & -- & -- &
+Fully evaluated the top 12 sampled compact parameter sets; final source complexity
+became 367 nodes. \\
+20260606T000036Z & 98 & 57.788 & 1083.2 s & \$2.898 & 8 &
+Expanded recurrence/regime observables and primitives; no mutation beat the compact
+seed. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The first run exposed a workflow issue: a nominal 100-evaluation budget could be
+exhausted in initialization.  The current configuration uses zero diverse seeds and
+eight variants from the supplied seed, preserving most of the budget for iterative
+mutation.  Complexity changed from a saturating cap to the current unbounded concave
+form and later gained the bounded canonical-primitive subsidy.  The expansion run had
+that subsidy enabled, but its strongest valid generated mutation did not use a
+canonical primitive and therefore received no discount; Section~\ref{sec:post-expansion}
+separates that search-adoption caveat from the policy-quality result.
+
+\subsection{Coefficient sweep}
+
+The reproducible tuner represents the compact policy with 15 parameters covering hit
+observation weight, admission frequency/priority/structure/cost/threshold terms, and
+eviction age/frequency/structure/priority terms, plus frequency and priority half-lives.
+It samples a deterministic discrete grid, ranks candidates on a smaller panel, and
+fully evaluates the strongest candidates.  The script defaults to 160 samples and 12
+finalists; the recorded final tuning run used 180 samples and 12 finalists.  A separate
+\code{--decay-ablation} mode evaluates the four combinations of enabled and disabled
+frequency and priority decay on the full panel.
+
+This hybrid process is deliberate:
+
+\begin{itemize}
+  \item LLM evolution searches policy structure and can invent state or formulas.
+  \item Manual ablation removes behaviorally inert complexity.
+  \item Deterministic coefficient search efficiently tunes a compact fixed structure.
+\end{itemize}
+
+\section{Current Compact Policy}
+
+\subsection{State}
+
+The compact policy maintains only:
+
+\begin{itemize}
+  \item a per-prefix timestamped observed frequency \(f_b\);
+  \item a per-prefix timestamped maximum observed request priority \(p_b\);
+  \item the current request priority.
+\end{itemize}
+
+Frequency and priority share one timestamp because both values are read and refreshed
+together.  If \(\Delta t\) logical arrival steps have elapsed since the state was read,
+the lazy decay operation is:
+
+\begin{equation}
+  D_h(x,\Delta t) = x\,2^{-\Delta t/h}.
+\end{equation}
+
+The selected frequency half-life is 12 steps and the selected priority half-life is
+1.5 steps.  A miss adds 1.0 to the decayed frequency; a hit adds 2.5.  Priority becomes
+the maximum of the decayed prior value and the current request priority.  Setting
+either half-life to \code{None} disables only that decay, enabling controlled ablation.
+No future information, request-type hard-coding, session map, or unsupported lifecycle
+callback is used.
+
+\subsection{Admission equation}
+
+For block \(b\), define:
+
+\begin{equation}
+  R_b =
+  0.35\log(1+\text{descendants}_b)
+  -0.2\max(0,\text{depth}_b-4).
+\end{equation}
+
+The admission score is:
+
+\begin{align}
+  s_A(b) ={}&
+  0.95\log(1+f_b)
+  +0.2p_b
+  +R_b
+  +1.5\log\left(1+\frac{\text{recompute-cost}_b}{96}\right) \nonumber\\
+  &-0.7
+  -0.24\max(0,\text{depth}_b-2).
+\end{align}
+
+The policy therefore requires evidence before admitting most blocks, protects
+structurally shared and expensive prefixes, and increasingly resists deep leaves.
+
+\subsection{Eviction equation}
+
+\begin{align}
+  s_E(b,t) ={}&
+  0.85\log(1+\max(0,t-\text{last-access}_b)) \nonumber\\
+  &-1.8\log(1+f_b+\text{hit-count}_b)
+  -0.2\log(1+\text{descendants}_b)
+  -0.55p_b.
+\end{align}
+
+Older blocks become easier to evict, while observed reuse, global hits, structural
+fanout, and priority protect a block.
+
+\subsection{Interpretation}
+
+The compact policy's strengths are simple and coherent:
+
+\begin{itemize}
+  \item selective admission reduces churn relative to admit-all baselines;
+  \item frequency and hit weighting preserve empirically reused prefixes;
+  \item recomputation cost and fanout protect valuable trunks;
+  \item priority improves burst-recovery service without being the only signal;
+  \item logarithms reduce sensitivity to extreme counts and ages.
+\end{itemize}
+
+The remaining stale-history term is simulator-owned \(\text{hit-count}_b\), which is
+lifetime cumulative and still appears in the eviction equation.  The decayed observed
+frequency partly counterbalances it, but a future ablation should test replacing the
+lifetime hit count with only recent policy-owned evidence.
+
+\subsection{Decay-term ablation}
+
+The decay half-lives were selected by screening nearby values on a small panel and then
+ranking only on the full three-seed validation panel.  The following controlled
+ablation uses identical policy code and excludes complexity equally from all variants:
+
+\begin{center}
+\small
+\begin{tabular}{lrrrrrr}
+\toprule
+\textbf{Variant} & \textbf{Raw score} & \textbf{Token hit} &
+\textbf{Tok. waste} & \textbf{Utility} & \textbf{Avoidable} &
+\textbf{Churn/1k} \\
+\midrule
+No decay & 64.069 & 0.6437 & 0.5244 & 6.484 & 0.1235 & 749.8 \\
+Frequency decay only & 58.160 & 0.6364 & 0.4946 & 7.108 & 0.1259 & 725.3 \\
+Priority decay only & \textbf{64.839} & 0.6464 & 0.5236 & 6.499 & 0.1167 & 733.7 \\
+Both decays & 64.381 & 0.6444 & 0.4913 & 7.143 & \textbf{0.1100} & \textbf{685.5} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+After quarantining recurrence-heavy families from selection, priority-only decay has
+the highest raw validation score.  Its charged selection score is \(58.247\), compared
+with \(57.788\) for both decays.  That apparent gain is a selection overfit: the
+priority-only probe score falls from \(40.303\) to \(31.787\), and hidden score falls
+from \(-18.616\) to \(-19.128\).  It raises probe-family token hit rates but pays for
+them with worse admission/churn behavior.  The recommended compact seed therefore
+retains both decays.  This inversion demonstrates why the structure probe must be
+reviewed alongside the validation scalar.
+
+\section{Current Evaluation Results}
+
+\subsection{Full selection and reporting panel under the current verifier}
+
+\begin{center}
+\scriptsize
+\begin{tabular}{@{}lrrrrrrrr@{}}
+\toprule
+\textbf{Policy} & \textbf{Score} & \textbf{Cap. 24} & \textbf{Cap. 48} &
+\textbf{Worst qtr.} & \textbf{Tok. waste} & \textbf{Utility} &
+\textbf{Avoid.} & \textbf{Churn/1k} \\
+\midrule
+Oracle future reuse & 87.777 & 0.638 & 0.702 & 0.527 & 0.095 & 12.454 & 0.000 & 207.5 \\
+Compact candidate & 57.788 & 0.628 & 0.664 & 0.499 & 0.491 & 7.143 & 0.110 & 685.5 \\
+TinyLFU-LRU & 53.426 & 0.580 & 0.635 & 0.434 & 0.422 & 7.183 & 0.234 & 462.2 \\
+Future-reuse heuristic & 49.428 & 0.613 & 0.688 & 0.502 & 0.736 & 2.141 & 0.007 & 1565.1 \\
+Depth-prefer-shallow & 35.210 & 0.580 & 0.646 & 0.457 & 0.762 & 1.905 & 0.212 & 1846.5 \\
+LRU & 25.337 & 0.554 & 0.645 & 0.470 & 0.752 & 1.911 & 0.181 & 1746.6 \\
+No cache & -50.445 & 0.000 & 0.000 & 0.000 & 0.000 & 0.000 & 0.000 & 0.0 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The candidate is the strongest deployable policy by \(4.36\) combined-score points over
+TinyLFU-LRU and remains closer to the oracle on raw hit behavior:
+
+\begin{itemize}
+  \item validation token hit rate: \(0.644\) candidate versus \(0.674\) oracle;
+  \item request p10 hit: \(0.318\) candidate;
+  \item worst-quarter hit: \(0.499\) candidate versus \(0.527\) oracle;
+  \item priority-burst weighted hit: \(0.760\) candidate versus \(0.780\) oracle.
+\end{itemize}
+
+The current score gap is driven less by raw hit rate than by operational quality.  The
+candidate's score breakdown is:
+
+\begin{center}
+\begin{tabular}{lr}
+\toprule
+\textbf{Component} & \textbf{Value} \\
+\midrule
+Mean workload score & \(+68.642\) \\
+Minimum-workload contribution & \(+13.685\) \\
+Churn cost & \(-10.283\) \\
+Fairness cost & \(-7.663\) \\
+Complexity cost & \(-6.593\) \\
+\midrule
+Combined score & \(\mathbf{57.788}\) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Held-out structure-generalization probe}
+
+The recurrence-heavy probe is reported but excluded from selection.  The current
+compact candidate scores \(40.303\) on the probe.  Its token hit rates are \(0.2268\)
+on \identifier{agent_trace_branching} and \(0.7817\) on
+\identifier{cyclic_working_set_pressure}.  The first value remains the clearest
+structural weakness: richer state is useful only if it improves branching-agent
+service without buying hit rate through excessive churn or wasted admissions.
+
+\subsection{Post-expansion evolution result}
+\label{sec:post-expansion}
+
+Run \filepath{artifacts/prefix_kv_cache_runs/20260606T000036Z} used the expanded
+observable surface, canonical multi-timescale primitive, form-aware complexity, and
+the quarantined probe.  A nominal 100-evaluation budget produced 98 recorded
+evaluations, cost \$2.898, filled eight archive cells, and retained the compact seed at
+\(57.788\).  The strongest generated mutation scored \(50.655\).
+
+That headline alone hides the important decomposition.  The table below compares the
+incumbent with the highest-scoring \emph{generated} mutation.  ``Raw before
+complexity'' retains the operational churn and fairness charges but adds the
+complexity charge back to the selection score.
+
+\begin{center}
+\scriptsize
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrrrr}
+\toprule
+\textbf{Policy} & \textbf{Mean} & \textbf{Min contribution} &
+\textbf{Churn cost} & \textbf{Fairness cost} & \textbf{Raw before cx} &
+\textbf{Effective cx} & \textbf{Cx cost} & \textbf{Combined} \\
+\midrule
+Compact incumbent & 68.642 & 13.685 & 10.283 & 7.663 & 64.381 & 473 & 6.593 & 57.788 \\
+Best expanded mutation & 65.346 & 14.300 & 7.754 & 7.663 & 64.229 & 1239 & 13.574 & 50.655 \\
+\midrule
+Mutation minus incumbent & -3.296 & +0.616 & -2.529 & 0.000 & -0.152 & +766 & +6.982 & -7.134 \\
+\bottomrule
+\end{tabular}%
+}
+\end{center}
+
+The ``Min contribution'' column is the same signed
+\(0.5\min_{G\in\mathcal{G}}S_G\) floor-guard term used throughout the report.  It is
+positive here because each policy's weakest validation workload-capacity group still
+has a positive score; the same column becomes negative whenever that weakest group
+falls below zero.
+
+The best expanded form was therefore raw-competitive rather than plainly worse on
+merit: before complexity it trailed by only \(0.152\) points.  Its lower mean workload
+score was almost offset by a better minimum-workload contribution and \(2.529\) points
+less churn cost.  Complexity then widened the gap by another \(6.982\) points.  The
+correct interpretation is primarily case (a)---a nearly tied raw policy sunk by its
+larger implementation---with a small case-(b) raw deficit, not a decisive rejection of
+the expanded functional form.
+
+The probe decomposition is more mixed:
+
+\begin{center}
+\small
+\begin{tabular}{lrrrrr}
+\toprule
+\textbf{Policy} & \textbf{Raw probe} & \textbf{Charged probe} &
+\textbf{Agent-branch hit} & \textbf{Cyclic hit} & \textbf{Churn/1k} \\
+\midrule
+Compact incumbent & 46.896 & 40.303 & 0.2268 & 0.7817 & 170.1 \\
+Best expanded mutation & 38.006 & 24.432 & 0.2574 & 0.7434 & 513.9 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The mutation improved the specifically weak
+\identifier{agent_trace_branching} family by \(0.0307\) token-hit-rate points, but it
+regressed \identifier{cyclic_working_set_pressure} by \(0.0384\), increased probe
+churn from \(170.1\) to \(513.9\) per 1000 requests, and lost on both raw and charged
+aggregate probe score.  This is not case (c) at the aggregate-probe level, so the
+result does not support moving the entire probe into selection.  It does show that the
+expanded signals can change the intended behavior; the next useful ablation is to
+isolate the agent-branching gain without the cyclic and complexity regressions.
+
+Form-aware complexity was enabled, but the best mutation hand-rolled fast, slow,
+priority, and miss-decay state instead of importing the canonical
+\code{MultiTimescaleDecay} primitive.  Its raw and effective complexities are both
+\(1239\), so it received zero primitive subsidy.  No viable archived elite exercised
+the canonical primitive; the only archived primitive user was invalid.  Consequently,
+this run does \emph{not} establish that a subsidized structured policy lost on merit.
+It establishes that the search found a promising but verbose hand-rolled structure and
+failed to adopt the cheaper provided representation.
+
+The saved winner is byte-identical to \code{compact_seed.py}; validation, probe, and
+hidden metrics for the recommended seed are therefore exactly unchanged.  Per the
+adjudication rule, the prior seed remains recommended because no candidate improved
+validation while preserving both quarantined panels.  The full decomposition is
+persisted in
+\filepath{artifacts/prefix_kv_cache_runs/20260606T000036Z/best_generated_mutation_decomposition.json}.
+
+\subsection{Structured ablation and repeated-search adjudication}
+\label{sec:structured-search}
+
+The next iteration converted the first expansion run's hand-rolled fast, slow,
+priority, and miss-decay dictionaries into a bounded canonical
+\code{MultiTimescaleDecay.observe_vector} representation.  Before another evolution
+run, a behavior-only full-panel ablation isolated which structural terms were carrying
+value.  Complexity is set to zero in this table so the rows compare behavior rather
+than source size.
+
+\begin{center}
+\scriptsize
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrrrr}
+\toprule
+\textbf{Variant} & \textbf{Raw selection} & \textbf{Mean} &
+\textbf{Min contribution} & \textbf{Churn cost} & \textbf{Raw probe} &
+\textbf{Agent hit} & \textbf{Cyclic hit} & \textbf{Probe churn/1k} \\
+\midrule
+All structured terms & 62.178 & 65.543 & 13.554 & 9.256 & 35.654 & 0.2626 & 0.7408 & 634.5 \\
+Without recurrence & 63.762 & 65.436 & 12.826 & 7.198 & 41.373 & 0.2533 & 0.7445 & 306.4 \\
+Without subtree & 59.029 & 63.127 & 11.228 & 6.227 & 37.906 & 0.2558 & 0.7362 & 430.6 \\
+Without regime & 61.264 & 67.734 & 14.290 & 13.096 & 27.756 & 0.2662 & 0.7267 & 986.1 \\
+Without miss state & 62.287 & 65.668 & 13.546 & 9.265 & 32.501 & 0.2626 & 0.7182 & 678.8 \\
+Without priority state & 62.298 & 65.674 & 13.554 & 9.266 & 35.654 & 0.2626 & 0.7408 & 634.5 \\
+Without recurrence and priority & 63.819 & 65.380 & 12.815 & 7.073 & 41.373 & 0.2533 & 0.7445 & 306.4 \\
+Also without miss state & 63.718 & 65.280 & 12.815 & 7.075 & 41.038 & 0.2534 & 0.7411 & 313.4 \\
+\bottomrule
+\end{tabular}%
+}
+\end{center}
+
+The ablation gives a sharper result than the undifferentiated expansion-run loss.
+The explicit recurrence terms were harmful, increasing churn without improving either
+selection or the aggregate probe.  Priority-decay state was behaviorally inert.
+Subtree and regime context carried real value: removing either reduced raw selection,
+and removing regime conditioning caused severe probe churn.  Miss-decay state was
+near-neutral for validation selection but protected cyclic behavior, so it remained
+in the selected structured seed.
+
+Deleting recurrence and priority state produced
+\filepath{src/prefix_cache_evolve/problems/prefix_kv_cache/seeds/structured_seed.py}.
+It is smaller than the compact incumbent after the canonical subsidy, but it trades
+validation and aggregate probe score for better hidden and agent-branching behavior:
+
+\begin{center}
+\small
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrrrr}
+\toprule
+\textbf{Policy} & \textbf{Combined} & \textbf{Raw before cx} &
+\textbf{Effective cx} & \textbf{Subsidy} & \textbf{Probe} &
+\textbf{Agent hit} & \textbf{Cyclic hit} & \textbf{Hidden} \\
+\midrule
+Compact incumbent & 57.788 & 64.381 & 473 & 0 & 40.303 & 0.2268 & 0.7817 & -18.616 \\
+Structured seed & 57.426 & 63.819 & 454 & 15 & 34.980 & 0.2533 & 0.7445 & -10.815 \\
+\bottomrule
+\end{tabular}%
+}
+\end{center}
+
+The structured seed was then used as the parent for three independent nominal
+100-evaluation Levi searches.  Each completed 98 recorded evaluations.  The runner now
+persists the strongest generated non-seed mutation and automatically evaluates its
+validation, probe, hidden, raw-complexity, effective-complexity, and subsidy
+decomposition.  This prevents a retained seed from hiding whether evolution discovered
+an interesting but unselected functional form.
+
+\begin{center}
+\scriptsize
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrrrrrr}
+\toprule
+\textbf{Run ID} & \textbf{Evals} & \textbf{Cost} & \textbf{Generated combined} &
+\textbf{Raw before cx} & \textbf{Cx} & \textbf{Subsidy} & \textbf{Probe} &
+\textbf{Agent hit} & \textbf{Cyclic hit} & \textbf{Hidden} \\
+\midrule
+20260606T123835Z & 98 & \$2.474 & 49.326 & 64.433 & 1429 & 15 & 22.871 & 0.1648 & 0.7605 & -16.542 \\
+20260606T125829Z & 98 & \$2.722 & 51.219 & 65.470 & 1322 & 15 & 20.854 & 0.2727 & 0.8054 & -16.501 \\
+20260606T132003Z & 98 & \$2.486 & 49.702 & 62.938 & 1198 & 0 & 35.312 & 0.2142 & 0.7736 & -15.486 \\
+\bottomrule
+\end{tabular}%
+}
+\end{center}
+
+All three searches retained the structured seed as the charged winner, and none
+improved charged validation while preserving both quarantined panels.  Run
+\filepath{artifacts/prefix_kv_cache_structured_runs/20260606T125829Z} is nevertheless
+the strongest functional-form finding.  Its generated mutation improved raw selection
+from \(63.819\) to \(65.470\), agent-branching hit from \(0.2533\) to \(0.2727\), and
+cyclic hit from \(0.7445\) to \(0.8054\).  It then lost \(14.251\) points to complexity,
+regressed aggregate probe score to \(20.854\), and regressed hidden score to
+\(-16.501\).  Thus the richer form can improve the recurrence behaviors it targets,
+but its current operational behavior and implementation size do not generalize.
+
+The primitive-adoption intervention did work.  All 24 archived elites across the
+three searches referenced \code{MultiTimescaleDecay.observe_vector}, whereas no viable
+elite in the prior expansion run used the canonical primitive.  The remaining failure
+is not discoverability of the supplied representation: generated policies still
+expanded to \(1198\)--\(1429\) effective nodes.  The bounded subsidy made canonical
+state cheaper but correctly did not make surrounding bespoke control flow free.
+
+The full structure probe remains quarantined from selection.  The per-family hit rates
+are useful diagnostics, but Run 2 demonstrates why they should not be promoted without
+an operational non-regression constraint: both hit rates improved while aggregate
+probe score deteriorated sharply.  The adjudication therefore keeps
+\code{compact_seed.py} unchanged and treats the structured seed as a useful alternate
+parent.  The ablation and repeated-run verdicts are persisted in
+\filepath{artifacts/prefix_kv_cache_structured_ablation.json} and
+\filepath{artifacts/prefix_kv_cache_structured_runs/adjudication.json}.
+
+\subsection{Hidden-panel diagnostic}
+
+A post-verifier-revision hidden diagnostic produced:
+
+\begin{center}
+\small
+\scriptsize
+\begin{tabular}{lrrrrrrr}
+\toprule
+\textbf{Policy} & \textbf{Hidden score} & \textbf{Token hit} &
+\textbf{Worst-quarter} & \textbf{Tok. waste} & \textbf{Utility} &
+\textbf{Avoidable} & \textbf{Churn/1k} \\
+\midrule
+Oracle future reuse & 21.517 & 0.4863 & 0.3385 & 0.1151 & 6.566 & 0.0000 & 460.8 \\
+TinyLFU-LRU & -7.869 & 0.4176 & 0.2653 & 0.5473 & 3.668 & 0.2768 & 1032.7 \\
+Compact candidate & -18.616 & 0.4345 & 0.3044 & 0.6519 & 3.348 & 0.1698 & 1537.4 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The candidate retains better hidden hit rate and worst-quarter service than TinyLFU,
+but its combined score is worse because it admits too much dead content and churns much
+more.  This is precisely the kind of distinction the expanded verifier was intended to
+surface.
+
+\section{Correctness Properties and Test Strategy}
+
+\subsection{Core invariants}
+
+Functional PyTest coverage asserts, among other properties:
+
+\begin{itemize}
+  \item hits are root-contiguous;
+  \item rejected roots prevent deeper admission;
+  \item missed blocks still invoke miss callbacks after deeper admission becomes
+  blocked;
+  \item active and interior blocks cannot be evicted;
+  \item re-admitted blocks become recently used;
+  \item failed lookup probes are charged;
+  \item future-reuse metadata advances past the current request and handles same-step
+  reuse;
+  \item the oracle evicts the furthest next reuse;
+  \item LRU tie-breaking and baseline distinctions behave as intended;
+  \item binary and token-weighted useful/wasted admissions partition successful
+  admission intervals and admitted token mass;
+  \item full-block-equivalent admission utility distinguishes full and partial blocks;
+  \item avoidable-eviction audits distinguish LRU from the oracle;
+  \item hidden families do not affect normal combined score;
+  \item structure-probe metrics and invalidity do not affect candidate selection;
+  \item recurrence timestamps, bounded gap moments, subtree aggregates, and request
+  regime windows are deterministic and online-computable;
+  \item multi-timescale primitive state is bounded and deterministic;
+  \item complexity is unbounded and concave;
+  \item form-aware complexity discounts only canonical primitive composition and leaves
+  legacy mode runnable;
+  \item vector observations apply distinct finite per-channel additions and reject
+  mismatched widths;
+  \item the selected structured seed uses bounded canonical state and the structured
+  ablation harness preserves its default behavior;
+  \item the quick report is labeled smoke-only;
+  \item YAML family and score configuration matches verifier defaults.
+\end{itemize}
+
+\subsection{Current verification status}
+
+After the latest verifier and workload additions:
+
+\begin{itemize}
+  \item 126 standalone repository tests pass;
+  \item \code{ruff check .} passes;
+  \item formatting has been run;
+  \item \code{git diff --check} is clean;
+  \item all 26 workload families build;
+  \item YAML/default workload and score parity is confirmed;
+  \item the full baseline panel preserves credible ordering: oracle first, compact
+  candidate second, then reporting heuristic and deployable baselines.
+\end{itemize}
+
+\section{Limitations and Recommended Next Steps}
+
+\subsection{Simulator limitations}
+
+\begin{itemize}
+  \item \textbf{Block capacity rather than byte capacity.} All blocks consume one unit
+  despite possible variation in layer count, dtype, model width, or partial-block
+  memory.
+  \item \textbf{Proxy latency.} The deterministic formula is useful for ranking but does
+  not include kernel scheduling, bandwidth, allocator overhead, or device contention.
+  \item \textbf{Synthetic traffic.} Workloads encode plausible failure modes but are not
+  calibrated from production trace distributions.
+  \item \textbf{Single-cache topology.} There is no routing, replication, cache
+  partitioning, host offload, or distributed ownership.
+  \item \textbf{Exact prefix reuse only.} There is no semantic reuse, chunk reuse outside
+  prefix position, or tokenizer/model-version mismatch.
+  \item \textbf{Token rather than byte utility.} Admission utility distinguishes token
+  count and repeated hits but does not yet model model-dependent bytes, residency time,
+  or transfer cost.
+  \item \textbf{Audit horizon.} Avoidable eviction uses full future knowledge for
+  verification, which is appropriate for regret measurement but should not be confused
+  with an implementable signal.
+\end{itemize}
+
+\subsection{Verifier limitations}
+
+\begin{itemize}
+  \item Score weights encode design preferences and can still steer search toward the
+  cheapest gradient.  They should be sensitivity-tested.
+  \item Fairness cost currently uses only the \code{multi_tenant_skew} workload even
+  though tenant metrics are reported elsewhere.
+  \item Hidden workloads are quarantined from selection, but they remain synthetic and
+  visible in repository source to human developers.
+  \item The minimum workload term can be dominated by one structurally difficult family;
+  score breakdowns must be reviewed alongside the scalar.
+  \item Current recovery metrics recognize request types containing the word
+  \code{recovery}; this is acceptable as verifier instrumentation but is not a general
+  production phase detector.
+\end{itemize}
+
+\subsection{Evolution limitations}
+
+\begin{itemize}
+  \item The LLM search can invent unsupported or dead state despite prompt guidance.
+  Complexity discourages this but does not prevent it.
+  \item A full candidate evaluation is relatively expensive, limiting broad structural
+  search.
+  \item The coefficient tuner optimizes a fixed compact structure and cannot discover
+  qualitatively new state representations.
+  \item Three additional 98-evaluation searches from the ablated structured seed also
+  did not beat the compact incumbent.  Canonical primitive adoption improved, but
+  generated programs still accumulated substantial bespoke control flow.
+\end{itemize}
+
+\subsection{Recommended next experiments}
+
+\begin{enumerate}
+  \item Compact or structurally ablate the strongest mutation from run
+  \identifier{20260606T125829Z}.  It is the first generated form to improve raw
+  validation and both recurrence-family hit rates, but its \(1322\)-node effective
+  implementation and aggregate-probe regression prevent acceptance.
+  \item Add an archive dimension or non-regression gate for operational probe score,
+  rather than directly rewarding individual probe-family hit rates.  This preserves
+  quarantine while retaining mutations that improve recurrence without excessive
+  churn or wasted admission.
+  \item Add explicit search pressure for deletion and primitive-preserving
+  simplification.  Canonical primitive adoption is no longer the binding problem;
+  surrounding bespoke state and control flow are.
+  \item Replace block-count capacity with byte- or layer-weighted capacity and add
+  byte-weighted admission utility.
+  \item Calibrate workload mixture, prefix depths, arrival bursts, output lengths, and
+  tenant phase durations from anonymized production traces, then replay held-out
+  trace-derived metadata.
+  \item Add routing, tiering, and host-offload simulators so placement policies can be
+  compared with single-cache victim scoring.
+  \item Evaluate multi-objective or lexicographic selection that treats the structure
+  probe as a non-regression constraint without making it a directly optimized scalar.
+  \item Revisit lifetime \code{block.hit_count}; it remains stale permanent state in the
+  compact eviction score even after policy-owned frequency decay.
+\end{enumerate}
+
+\section{Reproducibility}
+
+\subsection{Run the full baseline report}
+
+\begin{lstlisting}[style=shell]
+.venv/bin/python -m prefix_cache_evolve.problems.prefix_kv_cache.runner \
+  --baseline-report \
+  --capacity-sweep-blocks 24,48 \
+  --candidate-program artifacts/prefix_kv_cache_runs/20260606T000036Z
+\end{lstlisting}
+
+\subsection{Run the quarantined reports}
+
+\begin{lstlisting}[style=shell]
+.venv/bin/python -m prefix_cache_evolve.problems.prefix_kv_cache.runner \
+  --probe-report \
+  --candidate-program artifacts/prefix_kv_cache_runs/20260606T000036Z
+
+.venv/bin/python -m prefix_cache_evolve.problems.prefix_kv_cache.runner \
+  --hidden-report \
+  --candidate-program artifacts/prefix_kv_cache_runs/20260606T000036Z
+\end{lstlisting}
+
+\subsection{Run a new evolution from the compact seed}
+
+\begin{lstlisting}[style=shell]
+.venv/bin/python -m prefix_cache_evolve.problems.prefix_kv_cache.runner \
+  --iterations 100 \
+  --config configs/prefix_kv_cache.yaml \
+  --seed-program src/prefix_cache_evolve/problems/prefix_kv_cache/compact_seed.py
+\end{lstlisting}
+
+\subsection{Run the structured ablation and search parent}
+
+\begin{lstlisting}[style=shell]
+.venv/bin/python scripts/ablate_prefix_kv_structured.py
+
+.venv/bin/python -m prefix_cache_evolve.problems.prefix_kv_cache.runner \
+  --iterations 100 \
+  --config configs/prefix_kv_cache.yaml \
+  --seed-program \
+  src/prefix_cache_evolve/problems/prefix_kv_cache/seeds/structured_seed.py
+\end{lstlisting}
+
+\subsection{Run the deterministic compact-policy tuner}
+
+\begin{lstlisting}[style=shell]
+.venv/bin/python scripts/tune_prefix_kv_compact.py \
+  --samples 180 \
+  --full-top 12 \
+  --seed 20260605
+\end{lstlisting}
+
+\subsection{Run tests and lint}
+
+\begin{lstlisting}[style=shell]
+.venv/bin/pytest -q
+.venv/bin/ruff check .
+\end{lstlisting}
+
+\subsection{Artifact layout}
+
+Each saved run directory contains:
+
+\begin{itemize}
+  \item \filepath{best_program.py}: best source returned by Levi;
+  \item \filepath{metrics.json}: flattened evaluator metrics;
+  \item \filepath{artifacts.json}: split, workload, capacity, metadata, and score
+  breakdown artifacts;
+  \item \filepath{metadata.json}: Levi cost and runtime metadata;
+  \item \filepath{run_summary.json}: evaluations, cost, runtime, archive size, and seed;
+  \item \filepath{seed_program.py}: exact source used as the search parent;
+  \item \filepath{best_generated_mutation.py} and
+  \filepath{best_generated_mutation_snapshot.json}: strongest archived generated
+  non-seed, even when the seed remains the returned winner;
+  \item \filepath{best_generated_mutation_decomposition.json} and
+  \filepath{best_generated_mutation_decomposition.md}: selection, probe, hidden, and
+  complexity comparison between the seed and strongest generated mutation;
+  \item \filepath{baseline_comparison.md}: full candidate-versus-baseline report;
+  \item \filepath{generalization_adjudication.json} and
+  \filepath{generalization_adjudication.md}: validation, probe, hidden, and final seed
+  decision.
+\end{itemize}
+
+\section{Conclusion}
+
+The implemented system deliberately separates three concerns:
+
+\begin{enumerate}
+  \item the \textbf{simulator} enforces realistic prefix-tree and active-reference
+  constraints while producing deterministic service and cost metrics;
+  \item the \textbf{verifier} converts a broad multi-seed workload panel into an
+  interpretable robust score without exposing future information to deployable
+  candidates;
+  \item the \textbf{evolution workflow} searches executable policy source, charges its
+  complexity, and persists reproducible artifacts.
+\end{enumerate}
+
+The compact candidate demonstrates that a small deployable policy can remain stronger
+than the credibility baselines even after the verifier is tightened.  The expanded
+observable and primitive surface has not yet produced a better generalizing program.
+Targeted ablation showed that subtree and regime context are useful, explicit
+recurrence terms were harmful, and priority-decay state was inert.  Updating the
+primitive contract and prompt fixed search adoption: all 24 archived elites from three
+new searches used canonical vector-decay state.  One generated mutation improved raw
+validation and both recurrence-family hit rates, proving that richer functional form
+can address the intended behavior, but complexity and aggregate operational
+regressions correctly prevented its selection.  The compact incumbent therefore
+remains recommended while the structured seed and strongest generated mutation provide
+focused parents for deletion-oriented search.
+
+\begin{thebibliography}{99}
+\addcontentsline{toc}{section}{References}
+
+\bibitem{pagedattention}
+W. Kwon et al.
+\newblock ``Efficient Memory Management for Large Language Model Serving with
+PagedAttention.''
+\newblock ACM SOSP, 2023.
+\newblock \url{https://arxiv.org/abs/2309.06180}.
+
+\bibitem{vllm-apc}
+vLLM Project.
+\newblock ``Automatic Prefix Caching: Design.''
+\newblock Accessed June 5, 2026.
+\newblock \url{https://docs.vllm.ai/en/stable/design/prefix_caching/}.
+
+\bibitem{sglang}
+L. Zheng et al.
+\newblock ``SGLang: Efficient Execution of Structured Language Model Programs.''
+\newblock NeurIPS, 2024.
+\newblock \url{https://arxiv.org/abs/2312.07104}.
+
+\bibitem{saecache}
+S. Fang et al.
+\newblock ``Not All Tokens Are Worth Caching: Learning Semantic-Aware Eviction for LLM
+Prefix Caches.''
+\newblock arXiv preprint, May 2026.
+\newblock \url{https://arxiv.org/abs/2605.18825}.
+
+\bibitem{kvflow}
+Z. Pan et al.
+\newblock ``KVFlow: Efficient Prefix Caching for Accelerating LLM-Based Multi-Agent
+Workflows.''
+\newblock arXiv preprint, 2025.
+\newblock \url{https://arxiv.org/abs/2507.07400}.
+
+\bibitem{infercept}
+R. Abhyankar et al.
+\newblock ``INFERCEPT: Efficient Intercept Support for Augmented LLM Inference.''
+\newblock ICML, 2024.
+\newblock \url{https://arxiv.org/abs/2402.01869}.
+
+\bibitem{preble}
+V. Srivatsa et al.
+\newblock ``Preble: Efficient Distributed Prompt Scheduling for LLM Serving.''
+\newblock arXiv preprint, 2024.
+\newblock \url{https://arxiv.org/abs/2407.00023}.
+
+\bibitem{mooncake}
+R. Qin et al.
+\newblock ``Mooncake: A KVCache-centric Disaggregated Architecture for LLM Serving.''
+\newblock arXiv preprint, 2024.
+\newblock \url{https://arxiv.org/abs/2407.00079}.
+
+\bibitem{memserve}
+C. Hu et al.
+\newblock ``MemServe: Context Caching for Disaggregated LLM Serving with Elastic Memory
+Pool.''
+\newblock arXiv preprint, 2024.
+\newblock \url{https://arxiv.org/abs/2406.17565}.
+
+\bibitem{lmcache}
+Y. Liu et al.
+\newblock ``LMCache: An Efficient KV Cache Layer for Enterprise-Scale LLM Inference.''
+\newblock arXiv preprint, 2025.
+\newblock \url{https://arxiv.org/abs/2510.09665}.
+
+\bibitem{tutti}
+S. Qiu et al.
+\newblock ``Tutti: Making SSD-Backed KV Cache Practical for Long-Context LLM Serving.''
+\newblock arXiv preprint, May 2026.
+\newblock \url{https://arxiv.org/abs/2605.03375}.
+
+\bibitem{promptcache}
+I. Gim et al.
+\newblock ``Prompt Cache: Modular Attention Reuse for Low-Latency Inference.''
+\newblock arXiv preprint, 2023.
+\newblock \url{https://arxiv.org/abs/2311.04934}.
+
+\bibitem{ragcache}
+C. Jin et al.
+\newblock ``RAGCache: Efficient Knowledge Caching for Retrieval-Augmented Generation.''
+\newblock arXiv preprint, 2024.
+\newblock \url{https://arxiv.org/abs/2404.12457}.
+
+\bibitem{cacheblend}
+J. Yao et al.
+\newblock ``CacheBlend: Fast Large Language Model Serving for RAG with Cached Knowledge
+Fusion.''
+\newblock arXiv preprint, 2024.
+\newblock \url{https://arxiv.org/abs/2405.16444}.
+
+\bibitem{h2o}
+Z. Zhang et al.
+\newblock ``H2O: Heavy-Hitter Oracle for Efficient Generative Inference of Large
+Language Models.''
+\newblock NeurIPS, 2023.
+\newblock \url{https://arxiv.org/abs/2306.14048}.
+
+\bibitem{kivi}
+Z. Liu et al.
+\newblock ``KIVI: A Tuning-Free Asymmetric 2bit Quantization for KV Cache.''
+\newblock ICML, 2024.
+\newblock \url{https://arxiv.org/abs/2402.02750}.
+
+\bibitem{snapkv}
+Y. Li et al.
+\newblock ``SnapKV: LLM Knows What You Are Looking for Before Generation.''
+\newblock NeurIPS, 2024.
+\newblock \url{https://arxiv.org/abs/2404.14469}.
+
+\bibitem{quest}
+J. Tang et al.
+\newblock ``Quest: Query-Aware Sparsity for Efficient Long-Context LLM Inference.''
+\newblock ICML, 2024.
+\newblock \url{https://arxiv.org/abs/2406.10774}.
+
+\bibitem{laprox}
+T. Mai and J.-Y. Kim.
+\newblock ``Reformulating KV Cache Eviction Problem for Long-Context LLM Inference.''
+\newblock arXiv preprint, May 2026.
+\newblock \url{https://arxiv.org/abs/2605.07234}.
+
+\bibitem{vericache}
+J. Yao et al.
+\newblock ``VeriCache: Turning Lossy KV Cache into Lossless LLM Inference.''
+\newblock arXiv preprint, May 2026.
+\newblock \url{https://arxiv.org/abs/2605.17613}.
+
+\end{thebibliography}
+
+\end{document}

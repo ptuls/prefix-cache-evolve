@@ -1,0 +1,85 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "prefix-cache-evolve"
+version = "0.1.0"
+description = "Simulator, verifier, and Levi evolution workflow for LLM prefix KV-cache policies."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { file = "LICENSE" }
+authors = [
+  { name = "Paul Tune" },
+]
+keywords = [
+  "llm-serving",
+  "prefix-cache",
+  "kv-cache",
+  "evolutionary-computation",
+  "levi",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "loguru>=0.7",
+  "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0,<9",
+  "ruff>=0.11,<0.16",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.0,<9",
+  "ruff>=0.11,<0.16",
+]
+
+[project.urls]
+repository = "https://github.com/ptuls/prefix-cache-evolve"
+
+[project.scripts]
+prefix-cache-evolve = "prefix_cache_evolve.problems.prefix_kv_cache.runner:main"
+prefix-cache-ablate-structured = "prefix_cache_evolve.tools.ablate_structured:main"
+prefix-cache-tune-compact = "prefix_cache_evolve.tools.tune_compact:main"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/configs",
+  "/docs",
+  "/scripts",
+  "/src",
+  "/tests",
+  "/LICENSE",
+  "/README.md",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/prefix_cache_evolve"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"configs/prefix_kv_cache.yaml" = "prefix_cache_evolve/configs/prefix_kv_cache.yaml"
+"configs/prefix_kv_trace_schema.json" = "prefix_cache_evolve/configs/prefix_kv_trace_schema.json"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]

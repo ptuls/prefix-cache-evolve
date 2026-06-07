@@ -35,12 +35,8 @@ def run_with_timeout(
 
     try:
         context = multiprocessing.get_context("fork")
-    except (
-        ValueError
-    ) as exc:  # pragma: no cover - Python always supports fork on macOS/Linux
-        raise RuntimeError(
-            "evaluation isolation requires multiprocessing fork support"
-        ) from exc
+    except ValueError as exc:  # pragma: no cover - Python always supports fork on macOS/Linux
+        raise RuntimeError("evaluation isolation requires multiprocessing fork support") from exc
 
     receive_conn, send_conn = context.Pipe(duplex=False)
     process = context.Process(
@@ -52,15 +48,11 @@ def run_with_timeout(
     try:
         if not receive_conn.poll(timeout_seconds):
             _stop_process(process)
-            raise TimeoutError(
-                f"evaluation exceeded {timeout_seconds}s wall-clock limit"
-            )
+            raise TimeoutError(f"evaluation exceeded {timeout_seconds}s wall-clock limit")
         try:
             payload = receive_conn.recv()
         except EOFError as exc:
-            raise RuntimeError(
-                "evaluation worker exited without returning a result"
-            ) from exc
+            raise RuntimeError("evaluation worker exited without returning a result") from exc
     finally:
         receive_conn.close()
         _stop_process(process)
@@ -71,9 +63,7 @@ def run_with_timeout(
     if status == "error":
         raise values[0]
     error_type, error_message, full_traceback = values
-    raise RuntimeError(
-        f"evaluation worker raised {error_type}: {error_message}\n{full_traceback}"
-    )
+    raise RuntimeError(f"evaluation worker raised {error_type}: {error_message}\n{full_traceback}")
 
 
 def _run_in_subprocess(
@@ -198,9 +188,7 @@ class EvaluationEntryPoint(Generic[ResultT]):
     timeout_suggestion: str
     success_result_builder: Callable[[ResultT], EvaluatorResult]
     error_result_builder: Callable[[str, dict[str, Any]], EvaluatorResult]
-    unexpected_error_suggestion: str = (
-        "Unexpected evaluator failure; inspect the traceback."
-    )
+    unexpected_error_suggestion: str = "Unexpected evaluator failure; inspect the traceback."
     exported_names: Sequence[str] = ("candidate_factory", "build_candidate")
 
     def evaluate(self, program_path: str) -> EvaluatorResult:

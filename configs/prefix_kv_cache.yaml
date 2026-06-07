@@ -2,12 +2,13 @@ max_iterations: 300
 
 llm:
   primary_model: "gpt-5.4-mini"
-  temperature: 1.0
-  max_tokens: 12000
+  secondary_model: "gpt-5.5"
+  temperature: 0.3
+  max_tokens: 6000
 
 prompt:
   system_message: >
-    You are designing simple stateless scoring policies for an LLM prefill
+    You are designing compact stateful scoring policies for an LLM prefill
     prefix KV-cache. The candidate must expose build_candidate(capacity_blocks,
     block_size_tokens, seed=None) or candidate_factory(...) and return an object
     with score_admission(block, now), score_eviction(block, now), and exactly
@@ -51,9 +52,10 @@ prompt:
     applies distinct updates to different channels, and decay_vector is the pure
     stateless counterpart. Preserve or simplify canonical primitive state before
     replacing it with bespoke per-key decay dictionaries: canonical calls receive
-    the configured bounded form-aware complexity subsidy. Explore multi-timescale
-    recurrence estimates and regime-conditional admission or eviction control
-    flow. Do not hard-code workload-family names or request_type values.
+    the configured bounded form-aware complexity subsidy. Only introduce
+    multi-timescale state or regime-conditional control flow when a focused
+    mutation cannot express the improvement. Do not hard-code workload-family
+    names or request_type values.
 
     Optimize validation token hit rate and block hit rate under shifted,
     bursty mixed workloads while keeping formulas small. Avoid prompt-token
@@ -68,6 +70,19 @@ prompt:
     high-priority one-off requests should not evict reusable normal traffic.
     Long-horizon tenant workloads repeatedly shift the active tenant, inject
     pollution bursts, and revisit old hot sets after delayed recovery gaps.
+    Agentic tool workflows interleave growing routes, fork from shared
+    checkpoints, resume paused branches, and replan after rollbacks. Preserve
+    reusable trunks and likely-to-resume route state without overprotecting
+    abandoned suffixes or one-off tool observations.
+
+    Default to local improvement of the supplied parent. Make exactly one
+    semantic change per mutation. Preserve the existing class, imports, and
+    state representation unless the mutation deletes or simplifies them. Keep
+    effective complexity at or below 650 AST nodes. Do not add broad exception
+    handlers, future-reuse references, schema fallbacks, unused imports, or
+    speculative state. Evaluator feedback identifies the parent's weakest
+    validation workloads and exact score costs; address one diagnosed weakness
+    without regressing cache economics or complexity.
   objectives:
     - "Maximize mean validation workload score while keeping the weakest workload competitive."
     - "Keep p95 deterministic latency and churn low."
@@ -75,8 +90,9 @@ prompt:
     - "Protect request-tail and worst-quarter service instead of optimizing only the mean."
     - "Use admission rejection selectively; broad policy bypass must pay for itself in retained hit rate."
     - "Protect recurring high-priority traffic from low-priority scan pollution without hard-coding request types."
+    - "Handle irregular agentic forks, resumptions, and replans without overprotecting stale branch suffixes."
     - "Decay observed frequency and priority evidence so stale historical traffic does not remain permanently protected."
-    - "Try multi-timescale and regime-conditional structure when a single monotone score cannot represent recurrence."
+    - "Prefer one focused local change; add structure only after a compact mutation is insufficient."
     - "Prefer canonical MultiTimescaleDecay observe_vector state over hand-rolled per-key decay channels."
     - "Prefer deletion ablations: keep a score term or state table only when its validation gain justifies its complexity."
     - "Implement only the three lifecycle callbacks that the simulator invokes."
@@ -91,21 +107,23 @@ evaluator:
   parallel_evaluations: 2
 
 init:
-  n_diverse_seeds: 0
-  n_variants_per_seed: 8
+  n_diverse_seeds: 4
+  n_variants_per_seed: 3
+  diversity_llm_kwargs:
+    reasoning_effort: medium
 
 cvt:
-  n_centroids: 8
+  n_centroids: 12
   data_driven_centroids: true
 
 behavior:
   ast_features:
-    - code_length
     - cyclomatic_complexity
-    - branch_count
-    - math_operators
+    - subscript_count
   score_keys:
     - validation_token_hit_rate
+    - validation_admission_rate
+    - validation_policy_underfill_rate
     - validation_cache_churn_per_1k
     - validation_wasted_admission_token_rate
 
@@ -117,20 +135,40 @@ meta_advice:
 pipeline:
   n_llm_workers: 4
   n_parents: 1
-  n_inspirations: 1
+  n_inspirations: 0
   output_mode: diff
 
 punctuated_equilibrium:
-  enabled: false
+  enabled: true
+  reasoning_effort: medium
+  max_tokens: 12000
+
+prompt_overrides:
+  paradigm_shift: >
+    Produce one compact, deployable paradigm shift from the strongest
+    representative. Change one core admission or eviction idea, but preserve
+    the representative's small overall architecture and delete or simplify
+    existing logic to pay for the change. Target at most 550 effective AST
+    nodes; candidates above 650 effective AST nodes are rejected before
+    evaluation. Keep the complete file under 120 nonblank lines, with at most
+    one policy class, one bounded state dictionary or canonical decay
+    primitive, and a small build_candidate factory. Implement exactly
+    score_admission, score_eviction, on_request_start, on_cache_hit, and
+    on_cache_miss. Use only documented fields and top-level imports. Do not add
+    helper frameworks, dataclasses, schema fallbacks, guessed getattr calls,
+    broad exception handlers, unsupported callbacks, future-knowledge fields,
+    unused imports, or explanatory code. Before output, remove every state
+    table, helper, branch, and score term that is not essential to the new
+    paradigm.
 
 problem:
   description: >
     Search for adaptive prefix KV-cache scoring heuristics for LLM serving.
   settings:
-    capacity_blocks: 24
+    capacity_blocks: 48
     capacity_sweep_blocks:
-      - 24
       - 48
+      - 96
     block_size_tokens: 8
     request_count: 96
     seeds:
@@ -147,11 +185,14 @@ problem:
     latency_norm: 0
     max_memory_bytes: 67108864
     form_aware_complexity: true
+    max_candidate_complexity: 650
+    reject_unsupported_source_patterns: true
     train_families:
       - shared_system_prompt
       - rag_template_reuse
       - long_context_mixed
       - session_continuation_growth
+      - agentic_tool_workflows
     validation_families:
       - phase_shift_prompts
       - multi_tenant_skew
@@ -192,6 +233,8 @@ problem:
       latency_cap: 40
       churn_weight: 0.015
       churn_cap: 25
+      underfill_weight: 12
+      underfill_cap: 15
       fairness_weight: 80
       fairness_cap: 30
       k_complex: 0.065
@@ -208,6 +251,7 @@ search:
     unsupported lifecycle machinery, and id(block) fallbacks are complexity
     with no benchmark value. Treat every score term and state table as
     provisional: try removing terms, and retain them only when their validation
-    benefit pays for their complexity. The supplied structured seed already uses
-    bounded canonical vector-decay state; mutate or ablate that representation
+    benefit pays for their complexity. Default to one local semantic change and
+    preserve the supplied parent's state representation. If the parent uses
+    bounded canonical vector-decay state, mutate or ablate that representation
     before introducing a custom state dictionary.

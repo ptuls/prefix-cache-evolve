@@ -16,9 +16,7 @@ class EvolutionReporter:
         if total_cost is not None:
             logger.info("Levi reported cost: ${:.4f}", total_cost)
         self._report_run_cost(result)
-        snippet = getattr(result, "best_program", "") or getattr(
-            result, "best_code", ""
-        )
+        snippet = getattr(result, "best_program", "") or getattr(result, "best_code", "")
         logger.info("\nBest program snippet:\n{}...\n", snippet[:200])
 
     def _report_run_cost(self, result) -> None:

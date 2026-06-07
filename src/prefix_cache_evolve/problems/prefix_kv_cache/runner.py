@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -35,23 +36,22 @@ from .configuration import (
     load_evaluator_config,
     prefix_kv_config_environment,
 )
-from .initial_program import build_candidate
+from .pressure_aware_incumbent import build_candidate
 from .trace_replay import calibrate_anonymized_trace, load_anonymized_trace
 
-_INITIAL_PROGRAM_PATH = Path(__file__).parent / "initial_program.py"
-INITIAL_PROGRAM_SOURCE = ProgramSource(
-    _INITIAL_PROGRAM_PATH.read_text(encoding="utf-8")
-)
+_DEFAULT_SEED_PATH = Path(__file__).parent / "pressure_aware_incumbent.py"
+DEFAULT_SEED_SOURCE = ProgramSource(_DEFAULT_SEED_PATH.read_text(encoding="utf-8"))
 _EVALUATOR_PATH = Path(__file__).parent / "evaluator.py"
 _COMPACT_SEED_PATH = Path(__file__).parent / "compact_seed.py"
 _DEFAULT_CONFIG_FILE = str(DEFAULT_CONFIG_PATH)
 _CONFIG_LOADER = ConfigLoader()
-_DEFAULT_CAPACITY_SWEEP_BLOCKS = (24, 48)
+_DEFAULT_CAPACITY_SWEEP_BLOCKS = (48, 96)
 _QUICK_REPORT_WARNING = baseline_reporting.QUICK_REPORT_WARNING
 _baseline_group = baseline_reporting.baseline_group
 write_baseline_comparison_report = baseline_reporting.write_baseline_comparison_report
 _SENSITIVITY_WEIGHTS = (
     "churn_weight",
+    "underfill_weight",
     "wasted_admission_weight",
     "avoidable_eviction_weight",
     "fairness_weight",
@@ -109,7 +109,7 @@ def _build_runner() -> LeviRunner:
 def _build_workflow(
     provider,
     *,
-    program_source: ProgramSource = INITIAL_PROGRAM_SOURCE,
+    program_source: ProgramSource = DEFAULT_SEED_SOURCE,
 ) -> object:
     from prefix_cache_evolve.workflow.workflow import EvolutionWorkflow
 
@@ -137,14 +137,10 @@ def demo_run_evolution(
     artifact_output: Path | None = Path("artifacts/prefix_kv_cache_runs"),
 ) -> object:
     provider = (
-        MinimalConfigProvider()
-        if quick
-        else YamlConfigProvider(Path(config_file), _CONFIG_LOADER)
+        MinimalConfigProvider() if quick else YamlConfigProvider(Path(config_file), _CONFIG_LOADER)
     )
     program_source = (
-        _load_seed_program_source(seed_program)
-        if seed_program is not None
-        else INITIAL_PROGRAM_SOURCE
+        _load_seed_program_source(seed_program) if seed_program is not None else DEFAULT_SEED_SOURCE
     )
     workflow = _build_workflow(provider, program_source=program_source)
     with prefix_kv_config_environment(Path(config_file), quick=quick):
@@ -155,7 +151,7 @@ def demo_run_evolution(
             artifact_output,
             iterations=iterations,
             config_label=provider.describe(),
-            seed_label=str(seed_program or _INITIAL_PROGRAM_PATH),
+            seed_label=str(seed_program or _DEFAULT_SEED_PATH),
             seed_source=program_source.text(),
             report_config=load_evaluator_config(Path(config_file)),
             report_config_file=config_file,
@@ -207,9 +203,7 @@ def compare_baselines(
         )
         print(f"baseline_comparison={report_path}")
     for name, result in results.items():
-        print(
-            f"{name}: combined_score={result.combined_score:.3f} [{_baseline_group(name)}]"
-        )
+        print(f"{name}: combined_score={result.combined_score:.3f} [{_baseline_group(name)}]")
         for capacity, metrics in result.capacity_metrics.items():
             print(
                 "  "
@@ -303,6 +297,7 @@ def save_run_artifacts(
     _write_json(run_dir / "metadata.json", metadata)
     _write_json(run_dir / "run_summary.json", summary)
 
+    _persist_paradigm_candidates(run_dir, metadata=metadata)
     _persist_best_generated_mutation(
         run_dir,
         metadata=metadata,
@@ -344,6 +339,17 @@ def save_run_artifacts(
     return run_dir
 
 
+def _persist_paradigm_candidates(run_dir: Path, *, metadata: dict[str, Any]) -> None:
+    """Copy all evaluated PE candidates into the final run artifacts."""
+
+    source_value = metadata.get("levi_paradigm_candidates_dir")
+    if not source_value:
+        return
+    source_dir = Path(str(source_value))
+    if source_dir.is_dir():
+        shutil.copytree(source_dir, run_dir / "paradigm_candidates", dirs_exist_ok=True)
+
+
 def _persist_best_generated_mutation(
     run_dir: Path,
     *,
@@ -365,8 +371,7 @@ def _persist_best_generated_mutation(
         generated = [
             elite
             for elite in elites
-            if _normalized_source(_elite_source(elite))
-            != _normalized_source(seed_source)
+            if _normalized_source(_elite_source(elite)) != _normalized_source(seed_source)
         ]
         if not generated:
             return
@@ -381,11 +386,7 @@ def _persist_best_generated_mutation(
         seed_path.write_text(seed_source, encoding="utf-8")
         _write_json(
             run_dir / "best_generated_mutation_snapshot.json",
-            {
-                key: value
-                for key, value in strongest.items()
-                if key not in {"code", "content"}
-            },
+            {key: value for key, value in strongest.items() if key not in {"code", "content"}},
         )
         decomposition = {
             "schema": "prefix-kv-cache-generated-mutation-decomposition-v1",
@@ -398,9 +399,7 @@ def _persist_best_generated_mutation(
                 generated_path,
             ),
         }
-        _write_json(
-            run_dir / "best_generated_mutation_decomposition.json", decomposition
-        )
+        _write_json(run_dir / "best_generated_mutation_decomposition.json", decomposition)
         _write_generated_mutation_report(
             run_dir / "best_generated_mutation_decomposition.md",
             decomposition,
@@ -474,8 +473,9 @@ def _write_generated_mutation_report(
         ),
         "",
         "| Candidate | Selection | Raw before cx | Mean | Min contrib. | "
-        "Churn cost | Cx | Cx subsidy | Probe | Agent hit | Cyclic hit | Hidden |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "Churn cost | Underfill cost | Cx | Cx subsidy | Probe | Agent hit | "
+        "Cyclic hit | Hidden |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for label, candidate in rows:
         selection = candidate["selection"]
@@ -492,6 +492,7 @@ def _write_generated_mutation_report(
             f"{selection_breakdown.get('mean_workload_score', 0.0):.3f} | "
             f"{selection_breakdown.get('min_workload_contribution', 0.0):.3f} | "
             f"{selection_breakdown.get('churn_cost', 0.0):.3f} | "
+            f"{selection_breakdown.get('underfill_cost', 0.0):.3f} | "
             f"{candidate['effective_complexity']} | "
             f"{candidate['primitive_subsidy_nodes']} | "
             f"{probe['combined_score']:.3f} | "
@@ -520,14 +521,12 @@ def hidden_report(
         config_file=config_file,
     )
     if candidate_program is None:
-        print("initial_candidate:")
+        print("default_candidate:")
         champion = PrefixKVCacheEvaluator(config, splits=("hidden",))(build_candidate)
     else:
         candidate_path = _resolve_candidate_program(candidate_program)
         print(f"candidate={candidate_path}")
-        champion = _evaluate_candidate_program(
-            config, candidate_path, splits=("hidden",)
-        )
+        champion = _evaluate_candidate_program(config, candidate_path, splits=("hidden",))
     print(f"  combined_score={champion.combined_score:.3f}")
     results = _evaluate_baselines(
         config,
@@ -570,9 +569,7 @@ def probe_report(
         "schema": "prefix-kv-cache-structure-probe-v1",
         "candidate": str(candidate_path),
         "selection_score_excludes_probe": True,
-        "results": {
-            name: _evaluation_result_summary(result) for name, result in results.items()
-        },
+        "results": {name: _evaluation_result_summary(result) for name, result in results.items()},
     }
     _write_json(output_path, payload)
     print(f"structure_probe={output_path}")
@@ -655,9 +652,7 @@ def replay_trace_report(
         "arrival_bucket_ms": arrival_bucket_ms,
         "block_size_tokens": config.block_size_tokens,
         "capacity_blocks": list(config.effective_capacity_blocks()),
-        "results": {
-            name: _evaluation_result_summary(result) for name, result in results.items()
-        },
+        "results": {name: _evaluation_result_summary(result) for name, result in results.items()},
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
     _write_json(output_path, payload)
@@ -741,9 +736,7 @@ def _score_weight_sensitivity_rows(
             variant = replace(config, **{weight: base_value * factor})
             rescored = {}
             for name, result in results.items():
-                complexity = int(
-                    result.candidate_metadata.get("scoring_fn_complexity", 0)
-                )
+                complexity = int(result.candidate_metadata.get("scoring_fn_complexity", 0))
                 rescored[name] = (
                     PrefixKVCacheEvaluator(variant)
                     .rescore_trials(
@@ -786,7 +779,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--capacity-sweep-blocks",
         default="",
-        help="Comma-separated capacities to evaluate, for example 24,48.",
+        help="Comma-separated capacities to evaluate, for example 48,96.",
     )
     parser.add_argument("--block-size-tokens", type=int, default=None)
     parser.add_argument("--baseline-report", action="store_true")
@@ -827,7 +820,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--seed-program",
         type=Path,
         default=None,
-        help="Candidate .py file or saved run directory to use as the evolution seed.",
+        help=(
+            "Candidate .py file or saved run directory to use as the evolution seed; "
+            "defaults to the pressure-aware incumbent."
+        ),
     )
     parser.add_argument(
         "--no-save-artifacts",
@@ -982,9 +978,7 @@ def _config_from_args(
     base = load_evaluator_config(Path(config_file))
     effective_capacity_sweep = capacity_sweep_blocks
     if not effective_capacity_sweep and capacity_blocks is None:
-        effective_capacity_sweep = (
-            base.capacity_sweep_blocks or _DEFAULT_CAPACITY_SWEEP_BLOCKS
-        )
+        effective_capacity_sweep = base.capacity_sweep_blocks or _DEFAULT_CAPACITY_SWEEP_BLOCKS
     config = replace(
         base,
         request_count=36 if quick else base.request_count,
@@ -1045,8 +1039,7 @@ def _baseline_report_command(
         parts.append("--quick")
     if capacity_sweep_blocks:
         parts.append(
-            "--capacity-sweep-blocks "
-            + ",".join(str(value) for value in capacity_sweep_blocks)
+            "--capacity-sweep-blocks " + ",".join(str(value) for value in capacity_sweep_blocks)
         )
     parts.append(f"--candidate-program {candidate_program}")
     parts.append(f"--config {config_file}")

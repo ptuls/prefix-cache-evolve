@@ -47,9 +47,7 @@ class MultiTimescaleDecay:
         if max_keys <= 0:
             raise ValueError("max_keys must be positive")
         self.max_keys = max_keys
-        self._state: OrderedDict[Hashable, tuple[tuple[float, ...], int]] = (
-            OrderedDict()
-        )
+        self._state: OrderedDict[Hashable, tuple[tuple[float, ...], int]] = OrderedDict()
 
     @property
     def timescale_count(self) -> int:
@@ -124,8 +122,7 @@ class MultiTimescaleDecay:
         if any(not math.isfinite(weight) for weight in weights):
             raise ValueError("weights must be finite")
         return sum(
-            value * weight
-            for value, weight in zip(self.values(key, now), weights, strict=True)
+            value * weight for value, weight in zip(self.values(key, now), weights, strict=True)
         )
 
     def _put(self, key: Hashable, values: tuple[float, ...], now: int) -> None:
@@ -143,8 +140,6 @@ def _validate_half_lives(half_lives: Sequence[float]) -> tuple[float, ...]:
         raise ValueError("at least one half-life is required")
     if len(normalized) > MAX_DECAY_TIMESCALES:
         raise ValueError(f"at most {MAX_DECAY_TIMESCALES} half-lives are supported")
-    if any(
-        not math.isfinite(half_life) or half_life <= 0.0 for half_life in normalized
-    ):
+    if any(not math.isfinite(half_life) or half_life <= 0.0 for half_life in normalized):
         raise ValueError("half-lives must be finite and positive")
     return normalized

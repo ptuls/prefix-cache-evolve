@@ -41,9 +41,7 @@ class StructuredRecurrencePolicy:
         fast, slow, priority, _ = self._state.values(block.prefix_hash, now)
         reuse = math.log1p(fast + 0.6 * slow)
         structure = 0.15 * math.log1p(block.descendant_count)
-        structure += 0.08 * math.log1p(
-            block.subtree_active_ref_count + block.active_ref_count
-        )
+        structure += 0.08 * math.log1p(block.subtree_active_ref_count + block.active_ref_count)
         recurrence = 0.1 * math.log1p(1.0 + (block.access_gap_mean or 0.0))
         recurrence -= 0.05 * math.log1p(1.0 + (block.access_gap_var or 0.0))
         return (
@@ -71,9 +69,7 @@ class StructuredRecurrencePolicy:
             - reuse
             - 0.18
             * math.log1p(
-                block.descendant_count
-                + block.subtree_active_ref_count
-                + block.active_ref_count
+                block.descendant_count + block.subtree_active_ref_count + block.active_ref_count
             )
             - 0.28 * math.log1p(block.estimated_recompute_cost / 64.0)
             - 0.18 * priority

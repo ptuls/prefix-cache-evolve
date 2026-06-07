@@ -93,9 +93,7 @@ def load_anonymized_trace(
                 ),
                 true_output_length=record.output_length,
                 prompt_tokens=prompt_tokens,
-                arrival_step=int(
-                    (record.timestamp_ms - first_timestamp) // arrival_bucket_ms
-                ),
+                arrival_step=int((record.timestamp_ms - first_timestamp) // arrival_bucket_ms),
             )
         )
     return tuple(requests)
@@ -114,13 +112,10 @@ def calibrate_anonymized_trace(
     records = _load_trace_records(path, request_limit=request_limit)
     request_types = Counter(record.request_type for record in records)
     timestamps = [record.timestamp_ms for record in records]
-    arrival_gaps = [
-        right - left for left, right in zip(timestamps, timestamps[1:], strict=False)
-    ]
+    arrival_gaps = [right - left for left, right in zip(timestamps, timestamps[1:], strict=False)]
     first_timestamp = timestamps[0]
     arrival_buckets = Counter(
-        int((timestamp - first_timestamp) // arrival_bucket_ms)
-        for timestamp in timestamps
+        int((timestamp - first_timestamp) // arrival_bucket_ms) for timestamp in timestamps
     )
     predicted_lengths = [
         record.predicted_output_length
@@ -140,21 +135,14 @@ def calibrate_anonymized_trace(
             }
             for request_type, count in sorted(request_types.items())
         },
-        "prefix_depth_blocks": _distribution(
-            [len(record.prefix_path) for record in records]
-        ),
-        "prompt_length_tokens": _distribution(
-            [record.prompt_length for record in records]
-        ),
-        "output_length_tokens": _distribution(
-            [record.output_length for record in records]
-        ),
+        "prefix_depth_blocks": _distribution([len(record.prefix_path) for record in records]),
+        "prompt_length_tokens": _distribution([record.prompt_length for record in records]),
+        "output_length_tokens": _distribution([record.output_length for record in records]),
         "predicted_output_length_tokens": _distribution(predicted_lengths),
         "arrival_gap_ms": _distribution(arrival_gaps),
         "arrival_bursts": {
             "same_bucket_request_fraction": (
-                sum(count for count in arrival_buckets.values() if count > 1)
-                / len(records)
+                sum(count for count in arrival_buckets.values() if count > 1) / len(records)
             ),
             "max_requests_per_bucket": max(arrival_buckets.values()),
             "occupied_bucket_count": len(arrival_buckets),
@@ -179,9 +167,7 @@ def _load_trace_records(
             try:
                 payload = json.loads(line)
             except json.JSONDecodeError as exc:
-                raise ValueError(
-                    f"{path}:{line_number}: invalid JSON: {exc.msg}"
-                ) from exc
+                raise ValueError(f"{path}:{line_number}: invalid JSON: {exc.msg}") from exc
             if not isinstance(payload, Mapping):
                 raise ValueError(f"{path}:{line_number}: record must be an object")
             records.append(_parse_record(payload, path=path, line_number=line_number))
@@ -202,14 +188,11 @@ def _parse_record(
     forbidden = sorted(_find_forbidden_content_keys(payload))
     if forbidden:
         raise ValueError(
-            f"{path}:{line_number}: raw-content fields are forbidden: "
-            + ", ".join(forbidden)
+            f"{path}:{line_number}: raw-content fields are forbidden: " + ", ".join(forbidden)
         )
     unknown = sorted(set(payload) - _ALLOWED_FIELDS)
     if unknown:
-        raise ValueError(
-            f"{path}:{line_number}: unsupported trace fields: " + ", ".join(unknown)
-        )
+        raise ValueError(f"{path}:{line_number}: unsupported trace fields: " + ", ".join(unknown))
     timestamp_ms = _number(payload, "timestamp_ms", path, line_number)
     if timestamp_ms < 0:
         raise ValueError(f"{path}:{line_number}: timestamp_ms must be nonnegative")
@@ -225,9 +208,7 @@ def _parse_record(
         path=path,
         line_number=line_number,
     )
-    prefix_fields = [
-        name for name in ("prefix_path", "prefix_hashes") if name in payload
-    ]
+    prefix_fields = [name for name in ("prefix_path", "prefix_hashes") if name in payload]
     if len(prefix_fields) != 1:
         raise ValueError(
             f"{path}:{line_number}: provide exactly one of prefix_path or prefix_hashes"
@@ -235,9 +216,7 @@ def _parse_record(
     prefix_path = payload[prefix_fields[0]]
     if not isinstance(prefix_path, list) or not prefix_path:
         raise ValueError(f"{path}:{line_number}: prefix_path must be a non-empty list")
-    opaque_path = tuple(
-        _opaque_value(value, path, line_number) for value in prefix_path
-    )
+    opaque_path = tuple(_opaque_value(value, path, line_number) for value in prefix_path)
     prompt_length = _integer(payload, "prompt_length", path, line_number, minimum=1)
     output_length = _integer(payload, "output_length", path, line_number, minimum=0)
     predicted = payload.get("predicted_output_length")
@@ -290,9 +269,7 @@ def _prefix_path_tokens(
 ) -> tuple[int, ...]:
     expected_depth = math.ceil(prompt_length / block_size_tokens)
     if len(prefix_path) != expected_depth:
-        raise ValueError(
-            "prefix_path depth must equal ceil(prompt_length / block_size_tokens)"
-        )
+        raise ValueError("prefix_path depth must equal ceil(prompt_length / block_size_tokens)")
     tokens = []
     for depth in range(1, len(prefix_path) + 1):
         tokens.extend(_opaque_block_tokens(prefix_path[:depth], block_size_tokens))
@@ -323,17 +300,13 @@ def _opaque_key(
 ) -> str:
     present = [name for name in names if name in payload]
     if len(present) != 1:
-        raise ValueError(
-            f"{path}:{line_number}: provide exactly one of " + " or ".join(names)
-        )
+        raise ValueError(f"{path}:{line_number}: provide exactly one of " + " or ".join(names))
     return _opaque_value(payload[present[0]], path, line_number)
 
 
 def _opaque_value(value: Any, path: Path, line_number: int) -> str:
     if isinstance(value, bool) or not isinstance(value, (str, int)):
-        raise ValueError(
-            f"{path}:{line_number}: opaque identifiers must be strings or integers"
-        )
+        raise ValueError(f"{path}:{line_number}: opaque identifiers must be strings or integers")
     return str(value)
 
 
@@ -359,9 +332,7 @@ def _integer(
 ) -> int:
     value = payload.get(name)
     if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
-        raise ValueError(
-            f"{path}:{line_number}: {name} must be an integer >= {minimum}"
-        )
+        raise ValueError(f"{path}:{line_number}: {name} must be an integer >= {minimum}")
     return value
 
 

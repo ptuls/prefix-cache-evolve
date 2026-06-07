@@ -83,9 +83,7 @@ class TunableCompactPolicy:
             + parameters.admission_priority * priority
             + structure
             + parameters.admission_cost
-            * math.log1p(
-                block.estimated_recompute_cost / parameters.admission_cost_divisor
-            )
+            * math.log1p(block.estimated_recompute_cost / parameters.admission_cost_divisor)
         )
         return (
             value
@@ -162,7 +160,7 @@ def _run_decay_ablation(
     frequency_half_life: float,
     priority_half_life: float,
 ) -> None:
-    config = EvaluatorConfig(capacity_sweep_blocks=(24, 48))
+    config = EvaluatorConfig(capacity_sweep_blocks=(48, 96))
     variants = {
         "no_decay": replace(
             DEFAULT_PARAMETERS,
@@ -194,12 +192,8 @@ def _run_decay_ablation(
                     "variant": name,
                     "combined_score_without_complexity": result.combined_score,
                     "token_hit_rate": validation["token_hit_rate"],
-                    "worst_quarter_token_hit_rate": validation[
-                        "worst_quarter_token_hit_rate"
-                    ],
-                    "wasted_admission_token_rate": validation[
-                        "wasted_admission_token_rate"
-                    ],
+                    "worst_quarter_token_hit_rate": validation["worst_quarter_token_hit_rate"],
+                    "wasted_admission_token_rate": validation["wasted_admission_token_rate"],
                     "admission_token_utility": validation["admission_token_utility"],
                     "avoidable_eviction_rate": validation["avoidable_eviction_rate"],
                     "cache_churn_per_1k": validation["cache_churn_per_1k"],
@@ -229,19 +223,19 @@ def main() -> None:
     quick_config = EvaluatorConfig(
         request_count=48,
         seeds=(3,),
-        capacity_sweep_blocks=(24, 48),
+        capacity_sweep_blocks=(48, 96),
     )
     sampled = [
         (_evaluate(parameters, quick_config), parameters)
         for parameters in (_sample_parameters(rng) for _ in range(args.samples))
     ]
 
-    full_config = EvaluatorConfig(capacity_sweep_blocks=(24, 48))
+    full_config = EvaluatorConfig(capacity_sweep_blocks=(48, 96))
     finalists = [
         (_evaluate(parameters, full_config), quick_score, parameters)
-        for quick_score, parameters in sorted(
-            sampled, key=lambda item: item[0], reverse=True
-        )[: args.full_top]
+        for quick_score, parameters in sorted(sampled, key=lambda item: item[0], reverse=True)[
+            : args.full_top
+        ]
     ]
     for full_score, quick_score, parameters in sorted(
         finalists, key=lambda item: item[0], reverse=True

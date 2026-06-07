@@ -47,18 +47,11 @@ def baseline_report_headline(
         if name != "candidate" and metadata.group(name) == "deployable"
     ]
     reporting_scores = {
-        name: score
-        for name, score in scores.items()
-        if metadata.group(name) != "deployable"
+        name: score for name, score in scores.items() if metadata.group(name) != "deployable"
     }
-    clears_deployable = not deployable_scores or candidate_score > max(
-        deployable_scores
-    )
+    clears_deployable = not deployable_scores or candidate_score > max(deployable_scores)
     if not clears_deployable:
-        return (
-            "The candidate ranking is shown against deployable and reporting-only "
-            "baselines."
-        )
+        return "The candidate ranking is shown against deployable and reporting-only baselines."
 
     above = [
         name
@@ -70,10 +63,7 @@ def baseline_report_headline(
         for name in names
         if name in reporting_scores and reporting_scores[name] < candidate_score
     ]
-    headline = (
-        "The candidate clears the deployable credibility baselines in this "
-        "capacity sweep."
-    )
+    headline = "The candidate clears the deployable credibility baselines in this capacity sweep."
     if above:
         headline += " It trails " + _format_policy_names(above) + "."
     if below:
@@ -93,9 +83,7 @@ def write_baseline_comparison_report(
 ) -> Path:
     """Write a Markdown comparison of the candidate and reporting baselines."""
 
-    ranked = sorted(
-        results.items(), key=lambda item: item[1].combined_score, reverse=True
-    )
+    ranked = sorted(results.items(), key=lambda item: item[1].combined_score, reverse=True)
     lines = [
         "# Prefix KV-Cache Best Program Baseline Comparison",
         "",
@@ -110,6 +98,8 @@ def write_baseline_comparison_report(
     ]
     if quick:
         lines.extend([f"> **{QUICK_REPORT_WARNING}**", ""])
+    capacities = config.effective_capacity_blocks()
+    capacity_headers = "".join(f" Capacity {capacity} token hit |" for capacity in capacities)
     lines.extend(
         [
             "## Headline",
@@ -121,16 +111,16 @@ def write_baseline_comparison_report(
             ),
             "",
             (
-                "| Rank | Policy | Group | Combined score | Capacity 24 token hit | "
-                "Capacity 48 token hit | Worst-quarter hit | Request p10 hit | "
+                "| Rank | Policy | Group | Combined score |"
+                f"{capacity_headers} Worst-quarter hit | Request p10 hit | "
                 "Token-wtd admission waste | Admission token utility | "
                 "Avoidable eviction | Priority-burst weighted hit | "
-                "Priority-noise token hit | Churn per 1k |"
+                "Priority-noise token hit | Policy underfill | Churn per 1k |"
             ),
-            ("|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"),
+            "|---:|---|---|---:|" + "---:|" * (len(capacities) + 9),
         ]
     )
-    lines.extend(_summary_rows(ranked, metadata))
+    lines.extend(_summary_rows(ranked, metadata, capacities))
     lines.extend(_workload_detail(ranked, results, split="validation"))
     if _split_workloads(results, "probe"):
         lines.extend(_workload_detail(ranked, results, split="probe"))
@@ -161,19 +151,21 @@ def write_baseline_plot_files(
 def _summary_rows(
     ranked: list[tuple[str, EvaluationResult]],
     metadata: BaselineMetadata,
+    capacities: tuple[int, ...],
 ) -> list[str]:
     rows = []
     for rank, (name, result) in enumerate(ranked, start=1):
-        cap24 = result.capacity_metrics.get("capacity_24", {})
-        cap48 = result.capacity_metrics.get("capacity_48", {})
+        capacity_cells = "".join(
+            f"{float(result.capacity_metrics.get(f'capacity_{capacity}', {}).get('token_hit_rate', 0.0)):.3f} | "
+            for capacity in capacities
+        )
         priority = result.workload_metrics["validation/priority_burst_recovery"]
         priority_noise = result.workload_metrics["validation/priority_one_off_noise"]
         validation = result.split_metrics["validation"]
         rows.append(
             f"| {rank} | `{name}` | {metadata.group(name)} | "
             f"{result.combined_score:.3f} | "
-            f"{float(cap24.get('token_hit_rate', 0.0)):.3f} | "
-            f"{float(cap48.get('token_hit_rate', 0.0)):.3f} | "
+            f"{capacity_cells}"
             f"{float(validation['worst_quarter_token_hit_rate']):.3f} | "
             f"{float(validation['request_token_hit_rate_p10']):.3f} | "
             f"{float(validation['wasted_admission_token_rate']):.3f} | "
@@ -181,6 +173,7 @@ def _summary_rows(
             f"{float(validation['avoidable_eviction_rate']):.3f} | "
             f"{float(priority['priority_weighted_token_hit_rate']):.3f} | "
             f"{float(priority_noise['token_hit_rate']):.3f} | "
+            f"{float(validation['policy_underfill_rate']):.3f} | "
             f"{float(validation['cache_churn_per_1k']):.1f} |"
         )
     return rows
@@ -248,9 +241,15 @@ def _report_notes(
             "- Candidate score breakdown: mean workload "
             f"`{breakdown.get('mean_workload_score', 0.0):.3f}`, minimum-workload "
             f"contribution `{breakdown.get('min_workload_contribution', 0.0):.3f}`, "
-            f"churn cost `{breakdown.get('churn_cost', 0.0):.3f}`, fairness cost "
+            f"churn cost `{breakdown.get('churn_cost', 0.0):.3f}`, underfill cost "
+            f"`{breakdown.get('underfill_cost', 0.0):.3f}`, fairness cost "
             f"`{breakdown.get('fairness_cost', 0.0):.3f}`, and complexity cost "
             f"`{breakdown.get('complexity_cost', 0.0):.3f}`."
+        ),
+        (
+            "- `policy_underfill_rate` is policy bypass multiplied by unused mean "
+            "capacity. It penalizes deliberate bypass while cache space remains idle, "
+            "without charging natural underfill when the policy admits every miss."
         ),
         (
             "- `future_reuse_heuristic` and `oracle_future_reuse` use "
@@ -266,6 +265,19 @@ def _report_notes(
             "- `vllm_apc` models vLLM automatic prefix caching: it admits only full "
             "blocks and uses LRU eviction with deepest-prefix tie-breaking. The "
             "simulator supplies active-reference pinning and legal leaf filtering."
+        ),
+        (
+            "- `sglang_radix_attention` models SGLang RadixAttention's default "
+            "radix-cache replacement behavior: retain prefixes at cache-page "
+            "boundaries and recursively evict the least-recently-used zero-reference "
+            "leaf. The simulator treats every modeled block-tree node as a cacheable "
+            "radix unit, making it behaviorally equivalent to `lru`; capacity remains "
+            "fixed-block-counted rather than token/page-counted, and cache-aware "
+            "scheduling and attention kernels are out of scope. It remains registered "
+            "as a selectable reference but is excluded from default comparisons. See "
+            "https://arxiv.org/html/2312.07104v1 and the pinned SGLang source at "
+            "https://github.com/sgl-project/sglang/tree/"
+            "52f221cce088abc998fa9d3812416a45ee0e2e25/python/sglang/srt/mem_cache."
         ),
         (
             "- `prefix_anchor` is a deployable structural anchor baseline; "
@@ -288,9 +300,7 @@ def _report_notes(
         ),
     ]
     if quick:
-        lines.append(
-            "- This is a smoke-only single-seed report, not a policy-ranking report."
-        )
+        lines.append("- This is a smoke-only single-seed report, not a policy-ranking report.")
     lines.append("")
     return lines
 
@@ -300,11 +310,7 @@ def _split_workloads(
     split: str,
 ) -> list[str]:
     sample = next(iter(results.values()))
-    return [
-        workload
-        for workload in sample.workload_metrics
-        if workload.startswith(f"{split}/")
-    ]
+    return [workload for workload in sample.workload_metrics if workload.startswith(f"{split}/")]
 
 
 def _format_policy_names(names: list[str]) -> str:
@@ -389,9 +395,7 @@ def _token_vs_block_svg(results: dict[str, EvaluationResult]) -> str:
             )
         )
     lines = [_svg_header(width, height, "Token vs Block Hit Rate")]
-    lines.append(
-        _text(24, 30, "Validation token vs block hit rate", size=20, weight="700")
-    )
+    lines.append(_text(24, 30, "Validation token vs block hit rate", size=20, weight="700"))
     lines.append(
         f'<rect x="{left}" y="{top}" width="{plot_w}" height="{plot_h}" '
         'fill="#f8fafc" stroke="#cbd5e1" />'
@@ -401,12 +405,10 @@ def _token_vs_block_svg(results: dict[str, EvaluationResult]) -> str:
         x = left + value * plot_w
         y = top + plot_h - value * plot_h
         lines.append(
-            f'<line x1="{x:.1f}" y1="{top}" x2="{x:.1f}" '
-            f'y2="{top + plot_h}" stroke="#e2e8f0" />'
+            f'<line x1="{x:.1f}" y1="{top}" x2="{x:.1f}" y2="{top + plot_h}" stroke="#e2e8f0" />'
         )
         lines.append(
-            f'<line x1="{left}" y1="{y:.1f}" x2="{left + plot_w}" '
-            f'y2="{y:.1f}" stroke="#e2e8f0" />'
+            f'<line x1="{left}" y1="{y:.1f}" x2="{left + plot_w}" y2="{y:.1f}" stroke="#e2e8f0" />'
         )
         lines.append(_text(x - 10, top + plot_h + 20, f"{value:.1f}", size=11))
         lines.append(_text(28, y + 4, f"{value:.1f}", size=11))
@@ -420,9 +422,7 @@ def _token_vs_block_svg(results: dict[str, EvaluationResult]) -> str:
             f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6" fill="{color}">'
             f"<title>{html.escape(name)} score={score:.1f}</title></circle>"
         )
-        lines.append(
-            _text(left + plot_w + 24, top + 24 + index * 24, name, size=12, fill=color)
-        )
+        lines.append(_text(left + plot_w + 24, top + 24 + index * 24, name, size=12, fill=color))
     lines.append("</svg>")
     return "\n".join(lines)
 

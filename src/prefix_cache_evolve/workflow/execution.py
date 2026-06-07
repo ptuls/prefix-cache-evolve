@@ -1,16 +1,23 @@
 import importlib
 import importlib.util
+import inspect
+import json
 import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+import numpy as np
+
 from prefix_cache_evolve.evaluator_entry import (
     EvaluatorResult,
     _exec_registered_module,
     load_candidate_factory_from_source,
 )
+
+_levi_reasoning_max_tokens: int | None = None
+_levi_paradigm_candidate_output_dir: Path | None = None
 
 
 @dataclass
@@ -49,27 +56,42 @@ class LeviScoreFunction:
         self._evaluate_source = evaluate_source
         self._score_metric = score_metric
 
-    def __call__(self, factory: Callable[..., object], inputs=None) -> dict[str, float]:
+    def __call__(self, factory: Callable[..., object], inputs=None) -> dict[str, Any]:
         source = _candidate_source(factory, inputs)
         if self._evaluate_source is not None:
             if source is None:
                 return {
-                    "score": 0.0,
-                    "combined_score": 0.0,
-                    "complexity_source_missing": 1.0,
+                    "error": ("candidate source unavailable; source-aware evaluation is required"),
                 }
             result = self._evaluate_source(source)
         else:
             result = self._evaluate_factory(factory)
         metrics = result.metrics or {}
+        success = metrics.get("success")
+        if success is not None and not bool(success):
+            return {"error": str(metrics.get("error") or "candidate failed evaluator validation")}
         score = metrics.get(self._score_metric, 0.0)
         if not isinstance(score, (int, float)) or not math.isfinite(float(score)):
             score = 0.0
 
-        levi_metrics = {"score": float(score)}
+        levi_metrics: dict[str, Any] = {"score": float(score)}
         for key, value in metrics.items():
             if isinstance(value, (int, float)) and math.isfinite(float(value)):
                 levi_metrics[key] = float(value)
+        per_example_scores = metrics.get("per_example_scores")
+        feedback_per_example = metrics.get("feedback_per_example")
+        if (
+            isinstance(per_example_scores, list)
+            and isinstance(feedback_per_example, list)
+            and len(per_example_scores) == len(feedback_per_example)
+            and all(
+                isinstance(value, (int, float)) and math.isfinite(float(value))
+                for value in per_example_scores
+            )
+            and all(isinstance(value, str) for value in feedback_per_example)
+        ):
+            levi_metrics["per_example_scores"] = [float(value) for value in per_example_scores]
+            levi_metrics["feedback_per_example"] = list(feedback_per_example)
         return levi_metrics
 
 
@@ -104,6 +126,10 @@ class LeviRunner:
             output_dir = f"runs/{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
             kwargs["output_dir"] = output_dir
 
+        _enable_levi_code_feedback_support()
+        _enable_levi_degenerate_centroid_fallback()
+        _enable_levi_reasoning_completion_support(_configured_reasoning_max_tokens(config))
+        _enable_levi_paradigm_candidate_persistence(Path(output_dir) / "paradigm_candidates")
         result = self._evolve_code(
             getattr(config, "problem_description", None) or self._problem_description,
             **kwargs,
@@ -118,13 +144,12 @@ class LeviRunner:
             "levi_runtime_seconds": getattr(result, "runtime_seconds", 0.0),
             "levi_output_dir": str(output_dir),
             "levi_snapshot_path": str(Path(output_dir) / "snapshot.json"),
+            "levi_paradigm_candidates_dir": str(Path(output_dir) / "paradigm_candidates"),
         }
 
         return LeviRunResult(
             best_program=best_program,
-            best_score=float(
-                getattr(result, "best_score", metrics.get("combined_score", 0.0))
-            ),
+            best_score=float(getattr(result, "best_score", metrics.get("combined_score", 0.0))),
             metrics=metrics,
             artifacts=artifacts,
             total_evaluations=int(getattr(result, "total_evaluations", 0) or 0),
@@ -169,9 +194,7 @@ class LeviRunner:
         _exec_registered_module(module, lambda: spec.loader.exec_module(module))  # type: ignore[call-arg]
         evaluate_factory = getattr(module, "evaluate_factory", None)
         if not callable(evaluate_factory):
-            raise AttributeError(
-                f"{evaluator_path} must expose evaluate_factory(factory)"
-            )
+            raise AttributeError(f"{evaluator_path} must expose evaluate_factory(factory)")
         return evaluate_factory
 
     def _load_evaluate_source(
@@ -217,6 +240,218 @@ def _candidate_source(factory: Callable[..., object], inputs: Any) -> str | None
         if isinstance(value, str):
             return value
     return None
+
+
+def _enable_levi_code_feedback_support() -> None:
+    """Make older Levi code adapters accept producer-supplied failure feedback."""
+
+    from levi.artifacts.code import CodeAdapter
+
+    original = CodeAdapter.build_mutation_prompt
+    if "feedback" in inspect.signature(original).parameters:
+        return
+
+    def build_mutation_prompt_with_feedback(
+        self,
+        parents,
+        *,
+        feedback: list[str] | None = None,
+        **kwargs,
+    ) -> str:
+        prompt = original(self, parents, **kwargs)
+        feedback_lines = [line.strip() for line in feedback or [] if line.strip()]
+        if not feedback_lines:
+            return prompt
+
+        section = "## Evaluator Feedback\n" + "\n".join(f"- {line}" for line in feedback_lines)
+        output_marker = "\n\n## Output\n"
+        if output_marker in prompt:
+            return prompt.replace(output_marker, f"\n\n{section}{output_marker}", 1)
+        return f"{prompt}\n\n{section}"
+
+    CodeAdapter.build_mutation_prompt = build_mutation_prompt_with_feedback
+
+
+def _enable_levi_degenerate_centroid_fallback() -> None:
+    """Keep a usable CVT archive when valid initialization behaviors are duplicates."""
+
+    from levi.pool.cvt_map_elites import CVTMAPElitesPool
+
+    original = CVTMAPElitesPool.set_centroids_from_data
+    if getattr(original, "_prefix_cache_evolve_degenerate_centroid_patch", False):
+        return
+
+    def set_centroids_with_fallback(self, behavior_vectors, n_centroids=50):
+        data = np.asarray(behavior_vectors, dtype=float)
+        actual_n_centroids = min(n_centroids, len(data))
+        if not len(data) or len(np.unique(data, axis=0)) >= actual_n_centroids:
+            return original(self, behavior_vectors, n_centroids)
+
+        self._n_centroids = n_centroids
+        self._centroids = self._init_cvt_centroids()
+        self._mins = np.zeros(self._n_dims)
+        self._maxs = np.ones(self._n_dims)
+        self._ranges = np.ones(self._n_dims)
+        distances = np.sum(
+            (data[:, np.newaxis, :] - self._centroids[np.newaxis, :, :]) ** 2, axis=2
+        )
+        return self._n_centroids, np.argmin(distances, axis=1)
+
+    set_centroids_with_fallback._prefix_cache_evolve_degenerate_centroid_patch = True
+    CVTMAPElitesPool.set_centroids_from_data = set_centroids_with_fallback
+
+
+def _configured_reasoning_max_tokens(config: Any) -> int | None:
+    """Return the explicit paradigm reasoning budget, falling back to the pipeline budget."""
+
+    punctuated_equilibrium = getattr(config, "punctuated_equilibrium", {}) or {}
+    pipeline = getattr(config, "pipeline", {}) or {}
+    raw_value = punctuated_equilibrium.get("max_tokens")
+    if raw_value is None:
+        raw_value = pipeline.get("max_tokens")
+    try:
+        max_tokens = int(raw_value)
+    except (TypeError, ValueError):
+        return None
+    return max_tokens if max_tokens > 0 else None
+
+
+def _enable_levi_reasoning_completion_support(max_tokens: int | None) -> None:
+    """Prevent Levi's 4096-token PE cap from exhausting reasoning-model output."""
+
+    global _levi_reasoning_max_tokens
+    _levi_reasoning_max_tokens = max_tokens
+    if max_tokens is None:
+        return
+
+    from levi.pipeline.state import PipelineState
+
+    original = PipelineState.acompletion
+    if getattr(original, "_prefix_cache_evolve_reasoning_budget_patch", False):
+        return
+
+    async def acompletion_with_reasoning_budget(
+        self,
+        client_spec,
+        *,
+        prompt,
+        temperature=None,
+        max_tokens=None,
+        timeout=None,
+        **extras,
+    ):
+        reasoning_effort = extras.get("reasoning_effort")
+        if reasoning_effort and reasoning_effort != "disabled":
+            configured_max = _levi_reasoning_max_tokens
+            if configured_max is not None:
+                max_tokens = max(configured_max, max_tokens or 0)
+        return await original(
+            self,
+            client_spec,
+            prompt=prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+            **extras,
+        )
+
+    acompletion_with_reasoning_budget._prefix_cache_evolve_reasoning_budget_patch = True
+    PipelineState.acompletion = acompletion_with_reasoning_budget
+
+
+def _enable_levi_paradigm_candidate_persistence(output_dir: Path) -> None:
+    """Persist every evaluated PE candidate, including archive rejections."""
+
+    global _levi_paradigm_candidate_output_dir
+    _levi_paradigm_candidate_output_dir = output_dir
+
+    from levi.equilibrium.equilibrium import PunctuatedEquilibrium
+
+    original_trigger = PunctuatedEquilibrium.trigger
+    if getattr(original_trigger, "_prefix_cache_evolve_candidate_persistence_patch", False):
+        return
+    original_evaluate = PunctuatedEquilibrium._evaluate
+
+    async def evaluate_with_capture(self, code):
+        result = await original_evaluate(self, code)
+        capture = getattr(self, "_prefix_cache_evolve_candidate_capture", None)
+        if isinstance(capture, dict):
+            capture.setdefault("candidates", []).append(
+                {
+                    "code": code,
+                    "result": result,
+                }
+            )
+        return result
+
+    async def trigger_with_candidate_persistence(
+        self,
+        n_evaluations: int,
+        budget_progress: float = 0.0,
+    ):
+        capture = {
+            "trigger_evaluation": n_evaluations,
+            "budget_progress": budget_progress,
+            "candidates": [],
+        }
+        self._prefix_cache_evolve_candidate_capture = capture
+        stats = None
+        try:
+            stats = await original_trigger(self, n_evaluations, budget_progress)
+            return stats
+        finally:
+            _persist_levi_paradigm_candidate_capture(capture, stats)
+            self._prefix_cache_evolve_candidate_capture = None
+
+    trigger_with_candidate_persistence._prefix_cache_evolve_candidate_persistence_patch = True
+    PunctuatedEquilibrium._evaluate = evaluate_with_capture
+    PunctuatedEquilibrium.trigger = trigger_with_candidate_persistence
+
+
+def _persist_levi_paradigm_candidate_capture(capture: dict[str, Any], stats: Any) -> None:
+    """Write one PE event's evaluated source files and results."""
+
+    output_dir = _levi_paradigm_candidate_output_dir
+    if output_dir is None or not capture.get("candidates"):
+        return
+
+    event_dir = output_dir / f"eval_{int(capture['trigger_evaluation']):04d}"
+    event_dir.mkdir(parents=True, exist_ok=True)
+    manifest_candidates = []
+    for index, candidate in enumerate(capture["candidates"]):
+        candidate_type = "paradigm_shift" if index == 0 else "variant"
+        stem = f"{index:02d}_{candidate_type}"
+        source_name = f"{stem}.py"
+        result_name = f"{stem}_result.json"
+        (event_dir / source_name).write_text(str(candidate["code"]), encoding="utf-8")
+        _write_levi_json(event_dir / result_name, candidate["result"])
+        result = candidate["result"] if isinstance(candidate["result"], dict) else {}
+        manifest_candidates.append(
+            {
+                "candidate_type": candidate_type,
+                "source": source_name,
+                "result": result_name,
+                "score": result.get("score"),
+                "error": result.get("error"),
+            }
+        )
+
+    _write_levi_json(
+        event_dir / "manifest.json",
+        {
+            "trigger_evaluation": capture["trigger_evaluation"],
+            "budget_progress": capture["budget_progress"],
+            "stats": stats,
+            "candidates": manifest_candidates,
+        },
+    )
+
+
+def _write_levi_json(path: Path, payload: Any) -> None:
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _module_name_from_package_path(path: Path) -> str | None:

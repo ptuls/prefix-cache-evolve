@@ -220,3 +220,24 @@ __marimo__/
 # Prefix-cache evolution outputs
 artifacts/
 runs/
+
+# LaTeX artifacts
+*.pdf
+*.log
+*.aux
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.bbl
+*.blg
+*.out
+*.toc
+*.lot
+*.lof
+*.loa
+*.loh
+*.loi
+*.loj
+*.lok
+*.lol
+*.lop

@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Prefix Cache Lab</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="control-rail">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </div>
+          <div>
+            <p class="eyebrow">Research console</p>
+            <h1>Prefix Cache Lab</h1>
+          </div>
+        </div>
+
+        <div class="source-card">
+          <span class="source-pulse"></span>
+          <div>
+            <strong id="source-label">Synthetic traffic</strong>
+            <p id="source-description">Loading traffic source...</p>
+          </div>
+        </div>
+
+        <form id="simulation-form">
+          <section class="control-section">
+            <div class="section-heading">
+              <span>01</span>
+              <h2>Traffic</h2>
+            </div>
+            <label class="field">
+              <span>Workload</span>
+              <select id="workload" name="workload"></select>
+              <small id="workload-description"></small>
+            </label>
+            <div class="field-grid">
+              <label class="field">
+                <span>Requests</span>
+                <input id="request-count" name="request_count" type="number">
+              </label>
+              <label class="field">
+                <span>Seed</span>
+                <input id="seed" name="seed" type="number">
+              </label>
+            </div>
+          </section>
+
+          <section class="control-section">
+            <div class="section-heading">
+              <span>02</span>
+              <h2>Cache</h2>
+            </div>
+            <div class="field-grid">
+              <label class="field">
+                <span>Capacity</span>
+                <input id="capacity-blocks" name="capacity_blocks" type="number">
+                <small>blocks</small>
+              </label>
+              <label class="field">
+                <span>Block size</span>
+                <input id="block-size-tokens" name="block_size_tokens" type="number">
+                <small>tokens</small>
+              </label>
+            </div>
+          </section>
+
+          <section class="control-section policies-section">
+            <div class="section-heading">
+              <span>03</span>
+              <h2>Policies</h2>
+              <em id="policy-count">0 / 6</em>
+            </div>
+            <div id="policy-list" class="policy-list"></div>
+          </section>
+
+          <button id="run-button" class="run-button" type="submit">
+            <span>Run comparison</span>
+            <kbd>R</kbd>
+          </button>
+          <p id="form-error" class="form-error" role="alert"></p>
+        </form>
+      </aside>
+
+      <main class="workspace">
+        <header class="workspace-header">
+          <div>
+            <p class="eyebrow">Policy observatory</p>
+            <h2 id="session-title">Waiting for a simulation</h2>
+            <p id="session-description" class="session-description">
+              Select a workload to see how its traffic pattern exercises the cache.
+            </p>
+          </div>
+          <div class="run-status" id="run-status">
+            <span></span>
+            <strong>Ready</strong>
+            <small>Configure and run</small>
+          </div>
+        </header>
+
+        <section id="summary-grid" class="summary-grid">
+          <article class="empty-card">
+            <p class="eyebrow">No results yet</p>
+            <h3>Compare cache policies under identical traffic.</h3>
+            <p>Run a scenario to inspect hit rate, churn, latency, and resident prefix structure.</p>
+          </article>
+        </section>
+
+        <section class="panel playback-panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Live playback</p>
+              <h3 id="request-heading">Request stream</h3>
+            </div>
+            <div class="playback-controls">
+              <button id="reset-button" type="button" aria-label="Reset playback">↺</button>
+              <button id="step-back-button" type="button" aria-label="Previous request">−</button>
+              <button id="play-button" class="play-button" type="button">Play</button>
+              <button id="step-forward-button" type="button" aria-label="Next request">+</button>
+              <label class="speed-control">
+                <span>Speed</span>
+                <input id="speed" type="range" min="1" max="5" value="3">
+              </label>
+            </div>
+          </div>
+          <div id="request-facts" class="request-facts">
+            <span>Select a simulation to begin.</span>
+          </div>
+          <div id="timeline" class="timeline" aria-label="Request timeline"></div>
+        </section>
+
+        <section class="panel chart-panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Comparative trajectory</p>
+              <h3>Policy behavior over time</h3>
+            </div>
+            <label class="metric-select">
+              <span>Metric</span>
+              <select id="chart-metric">
+                <option value="cumulative_token_hit_rate">Token hit rate</option>
+                <option value="occupancy">Cache occupancy</option>
+                <option value="cumulative_evictions">Cumulative evictions</option>
+                <option value="latency_proxy">Request latency proxy</option>
+              </select>
+            </label>
+          </div>
+          <div id="chart" class="chart">
+            <div class="chart-empty">Trajectory appears after a run.</div>
+          </div>
+          <div id="chart-legend" class="chart-legend"></div>
+        </section>
+
+        <section class="panel cache-panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Resident state</p>
+              <h3>Cache blocks after current request</h3>
+            </div>
+            <div class="cache-key">
+              <span><i class="key-hit"></i>Hit</span>
+              <span><i class="key-path"></i>Request path</span>
+              <span><i class="key-active"></i>Pinned</span>
+            </div>
+          </div>
+          <div id="cache-comparison" class="cache-comparison">
+            <div class="cache-empty">Resident block maps appear here.</div>
+          </div>
+        </section>
+
+        <section class="panel event-panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Current request</p>
+              <h3>Policy outcomes</h3>
+            </div>
+          </div>
+          <div id="event-table" class="event-table">
+            <div class="event-empty">Request-level outcomes appear here.</div>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script src="/app.js"></script>
+  </body>
+</html>

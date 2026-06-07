@@ -95,9 +95,7 @@ class AblationStructuredPolicy(StructuredRecurrencePolicy):
         structure = math.log1p(block.descendant_count + block.active_ref_count)
         if "subtree" not in self._disabled:
             structure = math.log1p(
-                block.descendant_count
-                + block.subtree_active_ref_count
-                + block.active_ref_count
+                block.descendant_count + block.subtree_active_ref_count + block.active_ref_count
             )
         recurrence = 0.0
         if "recurrence" not in self._disabled:
@@ -134,9 +132,7 @@ def _summary(result: EvaluationResult, split: str) -> dict[str, float]:
     return {
         "combined_score_without_complexity": result.combined_score,
         "mean_workload_score": result.score_breakdown["mean_workload_score"],
-        "min_workload_contribution": result.score_breakdown[
-            "min_workload_contribution"
-        ],
+        "min_workload_contribution": result.score_breakdown["min_workload_contribution"],
         "churn_cost": result.score_breakdown["churn_cost"],
         "fairness_cost": result.score_breakdown["fairness_cost"],
         "token_hit_rate": float(metrics["token_hit_rate"]),

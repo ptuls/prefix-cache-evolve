@@ -32,9 +32,7 @@ class StructuredSeedPolicy:
     def score_admission(self, block, now):
         fast, slow, _ = self._state.values(block.prefix_hash, now)
         structure = 0.15 * math.log1p(block.descendant_count)
-        structure += 0.08 * math.log1p(
-            block.subtree_active_ref_count + block.active_ref_count
-        )
+        structure += 0.08 * math.log1p(block.subtree_active_ref_count + block.active_ref_count)
         return (
             0.52 * math.log1p(fast + 0.6 * slow)
             + 0.18 * math.log1p(block.estimated_recompute_cost / 64.0)
@@ -55,9 +53,7 @@ class StructuredSeedPolicy:
             - math.log1p(fast + 0.6 * slow)
             - 0.18
             * math.log1p(
-                block.descendant_count
-                + block.subtree_active_ref_count
-                + block.active_ref_count
+                block.descendant_count + block.subtree_active_ref_count + block.active_ref_count
             )
             - 0.28 * math.log1p(block.estimated_recompute_cost / 64.0)
             + 0.24 * misses

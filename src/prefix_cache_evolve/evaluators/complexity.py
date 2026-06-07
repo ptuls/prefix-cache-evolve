@@ -46,9 +46,7 @@ def scoring_fn_complexity(source: str, *, form_aware: bool = False) -> int:
 def _nested_implementation_complexity(node: ast.AST) -> int:
     """Counts policy implementations nested inside an ignored factory wrapper."""
 
-    return sum(
-        sum(1 for _ in ast.walk(root)) for root in _nested_implementation_roots(node)
-    )
+    return sum(sum(1 for _ in ast.walk(root)) for root in _nested_implementation_roots(node))
 
 
 def _nested_implementation_roots(node: ast.AST) -> list[ast.AST]:
@@ -95,9 +93,7 @@ def _provided_primitive_call_count(
                 continue
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             primitive_bindings.update(
-                key
-                for target in targets
-                if (key := _expression_key(target)) is not None
+                key for target in targets if (key := _expression_key(target)) is not None
             )
 
     count = 0

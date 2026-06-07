@@ -106,9 +106,7 @@ def test_tunable_default_matches_compact_seed() -> None:
         getattr(compact, callback)(block, request, now)
         getattr(tunable, callback)(block, request, now)
 
-        assert compact.score_admission(block, now) == tunable.score_admission(
-            block, now
-        )
+        assert compact.score_admission(block, now) == tunable.score_admission(block, now)
         assert compact.score_eviction(block, now) == tunable.score_eviction(block, now)
 
 
@@ -128,12 +126,8 @@ def test_structured_ablation_default_matches_structured_seed() -> None:
         getattr(structured, callback)(block, request, now)
         getattr(ablation, callback)(block, request, now)
 
-        assert structured.score_admission(block, now) == ablation.score_admission(
-            block, now
-        )
-        assert structured.score_eviction(block, now) == ablation.score_eviction(
-            block, now
-        )
+        assert structured.score_admission(block, now) == ablation.score_admission(block, now)
+        assert structured.score_eviction(block, now) == ablation.score_eviction(block, now)
 
 
 def test_selected_structured_seed_uses_bounded_canonical_state() -> None:

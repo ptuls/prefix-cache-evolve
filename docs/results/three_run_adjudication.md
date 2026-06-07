@@ -1,5 +1,9 @@
 # Structured Prefix KV-Cache Three-Run Adjudication
 
+Historical result: this structured-seed decision was later superseded by the
+[pressure-aware incumbent](pressure_aware_incumbent.md), which improved selection,
+probe, and hidden adjudication in a 298-evaluation compact-family search.
+
 **Decision: keep the compact incumbent.**
 
 No structured seed or generated candidate improved charged validation selection

@@ -84,7 +84,7 @@
 \title{\textbf{\color{navy}Prefix KV-Cache Policy Evolution}\\
 \large Simulator, Verifier, Workload, and Search Architecture}
 \author{Technical Design Report}
-\date{June 6, 2026}
+\date{June 7, 2026}
 
 \begin{document}
 
@@ -106,19 +106,20 @@ remaining state of the art into a prioritized simulator roadmap.
 
 The current deployable compact policy ranks second in the full reporting panel, behind
 the constrained next-use oracle and ahead of all deployable credibility baselines.
-After quarantining recurrence-heavy structure probes from selection, it scores
-\(57.788\), compared with \(87.777\) for the reporting-only oracle and \(53.426\) for
-TinyLFU-LRU.  Its validation token hit rate is \(0.644\).  The held-out structure probe
-and hidden panel expose the remaining generalization weakness even when selection
-improves.  A subsequent structured-search iteration fixed canonical primitive adoption
-and found a mutation that improved raw validation and both probe-family hit rates, but
-the mutation still lost after complexity and regressed aggregate probe and hidden
-scores.  The compact policy therefore remains the recommended seed.
+Under the \(48/96\)-block, agentic-aware verifier it scores \(74.321\), compared with
+\(97.074\) for the reporting-only oracle and \(70.362\) for TinyLFU-LRU.  Its capacity
+token-hit rates are \(0.644\) and \(0.646\), respectively.  The new
+\identifier{agentic_tool_workflows} training family and held-out structure probe expose
+the remaining generalization weakness even when selection improves.  Historical
+structured-search results later in this report predate this verifier revision and are
+retained as search chronology rather than current rankings.
 
 The report emphasizes implementation details and trust boundaries: what the policy can
 observe, what the simulator owns, what future information is quarantined for verifier
 audits and oracle baselines, how each trial is scored, and how candidate source is
-generated, isolated, evaluated, ranked, and persisted.
+generated, isolated, evaluated, ranked, and persisted.  It also consolidates the
+evidence-backed policy, verifier, and search principles discovered across the evolution
+history, while keeping unresolved hypotheses explicitly separate.
 \end{abstract}
 
 \tableofcontents
@@ -144,7 +145,7 @@ must generalize across request families, capacities, random seeds, phase changes
 multi-tenant traffic, scan pollution, long-running decodes, and priority classes.  It
 must also remain implementable and understandable.  The verifier therefore rewards
 reuse and service quality while penalizing churn, unfairness, wasted admissions,
-avoidable eviction decisions, and source complexity.
+policy-caused underfill, avoidable eviction decisions, and source complexity.
 
 \subsection{Primary design goals}
 
@@ -246,8 +247,10 @@ Adapter between Levi's \code{evolve_code} API and the repository's evaluator res
 format. \\
 \filepath{src/prefix_cache_evolve/workflow/configuration.py} &
 YAML loading and conversion into arguments forwarded to Levi. \\
+\filepath{src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py} &
+Current promoted deployable policy discovered by the 300-evaluation compact search. \\
 \filepath{src/prefix_cache_evolve/problems/prefix_kv_cache/compact_seed.py} &
-Current compact deployable policy and recommended evolution seed. \\
+Prior compact incumbent retained as a small alternate evolution seed. \\
 \filepath{scripts/tune_prefix_kv_compact.py} &
 Reproducible coefficient sweep for the compact policy family. \\
 \filepath{tests/test_prefix_kv_cache_evaluator.py} &
@@ -663,7 +666,7 @@ steps.  The constrained next-use oracle has zero avoidable evictions by construc
 \subsection{Trial matrix and split policy}
 
 The default full panel uses 96 requests per workload, seeds \((11,23,37)\), block size
-eight, and capacities \((24,48)\).
+eight, and capacities \((48,96)\).
 
 \begin{center}
 \begin{tabular}{lrrrr}
@@ -671,10 +674,10 @@ eight, and capacities \((24,48)\).
 \textbf{Split} & \textbf{Families} & \textbf{Capacities} & \textbf{Seeds} &
 \textbf{Trials} \\
 \midrule
-Train & 4 & 2 & 3 & 24 \\
+Train & 5 & 2 & 3 & 30 \\
 Validation selection & 10 & 2 & 3 & 60 \\
 Structure-generalization probe & 2 & 2 & 3 & 12 \\
-Normal evaluation, including probe & 16 & 2 & 3 & 96 \\
+Normal evaluation, including probe & 17 & 2 & 3 & 102 \\
 Hidden final report & 10 & 2 & 3 & 60 \\
 \bottomrule
 \end{tabular}
@@ -712,6 +715,10 @@ depth-sensitive recomputation value. \\
 \identifier{session_continuation_growth} & Train &
 Interleaved conversations that grow by one turn per revisit.  Stresses paused deep
 history preservation. \\
+\identifier{agentic_tool_workflows} & Train &
+Six interleaved tool-using workflows fork from shared checkpoints, resume paused
+routes, append variable multi-step observations, and periodically replan after a
+rollback.  Trains irregular agentic reuse without duplicating the held-out probe. \\
 \midrule
 \identifier{agent_trace_branching} & Probe &
 Shared agent roots and schemas with accumulating tool history, branches, and retries.
@@ -786,7 +793,7 @@ Important categories include:
   high-priority p10 request hit and tail latency.
   \item \textbf{Admission:} attempts, successful admissions, rejections, policy bypass,
   forced bypass, binary useful/wasted admissions, admitted/useful/wasted token mass,
-  saved tokens per admitted slot, and evictions without a hit.
+  saved tokens per admitted slot, policy-caused underfill, and evictions without a hit.
   \item \textbf{Eviction regret:} reuse after eviction, short-distance reuse misses,
   reuse-distance percentiles, avoidable evictions, and avoidable short-reuse
   evictions.
@@ -847,16 +854,30 @@ on one seed.
 
 \subsection{Combined score}
 
+For trial \(i\), policy-caused underfill multiplies deliberate policy bypass by unused
+mean capacity:
+
+\begin{equation}
+  U_i =
+  \text{policy-bypass-token-rate}_i
+  \max\left(0,1-\frac{\text{mean-occupancy}_i}{\text{capacity}_i}\right).
+\end{equation}
+
+This distinguishes a selective policy that leaves reusable cache space idle from
+natural underfill on short or low-reuse workloads where every miss is admitted.
+
 Let \(\mathcal{G}\) be the 20 validation workload-capacity groups.  Let
-\(\overline{\chi}\) be mean validation churn per 1000 requests, \(F\) be mean tenant
-max--min gap on \code{multi_tenant_skew}, and \(C\) be candidate AST complexity.  The
-combined score is:
+\(\overline{\chi}\) be mean validation churn per 1000 requests, \(\overline{U}\) be
+mean validation policy-caused underfill, \(F\) be mean tenant max--min gap on
+\code{multi_tenant_skew}, and \(C\) be candidate AST complexity.  The combined score
+is:
 
 \begin{align}
   S_{\text{combined}} ={}&
   \frac{1}{|\mathcal{G}|}\sum_{G\in\mathcal{G}} S_G
   +0.5\min_{G\in\mathcal{G}}S_G \nonumber\\
   &-\min(25,0.015\,\overline{\chi})
+  -\min(15,12\,\overline{U})
   -\min(30,80F)
   -0.065\,C^{0.75}.
 \end{align}
@@ -918,6 +939,10 @@ program is very complex.
 \endhead
 \identifier{no_cache} & Deployable & Lower bound and bypass sanity check. \\
 lru & Deployable & Recency baseline; evicts least recently used legal leaf. \\
+\identifier{sglang_radix_attention} & Deployable & SGLang RadixAttention's default
+radix-cache replacement policy; retains cache-page-aligned prefixes and recursively
+evicts the least-recently-used unreferenced leaf.  Registered as a selectable
+reference but excluded from default comparisons because it maps to leaf-LRU here. \\
 \identifier{vllm_apc} & Deployable & Production-style vLLM APC baseline; caches only
 full blocks and uses LRU with deepest-prefix tie-breaking among legal victims. \\
 lfu & Deployable & Frequency baseline with LRU tie-breaking. \\
@@ -1016,6 +1041,14 @@ LLM-program workloads.  The simulator closely models RadixAttention's replacemen
 constraints: root-contiguous matching, leaf-only eviction, active-reference pinning,
 and common-ancestor preservation.  It does not yet model the scheduler or continuous
 batching effects that contribute to end-to-end SGLang performance.
+The simulator treats every modeled block-tree node as a cacheable radix unit, so the
+explicit \identifier{sglang_radix_attention} baseline is behaviorally equivalent to
+generic leaf-LRU under this contract.  It remains visible in documentation and as an
+interactive-lab option, but default comparisons exclude the duplicate row.  The
+implementation mapping was checked against pinned SGLang commit
+\href{https://github.com/sgl-project/sglang/tree/52f221cce088abc998fa9d3812416a45ee0e2e25/python/sglang/srt/mem_cache}{52f221cce088abc998fa9d3812416a45ee0e2e25}.
+This remains a block-tree approximation: simulator capacity is charged in fixed
+blocks rather than SGLang's token/page-counted radix nodes.
 
 \paragraph{Practical conclusion.}
 The production reference remains structurally constrained LRU, not a large
@@ -1275,6 +1308,8 @@ The repository wraps Levi's \code{evolve_code} API behind a stable workflow:
 max\_iterations & YAML default 300; CLI \code{--iterations} overrides it and is
 forwarded as Levi's \code{budget_evals}. \\
 mutation\_model & \code{openai/gpt-5.4-mini}, selected from the primary model. \\
+paradigm\_model & \code{openai/gpt-5.5}, selected from the secondary model and
+reserved for paradigm shifts. \\
 sampler-model pairs & Four \code{gpt-5.4-mini} sampling configurations used by the
 pipeline. \\
 max\_tokens & 12,000, forwarded through the pipeline. \\
@@ -1283,7 +1318,8 @@ n\_eval\_processes & 2, derived from \code{parallel_evaluations}. \\
 eval\_timeout & 90 seconds for isolated candidate evaluation. \\
 n\_parents, n\_inspirations & One parent and one inspiration per mutation step. \\
 init & Zero diverse seeds and eight variants from the supplied compact seed. \\
-punctuated\_equilibrium & Disabled. \\
+punctuated\_equilibrium & Enabled with medium reasoning effort for
+\code{gpt-5.5} paradigm-shift calls. \\
 behavior & CVT descriptors include code length, cyclomatic complexity, branch count,
 math operators, validation hit rate, churn, and admission waste. \\
 \bottomrule
@@ -1304,7 +1340,7 @@ explicitly warns candidates:
   \item canonical bounded multi-timescale primitives are available but optional;
   \item priority is useful QoS metadata but not proof of reuse;
   \item request-tail service, worst-quarter service, wasted admissions, avoidable
-  evictions, churn, and complexity affect ranking;
+  evictions, churn, policy-caused underfill, and complexity affect ranking;
   \item workload-family names and request-type values must not be hard-coded;
   \item the structure probe and hidden workloads must not be inspected for candidate
   selection.
@@ -1318,8 +1354,8 @@ penalty, unsupported hooks are not only ineffective but directly harmful.
 
 The following run scores were produced under the verifier version active at the time.
 They are useful for search chronology but are \risk{not directly comparable} to the
-current verifier's \(57.788\) score because the workload panel and score terms were
-subsequently strengthened.
+current verifier's \(74.321\) score because the capacity sweep, workload panel, and
+score terms were subsequently strengthened.
 
 \begin{center}
 \scriptsize
@@ -1375,7 +1411,7 @@ This hybrid process is deliberate:
   \item Deterministic coefficient search efficiently tunes a compact fixed structure.
 \end{itemize}
 
-\section{Current Compact Policy}
+\section{Compact Policy Family}
 
 \subsection{State}
 
@@ -1457,6 +1493,25 @@ lifetime cumulative and still appears in the eviction equation.  The decayed obs
 frequency partly counterbalances it, but a future ablation should test replacing the
 lifetime hit count with only recent policy-owned evidence.
 
+\subsection{Promoted pressure-aware extension}
+
+The current incumbent in
+\filepath{src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py}
+preserves the compact policy's eviction equation and most admission terms.  It adds a
+bounded admission-pressure state \(q_t\) derived from the online recent-admission-
+pressure and miss-rate signals:
+
+\begin{equation}
+  q_t = \min\left(1.5,\;q_{t-1}2^{-1/4}
+  + \text{pressure}_t\left(0.75+0.5\min(1,\text{miss-rate}_t)\right)\right).
+\end{equation}
+
+Admission subtracts a pressure penalty that increases with depth and decreases with
+observed reuse and priority evidence.  The extension also uses last-access-gap evidence
+and records priority only on cache hits, avoiding the assumption that a high-priority
+miss predicts future reuse.  This policy was promoted only after improving selection,
+aggregate probe, both recurrence-heavy probe families, and the hidden panel.
+
 \subsection{Decay-term ablation}
 
 The decay half-lives were selected by screening nearby values on a small panel and then
@@ -1494,49 +1549,57 @@ reviewed alongside the validation scalar.
 
 \begin{center}
 \scriptsize
-\begin{tabular}{@{}lrrrrrrrr@{}}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}lrrrrrrrrr@{}}
 \toprule
-\textbf{Policy} & \textbf{Score} & \textbf{Cap. 24} & \textbf{Cap. 48} &
+\textbf{Policy} & \textbf{Score} & \textbf{Cap. 48} & \textbf{Cap. 96} &
 \textbf{Worst qtr.} & \textbf{Tok. waste} & \textbf{Utility} &
-\textbf{Avoid.} & \textbf{Churn/1k} \\
+\textbf{Avoid.} & \textbf{Underfill} & \textbf{Churn/1k} \\
 \midrule
-Oracle future reuse & 87.777 & 0.638 & 0.702 & 0.527 & 0.095 & 12.454 & 0.000 & 207.5 \\
-Compact candidate & 57.788 & 0.628 & 0.664 & 0.499 & 0.491 & 7.143 & 0.110 & 685.5 \\
-TinyLFU-LRU & 53.426 & 0.580 & 0.635 & 0.434 & 0.422 & 7.183 & 0.234 & 462.2 \\
-vLLM APC & 50.836 & 0.590 & 0.638 & 0.471 & 0.485 & 7.840 & 0.124 & 1068.4 \\
-Future-reuse heuristic & 49.428 & 0.613 & 0.688 & 0.502 & 0.736 & 2.141 & 0.007 & 1565.1 \\
-Depth-prefer-shallow & 35.210 & 0.580 & 0.646 & 0.457 & 0.762 & 1.905 & 0.212 & 1846.5 \\
-LRU & 25.337 & 0.554 & 0.645 & 0.470 & 0.752 & 1.911 & 0.181 & 1746.6 \\
-No cache & -50.445 & 0.000 & 0.000 & 0.000 & 0.000 & 0.000 & 0.000 & 0.0 \\
+Oracle future reuse & 97.074 & 0.683 & 0.745 & 0.548 & 0.017 & 13.164 & 0.000 & 0.141 & 43.9 \\
+Pressure-aware incumbent & 76.630 & 0.674 & 0.687 & 0.521 & 0.421 & 7.944 & 0.065 & 0.067 & 148.7 \\
+TinyLFU-LRU & 70.362 & 0.618 & 0.690 & 0.457 & 0.357 & 8.062 & 0.108 & 0.112 & 161.1 \\
+Future-reuse heuristic & 69.857 & 0.669 & 0.740 & 0.542 & 0.706 & 2.440 & 0.005 & 0.000 & 1197.3 \\
+vLLM APC & 60.178 & 0.621 & 0.696 & 0.496 & 0.486 & 7.973 & 0.128 & 0.056 & 807.9 \\
+LRU & 51.186 & 0.627 & 0.721 & 0.503 & 0.718 & 2.268 & 0.119 & 0.000 & 1385.0 \\
+Depth-prefer-shallow & 50.409 & 0.628 & 0.715 & 0.497 & 0.724 & 2.214 & 0.167 & 0.000 & 1471.5 \\
+No cache & -61.304 & 0.000 & 0.000 & 0.000 & 0.000 & 0.000 & 0.000 & 1.000 & 0.0 \\
 \bottomrule
 \end{tabular}
+}
 \end{center}
 
-The candidate is the strongest deployable policy by \(4.36\) combined-score points over
-TinyLFU-LRU and remains closer to the oracle on raw hit behavior:
+The candidate is the strongest deployable policy by \(6.268\) combined-score points
+over TinyLFU-LRU. Its recurrence-gated depth relief closes most of the prior agentic
+gap while preserving much lower churn than replacement-style baselines:
 
 \begin{itemize}
-  \item validation token hit rate: \(0.644\) candidate versus \(0.674\) oracle;
-  \item request p10 hit: \(0.318\) candidate;
-  \item worst-quarter hit: \(0.499\) candidate versus \(0.527\) oracle;
-  \item priority-burst weighted hit: \(0.760\) candidate versus \(0.780\) oracle.
+  \item \identifier{agentic_tool_workflows} training token hit: \(0.478\) candidate
+  versus \(0.478\) vLLM APC and \(0.537\) oracle;
+  \item held-out \identifier{agent_trace_branching} token hit: \(0.376\) candidate
+  versus \(0.393\) vLLM APC and \(0.402\) oracle;
+  \item request p10 hit: \(0.324\) candidate;
+  \item worst-quarter hit: \(0.520\) candidate versus \(0.548\) oracle.
 \end{itemize}
 
-The current score gap is driven less by raw hit rate than by operational quality.  The
-candidate's score breakdown is:
+The candidate's ranking benefits from pressure-aware churn control, higher token hit,
+and lower source complexity. Recurrence evidence relaxes depth rejection only after
+observed repeated access, so first-time deep suffixes still pay the full penalty. Its
+score breakdown is:
 
 \begin{center}
 \begin{tabular}{lr}
 \toprule
 \textbf{Component} & \textbf{Value} \\
 \midrule
-Mean workload score & \(+68.642\) \\
-Minimum-workload contribution & \(+13.685\) \\
-Churn cost & \(-10.283\) \\
+Mean workload score & \(+75.044\) \\
+Minimum-workload contribution & \(+20.251\) \\
+Churn cost & \(-2.230\) \\
+Underfill cost & \(-0.804\) \\
 Fairness cost & \(-7.663\) \\
-Complexity cost & \(-6.593\) \\
+Complexity cost & \(-7.968\) \\
 \midrule
-Combined score & \(\mathbf{57.788}\) \\
+Combined score & \(\mathbf{76.630}\) \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -1544,19 +1607,65 @@ Combined score & \(\mathbf{57.788}\) \\
 \subsection{Held-out structure-generalization probe}
 
 The recurrence-heavy probe is reported but excluded from selection.  The current
-compact candidate scores \(40.303\) on the probe.  Its token hit rates are \(0.2268\)
-on \identifier{agent_trace_branching} and \(0.7817\) on
-\identifier{cyclic_working_set_pressure}.  The first value remains the clearest
-structural weakness: richer state is useful only if it improves branching-agent
-service without buying hit rate through excessive churn or wasted admissions.
+pressure-aware candidate's token hit rates are \(0.376\) on
+\identifier{agent_trace_branching} and \(0.881\) on
+\identifier{cyclic_working_set_pressure}. Recurrence-gated depth relief raises the
+first value while holding agent-trace churn to \(57.3\) per thousand requests.
+Stochastic serving mixes now remain the clearest weakness.
+
+\subsection{Pressure-aware incumbent promotion}
+\label{sec:pressure-aware-promotion}
+
+A nominal 300-evaluation search from the compact seed completed 298 recorded
+evaluations, cost \$2.781, and filled three archive cells.  The strongest GPT-5.5
+paradigm scored \(74.670\); a subsequent compact mutation refined its pressure-aware
+admission mechanism and reached \(76.069\). A focused follow-up separated agent-trace
+underfill from stochastic-mix noise and added recurrence-gated depth relief, reaching
+\(76.480\). A later diversified 300-budget run completed 298 recorded evaluations,
+cost \$3.608, and remained in one archive cell. Its best mutation refined the
+persistent-pressure coefficient to \(0.22\); composing that term with recurrence-gated
+depth relief reached \(76.630\).
+
+\begin{center}
+\scriptsize
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrrrrrrr}
+\toprule
+\textbf{Policy} & \textbf{Selection} & \textbf{Raw} & \textbf{Mean} &
+\textbf{Min} & \textbf{Churn} & \textbf{Underfill} & \textbf{Cx} &
+\textbf{Probe} & \textbf{Agent} & \textbf{Cyclic} & \textbf{Hidden} \\
+\midrule
+Compact seed & 74.321 & 80.914 & 73.991 & 21.293 & 5.925 & 0.781 & 473 &
+47.425 & 0.2295 & 0.8272 & -1.951 \\
+Original pressure-aware policy & 76.069 & 84.185 & 74.870 & 20.251 & 2.464 & 0.810 & 624 &
+54.543 & 0.2476 & 0.8812 & 6.527 \\
+Recurrence-aware refinement & 76.480 & 84.241 & 75.066 & 20.244 & 2.615 & 0.791 & 588 &
+74.602 & 0.3756 & 0.8812 & 7.266 \\
+Current composed incumbent & 76.630 & 84.598 & 75.044 & 20.251 & 2.230 & 0.804 & 609 &
+75.002 & 0.3760 & 0.8812 & 9.691 \\
+\bottomrule
+\end{tabular}
+}
+\end{center}
+
+Unlike prior generated candidates, this policy clears final adjudication: selection,
+aggregate probe, both recurrence-heavy probe families, and hidden score all improve.
+The original policy's main operational gain was a churn-cost reduction from \(5.925\)
+to \(2.464\). The recurrence-gated refinement sharply improves agent traces, and the
+composed persistent-pressure throttle then lowers churn cost further to \(2.230\)
+without giving back that gain. The latest run's data-driven initialization retained
+only duplicate valid seed variants, so the archive never reached the three occupied
+cells required to activate punctuated equilibrium. Future work should preserve the
+current policy while repairing that search-diversity failure.
 
 \subsection{Post-expansion evolution result}
 \label{sec:post-expansion}
 
 Run \filepath{artifacts/prefix_kv_cache_runs/20260606T000036Z} used the expanded
 observable surface, canonical multi-timescale primitive, form-aware complexity, and
-the quarantined probe.  A nominal 100-evaluation budget produced 98 recorded
-evaluations, cost \$2.898, filled eight archive cells, and retained the compact seed at
+the quarantined probe under the previous \(24/48\)-block verifier.  A nominal
+100-evaluation budget produced 98 recorded evaluations, cost \$2.898, filled eight
+archive cells, and retained the compact seed at
 \(57.788\).  The strongest generated mutation scored \(50.655\).
 
 That headline alone hides the important decomposition.  The table below compares the
@@ -1630,8 +1739,8 @@ It establishes that the search found a promising but verbose hand-rolled structu
 failed to adopt the cheaper provided representation.
 
 The saved winner is byte-identical to \code{compact_seed.py}; validation, probe, and
-hidden metrics for the recommended seed are therefore exactly unchanged.  Per the
-adjudication rule, the prior seed remains recommended because no candidate improved
+hidden metrics for the recommended seed were therefore exactly unchanged.  At that
+stage, the adjudication rule retained the prior seed because no candidate improved
 validation while preserving both quarantined panels.  The full decomposition is
 persisted in
 \filepath{artifacts/prefix_kv_cache_runs/20260606T000036Z/best_generated_mutation_decomposition.json}.
@@ -1741,8 +1850,8 @@ state cheaper but correctly did not make surrounding bespoke control flow free.
 The full structure probe remains quarantined from selection.  The per-family hit rates
 are useful diagnostics, but Run 2 demonstrates why they should not be promoted without
 an operational non-regression constraint: both hit rates improved while aggregate
-probe score deteriorated sharply.  The adjudication therefore keeps
-\code{compact_seed.py} unchanged and treats the structured seed as a useful alternate
+probe score deteriorated sharply.  At that stage, adjudication kept
+\code{compact_seed.py} unchanged and treated the structured seed as a useful alternate
 parent.  The ablation and repeated-run verdicts are persisted in
 \filepath{artifacts/prefix_kv_cache_structured_ablation.json} and
 \filepath{artifacts/prefix_kv_cache_structured_runs/adjudication.json}.
@@ -1771,6 +1880,230 @@ The candidate retains better hidden hit rate and worst-quarter service than Tiny
 but its combined score is worse because it admits too much dead content and churns much
 more.  This is precisely the kind of distinction the expanded verifier was intended to
 surface.
+
+\section{Evolution-Discovered Principles}
+\label{sec:evolution-principles}
+
+The detailed chronology and result tables above contain more information than the
+retained winner alone.  This section consolidates that information into a principle
+ledger so future search does not repeatedly rediscover the same failures.  A
+\important{retained principle} is supported by a baseline comparison, controlled
+ablation, repeated search adjudication, or a combination of those sources.  The lists
+below are retained within the current synthetic benchmark; statements explicitly
+qualified with ``currently'' are \important{working principles} whose broader
+generality remains unproven.  An \risk{open hypothesis} remains a proposed experiment
+rather than a conclusion.
+
+Incomplete run snapshots may corroborate an existing pattern, but they do not establish
+new retained principles.  In particular, the June 7 current-verifier 30-evaluation
+snapshot at \filepath{runs/20260607_151718_996826/snapshot.json} contains generated
+elites with \(0.674\)--\(0.683\) validation token hit versus the incumbent's \(0.665\),
+but only \(48.1\)--\(53.9\) combined score versus \(74.321\).  Those elites have
+\(0.655\)--\(0.729\) token-weighted admission waste, \(746.7\)--\(1256.5\) churn per
+1000 requests, and \(1544\)--\(1972\) effective complexity.  This supports the
+already-retained cache-economics principle below, but the incomplete run is not treated
+as a new ranking result.
+
+\subsection{Policy-design principles}
+
+\begin{enumerate}
+  \item \textbf{Selective admission is a first-order decision, not a secondary
+  optimization.}  Admit-all baselines often achieve competitive hit rates, especially
+  at larger capacity, but pay heavily in dead admissions and churn.  The compact
+  incumbent and TinyLFU-LRU demonstrate that rejecting low-evidence suffixes can
+  outperform indiscriminate retention.  Admission and eviction must therefore be
+  designed together; a sophisticated victim score cannot fully repair a polluted
+  cache.
+
+  \item \textbf{Shared trunks deserve protection, while deep suffixes require stronger
+  evidence.}  The compact incumbent protects fanout and recomputation cost while
+  increasingly resisting deep blocks.  The structured ablation independently shows
+  that removing subtree context reduces raw selection quality.  Static depth or fanout
+  alone is insufficient, as the corresponding single-signal baselines trail the
+  incumbent, but structural value is a useful complement to observed reuse.
+
+  \item \textbf{Online regime context improves robustness more than headline mean
+  performance.}  Removing recent admission-pressure and miss-rate conditioning raised
+  the structured policy's mean workload score, but reduced raw selection, sharply
+  increased churn, and damaged the aggregate probe.  Regime signals are therefore most
+  valuable as control inputs that prevent unstable behavior during shifts, rather than
+  as direct reuse predictors.
+
+  \item \textbf{Explicit access-gap recurrence formulas are not automatically useful
+  recurrence models.}  The tested gap-mean and gap-variance terms increased churn and
+  hurt both selection and aggregate probe behavior.  Deleting them was beneficial.
+  Recurrence should be represented only when it survives ablation; bounded
+  multi-timescale observations are a safer search substrate than assuming that a
+  hand-written gap formula is predictive.
+
+  \item \textbf{Miss evidence is a guardrail, not a dominant value signal.}  Removing
+  miss-decay state was nearly neutral on validation selection but materially weakened
+  cyclic behavior.  This supports retaining a compact miss-pressure channel when it
+  prevents repeated pollution or cycling failures, while rejecting large miss-state
+  subsystems that do not earn their complexity.
+
+  \item \textbf{Priority is a QoS modifier, not proof of future reuse.}  The incumbent
+  uses priority only alongside frequency, structure, depth, and recomputation cost.
+  The structured priority-decay channel was behaviorally inert, and the
+  \identifier{priority_one_off_noise} families show why long-lived protection based
+  only on priority is unsafe.  Policies should protect recurring priority traffic
+  without allowing high-priority one-offs to displace reusable normal traffic.
+
+  \item \textbf{Decay choices must be adjudicated outside the optimized split.}  In the
+  compact decay ablation, priority-only decay won the validation scalar, but both-decay
+  state performed better on the quarantined probe and hidden panel and reduced waste,
+  avoidable eviction, and churn.  The retained lesson is not that every signal must
+  decay identically; it is that stale evidence must be controlled and decay variants
+  must be selected for cross-panel robustness rather than a small validation gain.
+
+  \item \textbf{Higher hit rate can be purchased with poor cache economics.}  The
+  hidden-panel compact candidate beats TinyLFU-LRU on token hit and worst-quarter hit
+  yet loses badly on combined score because it admits more dead content and churns
+  more.  Generated mutations repeatedly exhibit the same pattern.  A deployable policy
+  must convert admitted capacity into realized saved tokens, not merely increase the
+  number of matched blocks.
+
+  \item \textbf{Richer functional form is useful only when its targeted gain survives
+  operational and implementation costs.}  Generated structured mutations improved
+  agent-branching behavior, and one improved raw validation plus both probe-family hit
+  rates.  None survived aggregate probe, hidden, churn, waste, and complexity
+  adjudication.  These are real behavioral discoveries, but they are alternate parents
+  for simplification rather than deployable winners.
+
+  \item \textbf{Compact composite scores currently generalize better than isolated
+  single-signal rules.}  LRU, LFU, recomputation-only, depth-only, fanout-only, and
+  fairness-biased baselines each capture a plausible principle but trail the compact
+  incumbent.  The current evidence favors small formulas that combine recent reuse,
+  structural value, recomputation cost, depth, and bounded priority influence.
+\end{enumerate}
+
+\subsection{Verifier and adjudication principles}
+
+\begin{enumerate}
+  \item \textbf{Hit rate is necessary but not sufficient.}  Ranking must also account
+  for request tails, worst temporal windows, admission waste and utility, avoidable
+  evictions, latency, churn, fairness, underfill, and implementation complexity.
+  Otherwise search reliably discovers policies that buy hits through excessive
+  turnover or dead retention.
+
+  \item \textbf{Low churn is not intrinsically good.}  The compact policy can report
+  very low or zero churn on difficult structure workloads by rejecting most suffixes
+  and leaving capacity unused.  Policy-caused underfill is therefore required to
+  distinguish valuable selectivity from broad bypass.
+
+  \item \textbf{Realized admission outcomes should be token-weighted.}  Binary useful
+  versus wasted counts are interpretable, but they treat partial and full blocks
+  equally.  Token-weighted waste and saved tokens per admitted slot better represent
+  whether the policy used capacity productively.
+
+  \item \textbf{Robustness terms prevent mean-score shortcuts.}  Worst-workload,
+  worst-seed, request-tail, and worst-quarter terms reveal regressions hidden by an
+  improved average.  The regime ablation is the clearest example: mean performance
+  improved while robust selection and operational behavior deteriorated.
+
+  \item \textbf{Probe and hidden panels must remain quarantined from direct
+  optimization.}  The decay ablation and repeated structured searches show that a
+  validation winner can regress both panels.  Quarantine preserves their value as
+  evidence of generalization rather than turning them into additional training splits.
+
+  \item \textbf{Individual probe-family gains require an aggregate operational
+  non-regression check.}  The strongest structured mutation improved both
+  recurrence-family hit rates while its aggregate probe score deteriorated sharply.
+  Per-family hits are diagnostics, not sufficient acceptance criteria.
+
+  \item \textbf{Raw behavior and charged deployability must be reported separately.}
+  Adding the complexity charge back revealed that the first expanded mutation was
+  nearly tied on raw merit but decisively worse after implementation cost.  This
+  decomposition distinguishes a promising functional form that needs simplification
+  from a behaviorally weak idea.
+
+  \item \textbf{Future-knowledge policies are audit instruments and ceilings, not
+  deployable competitors.}  The constrained next-use oracle measures remaining
+  headroom and avoidable decisions.  The weaker future-reuse heuristic also shows that
+  access to future counts does not rescue a policy with poor admission and turnover
+  behavior.
+
+  \item \textbf{Multiple capacities expose adaptation failures.}  The compact
+  incumbent's token-hit rate is nearly flat between 48 and 96 blocks, while several
+  baselines exploit the larger cache.  Capacity sweeps prevent a policy tuned to one
+  pressure regime from appearing generally optimal.
+\end{enumerate}
+
+\subsection{Evolution and search-process principles}
+
+\begin{enumerate}
+  \item \textbf{Start from a strong incumbent and preserve budget for iteration.}  The
+  first nominal 100-evaluation run spent its budget on broad initialization.  Reducing
+  diverse seeds and initializing from the compact incumbent produced more useful
+  iterative search.
+
+  \item \textbf{Separate structure search, deletion ablation, and coefficient tuning.}
+  LLM evolution is useful for proposing new state and formulas; controlled ablation
+  identifies which terms carry value; deterministic tuning efficiently searches a
+  retained compact structure.  Treating these as interchangeable wastes evaluations.
+
+  \item \textbf{Deletion is a productive search operator.}  Manual simplification
+  preserved behavior while reducing an evolved policy from 808 to 422 AST nodes.
+  Structured ablation then improved behavior by deleting recurrence and inert priority
+  state.  New state tables and branches should remain provisional until deletion
+  demonstrates that they are necessary.
+
+  \item \textbf{Complexity must be charged from exact candidate source and must remain
+  unbounded.}  Opaque callable evaluation cannot distinguish a concise formula from a
+  large defensive implementation.  Source-based, concave, unbounded complexity
+  correctly breaks raw near-ties and discourages dead machinery without imposing a
+  brittle hard cap.
+
+  \item \textbf{The candidate contract is part of the search algorithm.}  Earlier
+  candidates invented unsupported lifecycle callbacks, object-identity state, guessed
+  schemas, and defensive fallback branches.  Precise prompts, stable-key guidance, and
+  structured invalid results reduce this unproductive search space.
+
+  \item \textbf{Canonical primitives require explicit discoverability and incentives.}
+  Merely providing \code{MultiTimescaleDecay} did not cause viable elites to use it.
+  After the prompt and seed were changed to demonstrate
+  \code{observe_vector}, all 24 archived elites across three searches adopted the
+  primitive.  Search representations must be easy for the generator to see and copy.
+
+  \item \textbf{Primitive subsidies should be bounded.}  Canonical state should be
+  cheaper than hand-rolled equivalents, but surrounding bespoke control flow must
+  still pay its full cost.  The latest structured searches confirm that primitive
+  adoption alone does not make a 1200--1400-node policy deployable.
+
+  \item \textbf{Repeat runs and final adjudication are required before replacing an
+  incumbent.}  Three independent searches found interesting but different mutations;
+  none improved charged validation while preserving both quarantined panels.  A
+  single-run headline is insufficient evidence for promotion.
+
+  \item \textbf{Persist the strongest non-seed mutation even when the seed wins.}  A
+  retained incumbent can hide useful functional-form discoveries.  Saving and
+  decomposing the strongest generated mutation preserves alternate parents and reveals
+  whether failure came from behavior, complexity, or generalization.
+\end{enumerate}
+
+\subsection{Open hypotheses and unresolved principles}
+
+The following items are deliberately not promoted to retained principles:
+
+\begin{itemize}
+  \item \risk{A compact form of the strongest structured mutation may retain its raw
+  validation and recurrence-family gains.}  This requires deletion-oriented
+  simplification and fresh probe/hidden adjudication.
+  \item \risk{Lifetime \code{block.hit_count} may overprotect stale prefixes.}  The
+  compact policy partly counterbalances it with decayed policy-owned frequency, but a
+  controlled replacement ablation has not been run.
+  \item \risk{The structure probe may work better as a lexicographic or non-regression
+  constraint than as a reported-only panel.}  Directly optimizing its individual hit
+  rates is already known to be unsafe; the appropriate constrained-selection mechanism
+  remains untested.
+  \item \risk{Capacity-aware or byte-weighted policies may change the preferred
+  admission tradeoff.}  The current block-count model exposes poor capacity adaptation
+  but cannot establish how byte, layer, transfer, or residency costs should alter the
+  policy.
+  \item \risk{Trace-calibrated and live metadata may reorder the synthetic findings.}
+  The metadata-only calibration and replay path exists, but retained principles still
+  require confirmation on held-out production-derived traces.
+\end{itemize}
 
 \section{Correctness Properties and Test Strategy}
 
@@ -1815,14 +2148,15 @@ Functional PyTest coverage asserts, among other properties:
 After the latest verifier and workload additions:
 
 \begin{itemize}
-  \item 132 standalone repository tests pass;
+  \item 158 standalone repository tests pass;
   \item \code{ruff check .} passes;
-  \item formatting has been run;
+  \item TeX Live compilation succeeds;
   \item \code{git diff --check} is clean;
-  \item all 26 workload families build;
+  \item all 27 workload families build;
   \item YAML/default workload and score parity is confirmed;
-  \item the full baseline panel preserves credible ordering: oracle first, compact
-  candidate second, then TinyLFU-LRU, vLLM APC, and the reporting heuristic.
+  \item the full baseline panel preserves credible ordering: oracle first,
+  pressure-aware candidate second, TinyLFU-LRU third, the reporting heuristic fourth,
+  and prefix-anchor and vLLM APC following.
 \end{itemize}
 
 \section{Limitations and Recommended Next Steps}
@@ -1874,9 +2208,11 @@ After the latest verifier and workload additions:
   search.
   \item The coefficient tuner optimizes a fixed compact structure and cannot discover
   qualitatively new state representations.
-  \item Three additional 98-evaluation searches from the ablated structured seed also
-  did not beat the compact incumbent.  Canonical primitive adoption improved, but
+  \item Three additional 98-evaluation searches from the ablated structured seed did
+  not beat the compact seed.  Canonical primitive adoption improved, but
   generated programs still accumulated substantial bespoke control flow.
+  \item A later 298-evaluation compact-family search promoted the pressure-aware
+  incumbent, which improved selection, probe, and hidden adjudication.
 \end{itemize}
 
 \subsection{Recommended next experiments}
@@ -1913,7 +2249,7 @@ After the latest verifier and workload additions:
 \begin{lstlisting}[style=shell]
 .venv/bin/python -m prefix_cache_evolve.problems.prefix_kv_cache.runner \
   --baseline-report \
-  --capacity-sweep-blocks 24,48 \
+  --capacity-sweep-blocks 48,96 \
   --candidate-program artifacts/prefix_kv_cache_runs/20260606T000036Z
 \end{lstlisting}
 
@@ -1929,13 +2265,14 @@ After the latest verifier and workload additions:
   --candidate-program artifacts/prefix_kv_cache_runs/20260606T000036Z
 \end{lstlisting}
 
-\subsection{Run a new evolution from the compact seed}
+\subsection{Run a new evolution from the pressure-aware incumbent}
 
 \begin{lstlisting}[style=shell]
 .venv/bin/python -m prefix_cache_evolve.problems.prefix_kv_cache.runner \
   --iterations 100 \
   --config configs/prefix_kv_cache.yaml \
-  --seed-program src/prefix_cache_evolve/problems/prefix_kv_cache/compact_seed.py
+  --seed-program \
+  src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py
 \end{lstlisting}
 
 \subsection{Run the structured ablation and search parent}
@@ -2004,18 +2341,26 @@ The implemented system deliberately separates three concerns:
   complexity, and persists reproducible artifacts.
 \end{enumerate}
 
-The compact candidate demonstrates that a small deployable policy can remain stronger
-than the credibility baselines even after the verifier is tightened.  The expanded
-observable and primitive surface has not yet produced a better generalizing program.
-Targeted ablation showed that subtree and regime context are useful, explicit
-recurrence terms were harmful, and priority-decay state was inert.  Updating the
+The pressure-aware incumbent demonstrates that a compact deployable policy can remain
+stronger than the credibility baselines even after the verifier is tightened.
+Section~\ref{sec:evolution-principles} consolidates the broader lessons: selective
+admission, structural and regime context, robust cross-panel adjudication, realized
+cache economics, source-based complexity, deletion-oriented search, and precise
+generator-facing contracts all matter. Targeted ablation showed that broad explicit
+recurrence terms were harmful and priority-decay state was inert. A later focused
+refinement showed that recurrence is useful when it only relaxes an otherwise
+categorical depth penalty. Updating the
 primitive contract and prompt fixed search adoption: all 24 archived elites from three
 new searches used canonical vector-decay state.  One generated mutation improved raw
 validation and both recurrence-family hit rates, proving that richer functional form
 can address the intended behavior, but complexity and aggregate operational
-regressions correctly prevented its selection.  The compact incumbent therefore
-remains recommended while the structured seed and strongest generated mutation provide
-focused parents for deletion-oriented search.
+regressions correctly prevented its selection.  A later compact-family search
+discovered a pressure-aware policy that reduced churn and improved selection, probe,
+and hidden adjudication. Recurrence-gated depth relief then raised agent-trace hit
+rate to near the replacement baselines while retaining low churn; it is now the
+recommended incumbent. Stochastic serving mixes remain its clearest weakness, while
+the compact and structured seeds remain useful alternate parents for deletion-oriented
+search.
 
 \begin{thebibliography}{99}
 \addcontentsline{toc}{section}{References}
@@ -2035,9 +2380,9 @@ vLLM Project.
 
 \bibitem{sglang}
 L. Zheng et al.
-\newblock ``SGLang: Efficient Execution of Structured Language Model Programs.''
-\newblock NeurIPS, 2024.
-\newblock \url{https://arxiv.org/abs/2312.07104}.
+\newblock ``Efficiently Programming Large Language Models using SGLang.''
+\newblock arXiv preprint, version 1, 2023.
+\newblock \url{https://arxiv.org/html/2312.07104v1}.
 
 \bibitem{saecache}
 S. Fang et al.

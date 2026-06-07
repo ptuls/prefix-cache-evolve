@@ -14,16 +14,10 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import EvaluatorConfig
 
 PREFIX_KV_CONFIG_ENV = "PREFIX_CACHE_EVOLVE_CONFIG"
 PREFIX_KV_QUICK_ENV = "PREFIX_CACHE_EVOLVE_QUICK"
-_REPOSITORY_CONFIG_PATH = (
-    Path(__file__).resolve().parents[4] / "configs/prefix_kv_cache.yaml"
-)
-_PACKAGED_CONFIG_PATH = (
-    Path(__file__).resolve().parents[2] / "configs/prefix_kv_cache.yaml"
-)
+_REPOSITORY_CONFIG_PATH = Path(__file__).resolve().parents[4] / "configs/prefix_kv_cache.yaml"
+_PACKAGED_CONFIG_PATH = Path(__file__).resolve().parents[2] / "configs/prefix_kv_cache.yaml"
 DEFAULT_CONFIG_PATH = (
-    _REPOSITORY_CONFIG_PATH
-    if _REPOSITORY_CONFIG_PATH.exists()
-    else _PACKAGED_CONFIG_PATH
+    _REPOSITORY_CONFIG_PATH if _REPOSITORY_CONFIG_PATH.exists() else _PACKAGED_CONFIG_PATH
 )
 
 _TUPLE_FIELDS = {
@@ -50,6 +44,8 @@ _SCORING_FIELDS = {
     "latency_cap",
     "churn_weight",
     "churn_cap",
+    "underfill_weight",
+    "underfill_cap",
     "fairness_weight",
     "fairness_cap",
     "k_complex",
@@ -91,8 +87,7 @@ def evaluator_config_from_settings(
     unknown_settings = sorted(set(settings) - supported_settings)
     if unknown_settings:
         raise ValueError(
-            "unsupported prefix KV-cache evaluator settings: "
-            + ", ".join(unknown_settings)
+            "unsupported prefix KV-cache evaluator settings: " + ", ".join(unknown_settings)
         )
     kwargs: dict[str, Any] = {}
     for name in _DIRECT_FIELDS:
@@ -108,8 +103,7 @@ def evaluator_config_from_settings(
     unknown_scoring = sorted(set(scoring) - _SCORING_FIELDS)
     if unknown_scoring:
         raise ValueError(
-            "unsupported prefix KV-cache scoring settings: "
-            + ", ".join(unknown_scoring)
+            "unsupported prefix KV-cache scoring settings: " + ", ".join(unknown_scoring)
         )
     for name in _SCORING_FIELDS:
         if name in scoring:

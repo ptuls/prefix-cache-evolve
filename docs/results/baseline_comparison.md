@@ -1,51 +1,51 @@
 # Prefix KV-Cache Best Program Baseline Comparison
 
-Candidate: `src/prefix_cache_evolve/problems/prefix_kv_cache/compact_seed.py`
+Candidate: `src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py`
 
 Command:
 
 ```bash
-.venv/bin/python -m prefix_cache_evolve.problems.prefix_kv_cache.runner --baseline-report --candidate-program src/prefix_cache_evolve/problems/prefix_kv_cache/compact_seed.py --config configs/prefix_kv_cache.yaml
+.venv/bin/python -m prefix_cache_evolve.problems.prefix_kv_cache.runner --baseline-report --candidate-program src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py --config /Users/paul.t/work/prefix-cache-evolve/configs/prefix_kv_cache.yaml
 ```
 
 ## Headline
 
 The candidate clears the deployable credibility baselines in this capacity sweep. It trails `oracle_future_reuse`. It beats `future_reuse_heuristic`.
 
-| Rank | Policy | Group | Combined score | Capacity 24 token hit | Capacity 48 token hit | Worst-quarter hit | Request p10 hit | Token-wtd admission waste | Admission token utility | Avoidable eviction | Priority-burst weighted hit | Priority-noise token hit | Churn per 1k |
-|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 1 | `oracle_future_reuse` | reporting-only/future-knowledge | 87.777 | 0.638 | 0.702 | 0.527 | 0.318 | 0.095 | 12.454 | 0.000 | 0.780 | 0.602 | 207.5 |
-| 2 | `candidate` | deployable | 57.788 | 0.628 | 0.664 | 0.499 | 0.318 | 0.491 | 7.143 | 0.110 | 0.760 | 0.564 | 685.5 |
-| 3 | `tinylfu_lru` | deployable | 53.426 | 0.580 | 0.635 | 0.434 | 0.294 | 0.422 | 7.183 | 0.234 | 0.699 | 0.575 | 462.2 |
-| 4 | `vllm_apc` | deployable | 50.836 | 0.590 | 0.638 | 0.471 | 0.311 | 0.485 | 7.840 | 0.124 | 0.641 | 0.509 | 1068.4 |
-| 5 | `future_reuse_heuristic` | reporting-only/future-knowledge | 49.428 | 0.613 | 0.688 | 0.502 | 0.313 | 0.736 | 2.141 | 0.007 | 0.749 | 0.572 | 1565.1 |
-| 6 | `depth_prefer_shallow` | deployable | 35.210 | 0.580 | 0.646 | 0.457 | 0.313 | 0.762 | 1.905 | 0.212 | 0.701 | 0.426 | 1846.5 |
-| 7 | `prefix_anchor` | deployable | 33.602 | 0.577 | 0.657 | 0.474 | 0.293 | 0.744 | 1.961 | 0.164 | 0.719 | 0.516 | 1731.0 |
-| 8 | `prefix_fanout` | deployable | 32.447 | 0.578 | 0.646 | 0.453 | 0.312 | 0.770 | 1.889 | 0.207 | 0.692 | 0.383 | 1874.4 |
-| 9 | `cost_aware_lru` | deployable | 27.008 | 0.554 | 0.644 | 0.470 | 0.287 | 0.741 | 1.897 | 0.185 | 0.720 | 0.522 | 1766.3 |
-| 10 | `lfu` | deployable | 26.655 | 0.580 | 0.665 | 0.489 | 0.300 | 0.786 | 1.987 | 0.139 | 0.747 | 0.549 | 1683.9 |
-| 11 | `lru` | deployable | 25.337 | 0.554 | 0.645 | 0.470 | 0.289 | 0.752 | 1.911 | 0.181 | 0.721 | 0.559 | 1746.6 |
-| 12 | `tenant_fair_lru` | deployable | 25.216 | 0.554 | 0.645 | 0.469 | 0.288 | 0.750 | 1.912 | 0.180 | 0.721 | 0.559 | 1748.4 |
-| 13 | `recompute_greedy` | deployable | 12.724 | 0.556 | 0.641 | 0.433 | 0.280 | 0.774 | 1.776 | 0.242 | 0.690 | 0.326 | 1962.0 |
-| 14 | `no_cache` | deployable | -50.445 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.0 |
+| Rank | Policy | Group | Combined score | Capacity 48 token hit | Capacity 96 token hit | Worst-quarter hit | Request p10 hit | Token-wtd admission waste | Admission token utility | Avoidable eviction | Priority-burst weighted hit | Priority-noise token hit | Policy underfill | Churn per 1k |
+|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | `oracle_future_reuse` | reporting-only/future-knowledge | 97.074 | 0.683 | 0.745 | 0.548 | 0.326 | 0.017 | 13.164 | 0.000 | 0.780 | 0.602 | 0.141 | 43.9 |
+| 2 | `candidate` | deployable | 76.630 | 0.674 | 0.687 | 0.521 | 0.324 | 0.421 | 7.944 | 0.065 | 0.766 | 0.596 | 0.067 | 148.7 |
+| 3 | `tinylfu_lru` | deployable | 70.362 | 0.618 | 0.690 | 0.457 | 0.299 | 0.357 | 8.062 | 0.108 | 0.722 | 0.575 | 0.112 | 161.1 |
+| 4 | `future_reuse_heuristic` | reporting-only/future-knowledge | 69.857 | 0.669 | 0.740 | 0.542 | 0.323 | 0.706 | 2.440 | 0.005 | 0.776 | 0.602 | 0.000 | 1197.3 |
+| 5 | `prefix_anchor` | deployable | 60.199 | 0.639 | 0.724 | 0.507 | 0.321 | 0.705 | 2.298 | 0.110 | 0.735 | 0.578 | 0.000 | 1363.3 |
+| 6 | `vllm_apc` | deployable | 60.178 | 0.621 | 0.696 | 0.496 | 0.321 | 0.486 | 7.973 | 0.128 | 0.649 | 0.543 | 0.056 | 807.9 |
+| 7 | `lfu` | deployable | 58.541 | 0.647 | 0.733 | 0.533 | 0.319 | 0.740 | 2.346 | 0.070 | 0.775 | 0.602 | 0.000 | 1281.6 |
+| 8 | `cost_aware_lru` | deployable | 52.305 | 0.627 | 0.721 | 0.507 | 0.316 | 0.707 | 2.255 | 0.127 | 0.735 | 0.565 | 0.000 | 1401.1 |
+| 9 | `tenant_fair_lru` | deployable | 51.219 | 0.627 | 0.721 | 0.502 | 0.317 | 0.716 | 2.271 | 0.119 | 0.737 | 0.602 | 0.000 | 1384.9 |
+| 10 | `lru` | deployable | 51.186 | 0.627 | 0.721 | 0.503 | 0.318 | 0.718 | 2.268 | 0.119 | 0.737 | 0.602 | 0.000 | 1385.0 |
+| 11 | `depth_prefer_shallow` | deployable | 50.409 | 0.628 | 0.715 | 0.497 | 0.323 | 0.724 | 2.214 | 0.167 | 0.723 | 0.521 | 0.000 | 1471.5 |
+| 12 | `prefix_fanout` | deployable | 47.619 | 0.628 | 0.719 | 0.496 | 0.320 | 0.723 | 2.215 | 0.167 | 0.709 | 0.472 | 0.000 | 1479.5 |
+| 13 | `recompute_greedy` | deployable | 33.772 | 0.624 | 0.703 | 0.480 | 0.304 | 0.720 | 2.158 | 0.181 | 0.701 | 0.364 | 0.000 | 1583.0 |
+| 14 | `no_cache` | deployable | -61.304 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 1.000 | 0.0 |
 
 ## Validation Workload Detail
 
 | Policy | phase_shift_prompts token hit | multi_tenant_skew token hit | hotset_cold_scan token hit | concurrent_long_generation token hit | stochastic_serving_mix token hit | rolling_template_versions token hit | heavy_tailed_prefix_lengths token hit | priority_burst_recovery token hit | priority_one_off_noise token hit | tenant_phase_shift_cycles token hit | Validation block hit | Validation churn per 1k |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `oracle_future_reuse` | 0.794 | 0.814 | 0.644 | 0.880 | 0.516 | 0.847 | 0.570 | 0.519 | 0.602 | 0.556 | 0.633 | 207.5 |
-| `candidate` | 0.794 | 0.802 | 0.638 | 0.857 | 0.412 | 0.847 | 0.530 | 0.506 | 0.564 | 0.493 | 0.596 | 685.5 |
-| `tinylfu_lru` | 0.759 | 0.745 | 0.602 | 0.821 | 0.407 | 0.814 | 0.479 | 0.463 | 0.575 | 0.516 | 0.575 | 462.2 |
-| `vllm_apc` | 0.794 | 0.802 | 0.532 | 0.823 | 0.423 | 0.847 | 0.464 | 0.427 | 0.509 | 0.469 | 0.547 | 1068.4 |
-| `future_reuse_heuristic` | 0.794 | 0.812 | 0.644 | 0.874 | 0.454 | 0.847 | 0.494 | 0.499 | 0.572 | 0.508 | 0.608 | 1565.1 |
-| `depth_prefer_shallow` | 0.794 | 0.802 | 0.495 | 0.871 | 0.389 | 0.847 | 0.463 | 0.466 | 0.426 | 0.474 | 0.553 | 1846.5 |
-| `prefix_anchor` | 0.794 | 0.762 | 0.620 | 0.871 | 0.401 | 0.835 | 0.455 | 0.479 | 0.516 | 0.487 | 0.577 | 1731.0 |
-| `prefix_fanout` | 0.794 | 0.802 | 0.499 | 0.871 | 0.430 | 0.847 | 0.462 | 0.459 | 0.383 | 0.432 | 0.548 | 1874.4 |
-| `cost_aware_lru` | 0.794 | 0.721 | 0.620 | 0.871 | 0.407 | 0.815 | 0.428 | 0.480 | 0.522 | 0.473 | 0.571 | 1766.3 |
-| `lfu` | 0.794 | 0.735 | 0.644 | 0.871 | 0.411 | 0.837 | 0.465 | 0.498 | 0.549 | 0.479 | 0.586 | 1683.9 |
-| `lru` | 0.794 | 0.715 | 0.620 | 0.871 | 0.386 | 0.814 | 0.436 | 0.481 | 0.559 | 0.483 | 0.575 | 1746.6 |
-| `tenant_fair_lru` | 0.794 | 0.719 | 0.620 | 0.871 | 0.385 | 0.814 | 0.435 | 0.481 | 0.559 | 0.479 | 0.575 | 1748.4 |
-| `recompute_greedy` | 0.762 | 0.732 | 0.574 | 0.874 | 0.422 | 0.818 | 0.425 | 0.458 | 0.326 | 0.411 | 0.534 | 1962.0 |
+| `oracle_future_reuse` | 0.794 | 0.822 | 0.644 | 0.924 | 0.600 | 0.847 | 0.697 | 0.519 | 0.602 | 0.561 | 0.663 | 43.9 |
+| `candidate` | 0.794 | 0.802 | 0.638 | 0.890 | 0.467 | 0.847 | 0.631 | 0.506 | 0.596 | 0.525 | 0.625 | 148.7 |
+| `tinylfu_lru` | 0.759 | 0.757 | 0.614 | 0.854 | 0.474 | 0.814 | 0.587 | 0.478 | 0.575 | 0.529 | 0.603 | 161.1 |
+| `future_reuse_heuristic` | 0.794 | 0.822 | 0.644 | 0.924 | 0.574 | 0.847 | 0.656 | 0.516 | 0.602 | 0.543 | 0.654 | 1197.3 |
+| `prefix_anchor` | 0.794 | 0.812 | 0.620 | 0.924 | 0.495 | 0.847 | 0.593 | 0.490 | 0.578 | 0.509 | 0.627 | 1363.3 |
+| `vllm_apc` | 0.794 | 0.802 | 0.532 | 0.823 | 0.511 | 0.847 | 0.611 | 0.433 | 0.543 | 0.476 | 0.573 | 807.9 |
+| `lfu` | 0.794 | 0.779 | 0.644 | 0.924 | 0.520 | 0.847 | 0.618 | 0.516 | 0.602 | 0.538 | 0.640 | 1281.6 |
+| `cost_aware_lru` | 0.794 | 0.785 | 0.620 | 0.924 | 0.514 | 0.845 | 0.553 | 0.490 | 0.565 | 0.506 | 0.621 | 1401.1 |
+| `tenant_fair_lru` | 0.794 | 0.784 | 0.620 | 0.924 | 0.479 | 0.845 | 0.570 | 0.491 | 0.602 | 0.508 | 0.624 | 1384.9 |
+| `lru` | 0.794 | 0.779 | 0.620 | 0.924 | 0.480 | 0.845 | 0.570 | 0.491 | 0.602 | 0.510 | 0.623 | 1385.0 |
+| `depth_prefer_shallow` | 0.794 | 0.812 | 0.539 | 0.924 | 0.450 | 0.847 | 0.607 | 0.481 | 0.521 | 0.510 | 0.604 | 1471.5 |
+| `prefix_fanout` | 0.794 | 0.812 | 0.541 | 0.924 | 0.546 | 0.847 | 0.613 | 0.471 | 0.472 | 0.462 | 0.602 | 1479.5 |
+| `recompute_greedy` | 0.793 | 0.801 | 0.612 | 0.924 | 0.532 | 0.845 | 0.546 | 0.465 | 0.364 | 0.428 | 0.588 | 1583.0 |
 | `no_cache` | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.0 |
 
 ## Held-Out Structure-Generalization Probe
@@ -54,29 +54,31 @@ These recurrence-heavy families are evaluated and reported but excluded from the
 
 | Policy | agent_trace_branching token hit | cyclic_working_set_pressure token hit | Probe block hit | Probe churn per 1k |
 |---|---:|---:|---:|---:|
-| `oracle_future_reuse` | 0.250 | 0.805 | 0.517 | 2283.9 |
-| `candidate` | 0.227 | 0.782 | 0.468 | 170.1 |
-| `tinylfu_lru` | 0.240 | 0.590 | 0.396 | 2670.1 |
-| `vllm_apc` | 0.245 | 0.717 | 0.445 | 2347.2 |
-| `future_reuse_heuristic` | 0.245 | 0.800 | 0.511 | 2546.9 |
-| `depth_prefer_shallow` | 0.243 | 0.786 | 0.486 | 2705.7 |
-| `prefix_anchor` | 0.244 | 0.670 | 0.434 | 2959.2 |
-| `prefix_fanout` | 0.244 | 0.786 | 0.486 | 2695.3 |
-| `cost_aware_lru` | 0.243 | 0.602 | 0.403 | 3123.3 |
-| `lfu` | 0.244 | 0.661 | 0.436 | 2940.1 |
-| `lru` | 0.243 | 0.590 | 0.398 | 3147.6 |
-| `tenant_fair_lru` | 0.243 | 0.590 | 0.398 | 3147.6 |
-| `recompute_greedy` | 0.244 | 0.781 | 0.496 | 2643.2 |
+| `oracle_future_reuse` | 0.402 | 0.894 | 0.640 | 2967.0 |
+| `candidate` | 0.376 | 0.881 | 0.612 | 28.6 |
+| `tinylfu_lru` | 0.382 | 0.764 | 0.558 | 3107.6 |
+| `future_reuse_heuristic` | 0.394 | 0.892 | 0.634 | 3375.9 |
+| `prefix_anchor` | 0.389 | 0.847 | 0.605 | 3602.4 |
+| `vllm_apc` | 0.393 | 0.802 | 0.557 | 3205.7 |
+| `lfu` | 0.391 | 0.865 | 0.617 | 3515.6 |
+| `cost_aware_lru` | 0.388 | 0.824 | 0.594 | 3678.8 |
+| `tenant_fair_lru` | 0.388 | 0.811 | 0.588 | 3702.3 |
+| `lru` | 0.388 | 0.811 | 0.588 | 3702.3 |
+| `depth_prefer_shallow` | 0.386 | 0.883 | 0.619 | 3577.3 |
+| `prefix_fanout` | 0.390 | 0.883 | 0.621 | 3506.9 |
+| `recompute_greedy` | 0.391 | 0.888 | 0.631 | 3447.0 |
 | `no_cache` | 0.000 | 0.000 | 0.000 | 0.0 |
 
 ## Notes
 
-- Candidate `scoring_fn_complexity` in this report is `473`; the combined score includes that penalty.
-- Candidate score breakdown: mean workload `68.642`, minimum-workload contribution `13.685`, churn cost `10.283`, fairness cost `7.663`, and complexity cost `6.593`.
+- Candidate `scoring_fn_complexity` in this report is `609`; the combined score includes that penalty.
+- Candidate score breakdown: mean workload `75.044`, minimum-workload contribution `20.251`, churn cost `2.230`, underfill cost `0.804`, fairness cost `7.663`, and complexity cost `7.968`.
+- `policy_underfill_rate` is policy bypass multiplied by unused mean capacity. It penalizes deliberate bypass while cache space remains idle, without charging natural underfill when the policy admits every miss.
 - `future_reuse_heuristic` and `oracle_future_reuse` use simulator-provided future knowledge and are not deployable. The former is count-weighted; the latter is a Belady-style next-use oracle constrained by the simulator's leaf-only eviction model.
 - `tinylfu_lru` admits only shallow or repeated blocks, so it often trades lower hit rate for lower churn.
 - `vllm_apc` models vLLM automatic prefix caching: it admits only full blocks and uses LRU eviction with deepest-prefix tie-breaking. The simulator supplies active-reference pinning and legal leaf filtering.
+- `sglang_radix_attention` models SGLang RadixAttention's default radix-cache replacement behavior: retain prefixes at cache-page boundaries and recursively evict the least-recently-used zero-reference leaf. The simulator treats every modeled block-tree node as a cacheable radix unit, making it behaviorally equivalent to `lru`; capacity remains fixed-block-counted rather than token/page-counted, and cache-aware scheduling and attention kernels are out of scope. It remains registered as a selectable reference but is excluded from default comparisons. See https://arxiv.org/html/2312.07104v1 and the pinned SGLang source at https://github.com/sgl-project/sglang/tree/52f221cce088abc998fa9d3812416a45ee0e2e25/python/sglang/srt/mem_cache.
 - `prefix_anchor` is a deployable structural anchor baseline; `prefix_fanout` is a simpler descendant-count protection baseline.
 - Priority-burst weighted hit is reported from `priority_burst_recovery`; priority-noise token hit checks the opposite failure mode, where high priority does not imply reuse.
 - Request p10, worst-quarter hit, token-weighted admission waste, admission token utility, and avoidable eviction are aggregated across the validation panel.
-- This report uses `request_count=96`, seeds `(11, 23, 37)`, and capacity sweep `(24, 48)`.
+- This report uses `request_count=96`, seeds `(11, 23, 37)`, and capacity sweep `(48, 96)`.

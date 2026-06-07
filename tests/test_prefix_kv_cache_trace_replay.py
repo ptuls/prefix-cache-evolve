@@ -97,9 +97,7 @@ def test_trace_calibration_reports_mix_depth_bursts_and_lengths(tmp_path) -> Non
     assert calibration["workload_mix"]["chat"]["count"] == 2
     assert calibration["prefix_depth_blocks"]["p95"] == 3.0
     assert calibration["output_length_tokens"]["p99"] == 256.0
-    assert calibration["arrival_bursts"][
-        "same_bucket_request_fraction"
-    ] == pytest.approx(2 / 3)
+    assert calibration["arrival_bursts"]["same_bucket_request_fraction"] == pytest.approx(2 / 3)
 
 
 def test_trace_loader_rejects_raw_prompt_content_even_when_nested(tmp_path) -> None:
@@ -191,9 +189,7 @@ def test_replay_report_runs_deployable_baselines_on_fixed_trace(tmp_path) -> Non
     assert payload["request_count"] == 3
     assert payload["capacity_blocks"] == [4]
     assert payload["results"]["candidate"]["success"] is True
-    assert (
-        payload["results"]["lru"]["split_metrics"]["validation"]["token_hit_rate"] > 0.0
-    )
+    assert payload["results"]["lru"]["split_metrics"]["validation"]["token_hit_rate"] > 0.0
 
 
 def _record(

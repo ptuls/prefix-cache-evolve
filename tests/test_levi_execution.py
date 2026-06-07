@@ -1,14 +1,24 @@
 """Regression tests for the Levi workflow adapter."""
 
+import asyncio
+import json
 import pickle
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
+
 from prefix_cache_evolve.evaluator_entry import EvaluatorResult
+from prefix_cache_evolve.workflow.configuration import ConfigLoader
 from prefix_cache_evolve.workflow.execution import (
     LeviRunner,
     LeviScoreFunction,
+    _configured_reasoning_max_tokens,
+    _enable_levi_code_feedback_support,
+    _enable_levi_degenerate_centroid_fallback,
+    _enable_levi_reasoning_completion_support,
     _module_name_from_package_path,
+    _persist_levi_paradigm_candidate_capture,
 )
 
 
@@ -63,9 +73,7 @@ def test_levi_score_function_fails_closed_when_source_is_required() -> None:
     score_fn = LeviScoreFunction(evaluate_factory, evaluate_source)
 
     assert score_fn(lambda: None) == {
-        "score": 0.0,
-        "combined_score": 0.0,
-        "complexity_source_missing": 1.0,
+        "error": "candidate source unavailable; source-aware evaluation is required"
     }
 
 
@@ -76,6 +84,228 @@ def test_levi_score_function_clamps_invalid_score() -> None:
     score_fn = LeviScoreFunction(evaluate_factory)
 
     assert score_fn(lambda: None) == {"score": 0.0}
+
+
+def test_levi_score_function_forwards_failure_feedback() -> None:
+    def evaluate_factory(_factory):
+        return EvaluatorResult(
+            metrics={
+                "combined_score": 2.0,
+                "success": True,
+                "per_example_scores": [0.2, 0.8],
+                "feedback_per_example": ["weak first workload", "weak second workload"],
+            },
+            artifacts={},
+        )
+
+    score_fn = LeviScoreFunction(evaluate_factory)
+
+    assert score_fn(lambda: None) == {
+        "score": 2.0,
+        "combined_score": 2.0,
+        "success": 1.0,
+        "per_example_scores": [0.2, 0.8],
+        "feedback_per_example": ["weak first workload", "weak second workload"],
+    }
+
+
+def test_levi_score_function_rejects_unsuccessful_results() -> None:
+    def evaluate_factory(_factory):
+        return EvaluatorResult(
+            metrics={
+                "combined_score": -2001.0,
+                "success": False,
+                "error": "candidate rejected by static policy checks",
+            },
+            artifacts={},
+        )
+
+    score_fn = LeviScoreFunction(evaluate_factory)
+
+    assert score_fn(lambda: None) == {"error": "candidate rejected by static policy checks"}
+
+
+def test_levi_code_adapter_accepts_failure_feedback() -> None:
+    from levi.artifacts.code import CodeAdapter
+    from levi.core import Program
+    from levi.prompts import ProgramWithScore
+
+    config = SimpleNamespace(
+        function_signature="def build_candidate():",
+        problem_description="test problem",
+        prompt_overrides={},
+    )
+    adapter = CodeAdapter(config)
+    parents = [ProgramWithScore(Program(content="def build_candidate():\n    pass\n"))]
+
+    _enable_levi_code_feedback_support()
+    prompt = adapter.build_mutation_prompt(
+        parents,
+        feedback=["weak validation workload validation/agentic_replan"],
+    )
+
+    assert "## Evaluator Feedback" in prompt
+    assert "weak validation workload validation/agentic_replan" in prompt
+    assert prompt.index("## Evaluator Feedback") < prompt.index("## Output")
+
+
+def test_levi_duplicate_init_behaviors_fall_back_to_distinct_uniform_centroids(monkeypatch) -> None:
+    from levi.behavior import BehaviorExtractor
+    from levi.pool.cvt_map_elites import CVTMAPElitesPool
+
+    extractor = BehaviorExtractor(ast_features=["cyclomatic_complexity"])
+    pool = CVTMAPElitesPool(extractor, n_centroids=4, data_driven_centroids=True)
+    monkeypatch.setattr(
+        pool,
+        "_init_cvt_centroids",
+        lambda: np.array([[0.1], [0.3], [0.7], [0.9]]),
+    )
+    duplicate_behaviors = [np.array([0.5])] * 4
+
+    _enable_levi_degenerate_centroid_fallback()
+    n_centroids, labels = pool.set_centroids_from_data(duplicate_behaviors, n_centroids=4)
+
+    assert n_centroids == 4
+    assert len(np.unique(pool._centroids, axis=0)) == 4
+    assert len(np.unique(labels)) == 1
+    assert np.array_equal(pool._mins, np.zeros(1))
+    assert np.array_equal(pool._maxs, np.ones(1))
+
+
+def test_compact_paradigm_shift_override_reaches_levi_prompt() -> None:
+    from levi.artifacts.code import CodeAdapter
+    from levi.config import BudgetConfig, LeviConfig
+    from levi.core import EvaluationResult, Program
+
+    run_config = ConfigLoader().load(Path("configs/prefix_kv_cache.yaml"))
+    levi_config = LeviConfig(
+        problem_description="test problem",
+        function_signature="def build_candidate():",
+        seed_program="def build_candidate():\n    pass\n",
+        score_fn=lambda _factory: {"score": 1.0},
+        budget=BudgetConfig(evaluations=2),
+        prompt_overrides=run_config.evolve_kwargs()["prompt_overrides"],
+    )
+    adapter = CodeAdapter(levi_config)
+    representative = SimpleNamespace(
+        program=Program(content=levi_config.seed_program),
+        result=EvaluationResult(scores={"score": 1.0}),
+    )
+
+    prompt = adapter.build_paradigm_shift_prompt([(0, representative)], n_evaluations=1)
+
+    assert "Target at most 550 effective AST nodes" in prompt
+    assert "candidates above 650 effective AST nodes are rejected" in prompt
+    assert "COMPLETELY DIFFERENT strategy" not in prompt
+
+
+def test_configured_reasoning_max_tokens_prefers_paradigm_budget() -> None:
+    config = SimpleNamespace(
+        punctuated_equilibrium={"max_tokens": 12_000},
+        pipeline={"max_tokens": 6_000},
+    )
+
+    assert _configured_reasoning_max_tokens(config) == 12_000
+
+
+def test_levi_reasoning_calls_use_configured_token_budget(monkeypatch) -> None:
+    from levi.pipeline.state import PipelineState
+
+    calls = []
+
+    async def fake_acompletion(
+        _self,
+        client_spec,
+        *,
+        prompt,
+        temperature=None,
+        max_tokens=None,
+        timeout=None,
+        **extras,
+    ):
+        calls.append(
+            {
+                "client_spec": client_spec,
+                "prompt": prompt,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "timeout": timeout,
+                **extras,
+            }
+        )
+        return "response"
+
+    monkeypatch.setattr(PipelineState, "acompletion", fake_acompletion)
+    _enable_levi_reasoning_completion_support(12_000)
+    state = object.__new__(PipelineState)
+
+    result = asyncio.run(
+        state.acompletion(
+            "openai/gpt-5.5",
+            prompt=[{"role": "user", "content": "write code"}],
+            max_tokens=4_096,
+            reasoning_effort="medium",
+        )
+    )
+
+    assert result == "response"
+    assert calls[0]["max_tokens"] == 12_000
+    assert calls[0]["reasoning_effort"] == "medium"
+
+
+def test_levi_non_reasoning_calls_keep_requested_token_budget(monkeypatch) -> None:
+    from levi.pipeline.state import PipelineState
+
+    calls = []
+
+    async def fake_acompletion(_self, _client_spec, *, max_tokens=None, **_kwargs):
+        calls.append(max_tokens)
+        return "response"
+
+    monkeypatch.setattr(PipelineState, "acompletion", fake_acompletion)
+    _enable_levi_reasoning_completion_support(12_000)
+    state = object.__new__(PipelineState)
+
+    asyncio.run(state.acompletion("openai/gpt-5.4-mini", prompt="mutate", max_tokens=4_096))
+
+    assert calls == [4_096]
+
+
+def test_persist_levi_paradigm_candidate_capture_keeps_rejected_code(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import prefix_cache_evolve.workflow.execution as execution
+
+    monkeypatch.setattr(execution, "_levi_paradigm_candidate_output_dir", tmp_path)
+    _persist_levi_paradigm_candidate_capture(
+        {
+            "trigger_evaluation": 20,
+            "budget_progress": 0.2,
+            "candidates": [
+                {
+                    "code": "def build_candidate():\n    return None\n",
+                    "result": {"score": 72.5, "combined_score": 72.5},
+                },
+                {
+                    "code": "def build_candidate():\n    return 1\n",
+                    "result": {"error": "candidate rejected"},
+                },
+            ],
+        },
+        {
+            "paradigm_accepted": False,
+            "evaluations": [{"source": "paradigm_shift", "accepted": False}],
+        },
+    )
+
+    event_dir = tmp_path / "eval_0020"
+    assert (event_dir / "00_paradigm_shift.py").is_file()
+    assert (event_dir / "01_variant.py").is_file()
+    manifest = json.loads((event_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["candidates"][0]["score"] == 72.5
+    assert manifest["candidates"][1]["error"] == "candidate rejected"
+    assert manifest["stats"]["paradigm_accepted"] is False
 
 
 def test_levi_runner_loads_package_evaluator_as_picklable_function() -> None:
@@ -141,9 +371,9 @@ def evaluate_source(source):
 
     assert runner._evaluate_factory(lambda: None).metrics["combined_score"] == 1.0
     assert (
-        runner._evaluate_best_program(
-            "def build_candidate():\n    return None\n"
-        ).metrics["combined_score"]
+        runner._evaluate_best_program("def build_candidate():\n    return None\n").metrics[
+            "combined_score"
+        ]
         == 2.0
     )
 
@@ -151,9 +381,7 @@ def evaluate_source(source):
 def test_levi_runner_records_generated_snapshot_path(tmp_path, monkeypatch) -> None:
     captured = {}
     program_path = tmp_path / "program.py"
-    program_path.write_text(
-        "def build_candidate():\n    return None\n", encoding="utf-8"
-    )
+    program_path.write_text("def build_candidate():\n    return None\n", encoding="utf-8")
 
     def evolve_code(_description, **kwargs):
         captured.update(kwargs)
@@ -190,3 +418,6 @@ def test_levi_runner_records_generated_snapshot_path(tmp_path, monkeypatch) -> N
     output_dir = Path(captured["output_dir"])
     assert result.metadata["levi_output_dir"] == str(output_dir)
     assert result.metadata["levi_snapshot_path"] == str(output_dir / "snapshot.json")
+    assert result.metadata["levi_paradigm_candidates_dir"] == str(
+        output_dir / "paradigm_candidates"
+    )

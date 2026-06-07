@@ -31,9 +31,7 @@ def test_multi_timescale_decay_supports_one_or_many_timescales() -> None:
     assert single.values("key", now=2) == pytest.approx((2.0,))
     assert multiple.observe("key", 4.0, now=0) == (4.0, 4.0)
     assert multiple.values("key", now=2) == pytest.approx((2.0, 4.0 / math.sqrt(2.0)))
-    assert multiple.observe("key", 2.0, now=2) == pytest.approx(
-        (4.0, 2.0 + 4.0 / math.sqrt(2.0))
-    )
+    assert multiple.observe("key", 2.0, now=2) == pytest.approx((4.0, 2.0 + 4.0 / math.sqrt(2.0)))
     assert multiple.combine("key", now=2, weights=(1.0, 0.5)) == pytest.approx(
         5.0 + 2.0 / math.sqrt(2.0)
     )

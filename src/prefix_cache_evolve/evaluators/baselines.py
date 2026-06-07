@@ -22,6 +22,7 @@ class BaselineSpec:
     factory: PolicyFactory
     deployable: bool = True
     requires_future_reuse: bool = False
+    include_in_comparison: bool = True
 
     @property
     def group(self) -> str:
@@ -40,13 +41,19 @@ class BaselineRegistry:
                 raise ValueError(f"duplicate baseline {specification.name!r}")
             self._specifications[specification.name] = specification
 
-    def factories(self, *, include_reporting: bool = False) -> dict[str, PolicyFactory]:
+    def factories(
+        self,
+        *,
+        include_reporting: bool = False,
+        comparison_only: bool = False,
+    ) -> dict[str, PolicyFactory]:
         """Return baseline factories eligible for the requested evaluation."""
 
         return {
             name: specification.factory
             for name, specification in self._specifications.items()
-            if include_reporting or specification.deployable
+            if (include_reporting or specification.deployable)
+            and (not comparison_only or specification.include_in_comparison)
         }
 
     def group(self, name: str) -> str:
@@ -66,14 +73,10 @@ class _BasePolicy:
     def on_request_start(self, request: RequestInfo, now: int) -> None:
         return None
 
-    def on_cache_hit(
-        self, block: PrefixBlockInfo, request: RequestInfo, now: int
-    ) -> None:
+    def on_cache_hit(self, block: PrefixBlockInfo, request: RequestInfo, now: int) -> None:
         return None
 
-    def on_cache_miss(
-        self, block: PrefixBlockInfo, request: RequestInfo, now: int
-    ) -> None:
+    def on_cache_miss(self, block: PrefixBlockInfo, request: RequestInfo, now: int) -> None:
         return None
 
 
@@ -87,6 +90,17 @@ class _NoCachePolicy(_BasePolicy):
 
 class _LRUPolicy(_BasePolicy):
     def score_admission(self, block: PrefixBlockInfo, now: int) -> float:
+        return 1.0
+
+    def score_eviction(self, block: PrefixBlockInfo, now: int) -> float:
+        return float(now - block.last_accessed_at)
+
+
+class _SGLangRadixAttentionPolicy(_BasePolicy):
+    """Models SGLang RadixAttention's default radix-cache replacement policy."""
+
+    def score_admission(self, block: PrefixBlockInfo, now: int) -> float:
+        del block, now
         return 1.0
 
     def score_eviction(self, block: PrefixBlockInfo, now: int) -> float:
@@ -173,21 +187,13 @@ class _TinyLFULRUPolicy(_BasePolicy):
     def __init__(self) -> None:
         self._frequency: dict[int, int] = {}
 
-    def on_cache_hit(
-        self, block: PrefixBlockInfo, request: RequestInfo, now: int
-    ) -> None:
+    def on_cache_hit(self, block: PrefixBlockInfo, request: RequestInfo, now: int) -> None:
         del request, now
-        self._frequency[block.prefix_hash] = (
-            self._frequency.get(block.prefix_hash, 0) + 1
-        )
+        self._frequency[block.prefix_hash] = self._frequency.get(block.prefix_hash, 0) + 1
 
-    def on_cache_miss(
-        self, block: PrefixBlockInfo, request: RequestInfo, now: int
-    ) -> None:
+    def on_cache_miss(self, block: PrefixBlockInfo, request: RequestInfo, now: int) -> None:
         del request, now
-        self._frequency[block.prefix_hash] = (
-            self._frequency.get(block.prefix_hash, 0) + 1
-        )
+        self._frequency[block.prefix_hash] = self._frequency.get(block.prefix_hash, 0) + 1
 
     def score_admission(self, block: PrefixBlockInfo, now: int) -> float:
         del now
@@ -205,15 +211,11 @@ class _TenantFairLRUPolicy(_BasePolicy):
         self._tenant_hit_tokens: dict[int, int] = {}
         self._tenant_seen_tokens: dict[int, int] = {}
 
-    def on_cache_hit(
-        self, block: PrefixBlockInfo, request: RequestInfo, now: int
-    ) -> None:
+    def on_cache_hit(self, block: PrefixBlockInfo, request: RequestInfo, now: int) -> None:
         del request, now
         self._record_observation(block, hit=True)
 
-    def on_cache_miss(
-        self, block: PrefixBlockInfo, request: RequestInfo, now: int
-    ) -> None:
+    def on_cache_miss(self, block: PrefixBlockInfo, request: RequestInfo, now: int) -> None:
         del request, now
         self._record_observation(block, hit=False)
 
@@ -286,6 +288,14 @@ def baseline_lru_blocks(
     return _LRUPolicy()
 
 
+def baseline_sglang_radix_attention(
+    capacity_blocks: int, block_size_tokens: int, seed: int | None = None
+) -> PrefixKVPolicy:
+    """Return SGLang's admit-all, zero-reference leaf-LRU radix-cache policy."""
+
+    return _SGLangRadixAttentionPolicy()
+
+
 def baseline_vllm_apc(
     capacity_blocks: int, block_size_tokens: int, seed: int | None = None
 ) -> PrefixKVPolicy:
@@ -356,6 +366,11 @@ BASELINE_REGISTRY = BaselineRegistry(
     (
         BaselineSpec("no_cache", baseline_no_cache),
         BaselineSpec("lru", baseline_lru_blocks),
+        BaselineSpec(
+            "sglang_radix_attention",
+            baseline_sglang_radix_attention,
+            include_in_comparison=False,
+        ),
         BaselineSpec("vllm_apc", baseline_vllm_apc),
         BaselineSpec("lfu", baseline_lfu_blocks),
         BaselineSpec("depth_prefer_shallow", baseline_depth_prefer_shallow),
@@ -380,5 +395,10 @@ BASELINE_REGISTRY = BaselineRegistry(
     )
 )
 
-BASELINES = BASELINE_REGISTRY.factories()
-REPORTING_BASELINES = BASELINE_REGISTRY.factories(include_reporting=True)
+ALL_BASELINES = BASELINE_REGISTRY.factories()
+ALL_REPORTING_BASELINES = BASELINE_REGISTRY.factories(include_reporting=True)
+BASELINES = BASELINE_REGISTRY.factories(comparison_only=True)
+REPORTING_BASELINES = BASELINE_REGISTRY.factories(
+    include_reporting=True,
+    comparison_only=True,
+)

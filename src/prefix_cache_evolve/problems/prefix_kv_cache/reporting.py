@@ -295,8 +295,10 @@ def _report_notes(
         ),
         (
             f"- This report uses `request_count={config.request_count}`, seeds "
-            f"`{config.seeds}`, and capacity sweep "
-            f"`{config.effective_capacity_blocks()}`."
+            f"`{config.seeds}`, block size `{config.block_size_tokens}`, block-capacity "
+            f"sweep `{config.effective_capacity_blocks()}`, token-capacity sweep "
+            f"`{config.effective_capacity_tokens()}`, and canonical synthetic workload "
+            f"token granularity `{config.effective_workload_token_granularity()}`."
         ),
     ]
     if quick:

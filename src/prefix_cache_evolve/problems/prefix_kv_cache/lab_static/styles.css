@@ -225,13 +225,13 @@ select:focus {
 .policy-list {
   display: grid;
   gap: 6px;
-  max-height: 235px;
+  max-height: 330px;
   overflow-y: auto;
   padding-right: 3px;
 }
 
 .policy-option {
-  align-items: center;
+  align-items: start;
   border: 1px solid transparent;
   border-radius: 8px;
   cursor: pointer;
@@ -241,6 +241,11 @@ select:focus {
   padding: 7px;
 }
 
+.policy-option.promoted {
+  background: rgba(184, 242, 113, 0.045);
+  border-color: rgba(184, 242, 113, 0.18);
+}
+
 .policy-option:hover {
   background: rgba(255, 255, 255, 0.025);
   border-color: var(--line);
@@ -248,10 +253,16 @@ select:focus {
 
 .policy-option input {
   accent-color: var(--lime);
-  margin: 0;
+  margin: 2px 0 0;
 }
 
-.policy-option strong {
+.policy-title-row {
+  align-items: center;
+  display: flex;
+  gap: 5px;
+}
+
+.policy-title-row strong {
   display: block;
   font-size: 10px;
   overflow: hidden;
@@ -259,16 +270,39 @@ select:focus {
   white-space: nowrap;
 }
 
-.policy-option small {
+.policy-badge {
+  background: rgba(184, 242, 113, 0.12);
+  border: 1px solid rgba(184, 242, 113, 0.2);
+  border-radius: 999px;
+  color: var(--lime);
+  flex: 0 0 auto;
+  font-size: 6px;
+  letter-spacing: 0.08em;
+  padding: 2px 4px;
+  text-transform: uppercase;
+}
+
+.policy-option .policy-status {
   color: var(--faint);
   display: block;
   font-size: 8px;
+  letter-spacing: 0.06em;
   margin-top: 2px;
+  text-transform: uppercase;
+}
+
+.policy-option .policy-description {
+  color: var(--muted);
+  display: block;
+  font-size: 8px;
+  line-height: 1.35;
+  margin-top: 4px;
 }
 
 .policy-option i {
   border-radius: 50%;
   height: 6px;
+  margin-top: 3px;
   width: 6px;
 }
 
@@ -404,6 +438,10 @@ select:focus {
   width: 100%;
 }
 
+.summary-card.promoted {
+  border-color: rgba(184, 242, 113, 0.22);
+}
+
 .summary-card .rank {
   color: var(--faint);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -416,6 +454,18 @@ select:focus {
 .summary-card h3 {
   font-size: 13px;
   margin-bottom: 18px;
+}
+
+.benchmark-score {
+  color: var(--muted);
+  font-size: 8px;
+  margin: -11px 0 14px;
+  text-transform: uppercase;
+}
+
+.benchmark-score strong {
+  color: var(--lime);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .primary-stat {

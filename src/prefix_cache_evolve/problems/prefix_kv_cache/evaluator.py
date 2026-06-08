@@ -18,14 +18,18 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import (
 )
 from prefix_cache_evolve.evaluators.prefix_kv_cache import (
     EvaluatorConfig,
-    PrefixKVCacheEvaluator,
     scoring_fn_complexity,
 )
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import (
     active_evaluator_config,
 )
+from prefix_cache_evolve.problems.prefix_kv_cache.specialist import (
+    candidate_evaluator,
+    candidate_exported_names,
+    eviction_only_source_violations,
+)
 
-DEFAULT_CONFIG = EvaluatorConfig(capacity_sweep_blocks=(48, 96))
+DEFAULT_CONFIG = EvaluatorConfig(capacity_sweep_blocks=(24, 48))
 _UNSUPPORTED_CALLBACKS = {
     "on_request_end",
     "on_block_admitted",
@@ -35,6 +39,10 @@ _FUTURE_REUSE_FIELDS = {
     "estimated_future_reuse",
     "estimated_next_reuse_distance",
 }
+_SANITIZED_REQUEST_FIELDS = {
+    "prompt_tokens",
+    "request_type",
+}
 _WORKLOAD_FEEDBACK_KEYS = (
     "token_hit_rate",
     "block_hit_rate",
@@ -43,10 +51,15 @@ _WORKLOAD_FEEDBACK_KEYS = (
     "wasted_admission_token_rate",
     "admission_token_utility",
     "avoidable_eviction_rate",
+    "short_reuse_after_eviction_missed_token_rate",
     "policy_underfill_rate",
     "cache_churn_per_1k",
 )
 _MAX_FEEDBACK_WORKLOADS = 5
+_MUTATION_GUIDANCE_WORKLOADS = (
+    "train/agentic_tool_workflows",
+    "validation/stochastic_serving_mix",
+)
 
 
 def evaluate(program_path: str) -> EvaluatorResult:
@@ -123,16 +136,16 @@ def _static_rejection(source: str, complexity: int) -> EvaluatorResult | None:
     if not violations:
         return None
     summary = "; ".join(violations)
+    repair_feedback = _static_repair_feedback(violations, complexity, config)
+    repair_summary = " ".join(repair_feedback)
     return _error_result(
-        f"candidate rejected by static policy checks: {summary}",
+        f"Repair before retry: {repair_summary} Static policy violations: {summary}.",
         {
             "error_type": "StaticPolicyViolation",
             "error_message": summary,
             "violations": list(violations),
-            "suggestion": (
-                "Make one compact deployable change; remove defensive, unsupported, "
-                "future-knowledge, and unused code."
-            ),
+            "repair_feedback": list(repair_feedback),
+            "suggestion": repair_summary,
         },
     )
 
@@ -145,16 +158,21 @@ def _candidate_source_violations(
     """Return deterministic static violations for one candidate source."""
 
     violations = []
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        line = f" at line {exc.lineno}" if exc.lineno is not None else ""
+        return (f"syntax error{line}: {exc.msg}",)
+
     if config.max_candidate_complexity is not None and complexity > config.max_candidate_complexity:
         violations.append(
             f"effective complexity {complexity} exceeds limit {config.max_candidate_complexity}"
         )
+    if config.candidate_policy_surface == "eviction_only":
+        violations.extend(eviction_only_source_violations(source))
+    elif config.candidate_policy_surface != "full":
+        violations.append(f"unknown candidate policy surface {config.candidate_policy_surface}")
     if not config.reject_unsupported_source_patterns:
-        return tuple(violations)
-
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
         return tuple(violations)
 
     imported_names: dict[str, str] = {}
@@ -185,6 +203,8 @@ def _candidate_source_violations(
                 violations.append(f"unsupported callback {node.name}")
         elif isinstance(node, ast.Attribute) and node.attr in _FUTURE_REUSE_FIELDS:
             violations.append(f"future-knowledge field {node.attr} is not deployable")
+        elif isinstance(node, ast.Attribute) and node.attr in _SANITIZED_REQUEST_FIELDS:
+            violations.append(f"sanitized request field {node.attr} is not a policy signal")
         elif isinstance(node, ast.ExceptHandler) and _is_broad_exception_handler(node):
             violations.append("broad exception handlers are not allowed")
         elif isinstance(node, ast.Call):
@@ -193,8 +213,77 @@ def _candidate_source_violations(
                 violations.append(f"{called_name}() is not allowed in candidate code")
             elif called_name == "MultiTimescaleDecay":
                 violations.extend(_multi_timescale_decay_violations(node))
+            elif called_name == "threshold_excess":
+                violations.extend(_threshold_excess_violations(node))
 
     return tuple(dict.fromkeys(violations))
+
+
+def _static_repair_feedback(
+    violations: tuple[str, ...],
+    complexity: int,
+    config: EvaluatorConfig,
+) -> tuple[str, ...]:
+    """Translate static violations into concise, actionable repair instructions."""
+
+    repairs = []
+    for violation in violations:
+        if violation.startswith("syntax error"):
+            repairs.append(f"Fix the reported {violation} before changing policy behavior.")
+        elif violation.startswith("effective complexity"):
+            limit = config.max_candidate_complexity
+            excess = max(1, complexity - limit) if limit is not None else 1
+            repairs.append(
+                f"Delete or simplify at least {excess} effective AST nodes; do not add a "
+                "replacement subsystem."
+            )
+        elif violation.startswith("unused import "):
+            repairs.append(f"Delete {violation.removeprefix('unused import ')} from the imports.")
+        elif violation.startswith("unsupported callback "):
+            repairs.append(f"Delete {violation.removeprefix('unsupported callback ')} entirely.")
+        elif violation.startswith("eviction-only specialist"):
+            repairs.append(
+                "Keep only top-level imports, constants, optional helper functions, and "
+                "score_eviction(block, now, frequency, priority)."
+            )
+        elif violation.startswith("eviction-only score_eviction must be undecorated"):
+            repairs.append(
+                "Remove decorators from score_eviction so exploration and promotion "
+                "execute the same function body."
+            )
+        elif violation.startswith("eviction-only score_eviction"):
+            repairs.append("Use exactly def score_eviction(block, now, frequency, priority):.")
+        elif violation.startswith("future-knowledge field "):
+            field = violation.removeprefix("future-knowledge field ").removesuffix(
+                " is not deployable"
+            )
+            repairs.append(
+                f"Remove {field}; use observed recurrence, subtree, gap, or pressure fields instead."
+            )
+        elif violation.startswith("sanitized request field "):
+            field = violation.removeprefix("sanitized request field ").removesuffix(
+                " is not a policy signal"
+            )
+            repairs.append(
+                f"Remove {field}; it is deliberately scrubbed before candidate callbacks."
+            )
+        elif violation == "getattr() is not allowed in candidate code":
+            repairs.append("Replace getattr() with direct access to one documented field.")
+        elif violation == "id() is not allowed in candidate code":
+            repairs.append("Replace id(block) with block.prefix_hash or block.block_id.")
+        elif violation == "broad exception handlers are not allowed":
+            repairs.append("Remove the broad try/except and use the documented contract directly.")
+        elif violation == "star imports are not allowed":
+            repairs.append("Replace the star import with only the top-level names actually used.")
+        elif violation.startswith("MultiTimescaleDecay"):
+            repairs.append(
+                "Use MultiTimescaleDecay((4.0, 20.0), max_keys=64) or delete the primitive."
+            )
+        elif violation.startswith("threshold_excess"):
+            repairs.append("Call threshold_excess(value, threshold) with exactly two arguments.")
+        else:
+            repairs.append(f"Remove or repair this violation: {violation}.")
+    return tuple(dict.fromkeys(repairs))
 
 
 def _is_broad_exception_handler(handler: ast.ExceptHandler) -> bool:
@@ -236,6 +325,24 @@ def _multi_timescale_decay_violations(node: ast.Call) -> tuple[str, ...]:
         width = len(half_lives.elts)
         if not 1 <= width <= 8:
             violations.append("MultiTimescaleDecay requires one to eight half-lives")
+    return tuple(violations)
+
+
+def _threshold_excess_violations(node: ast.Call) -> tuple[str, ...]:
+    """Validate the compact stateless threshold primitive's call shape."""
+
+    violations = []
+    if len(node.args) > 2:
+        violations.append("threshold_excess accepts at most two positional arguments")
+    keyword_names = {keyword.arg for keyword in node.keywords}
+    if None in keyword_names or keyword_names - {"value", "threshold"}:
+        violations.append("threshold_excess accepts only value and threshold arguments")
+    positional_names = set(("value", "threshold")[: len(node.args)])
+    if positional_names & keyword_names:
+        violations.append("threshold_excess arguments must be supplied only once")
+    supplied_names = positional_names | {name for name in keyword_names if name is not None}
+    if supplied_names != {"value", "threshold"}:
+        violations.append("threshold_excess requires value and threshold")
     return tuple(violations)
 
 
@@ -298,7 +405,11 @@ def _evaluate_program_path(
     splits: tuple[str, ...],
 ) -> tuple[PrefixEvaluationResult | None, dict | None]:
     try:
-        factory = load_candidate_factory(str(program_path))
+        config = active_evaluator_config(DEFAULT_CONFIG)
+        factory = load_candidate_factory(
+            str(program_path),
+            exported_names=candidate_exported_names(config),
+        )
     except Exception as exc:
         return None, _load_error_artifacts(exc)
     return _evaluate_factory(factory, complexity, splits)
@@ -310,7 +421,11 @@ def _evaluate_source(
     splits: tuple[str, ...],
 ) -> tuple[PrefixEvaluationResult | None, dict | None]:
     try:
-        factory = load_candidate_factory_from_source(str(source))
+        config = active_evaluator_config(DEFAULT_CONFIG)
+        factory = load_candidate_factory_from_source(
+            str(source),
+            exported_names=candidate_exported_names(config),
+        )
     except Exception as exc:
         return None, _load_error_artifacts(exc)
     return _evaluate_factory(factory, complexity, splits)
@@ -321,20 +436,45 @@ def _evaluate_factory(
     complexity: int,
     splits: tuple[str, ...],
 ) -> tuple[PrefixEvaluationResult, None]:
-    evaluator = PrefixKVCacheEvaluator(
-        active_evaluator_config(DEFAULT_CONFIG),
-        splits=splits,
-    )
+    evaluator = candidate_evaluator(active_evaluator_config(DEFAULT_CONFIG), splits=splits)
     return evaluator(factory, scoring_fn_complexity=complexity), None  # type: ignore[arg-type]
 
 
 def _load_error_artifacts(exc: Exception) -> dict:
+    repair_feedback = _load_repair_feedback(exc)
     return {
         "error_type": type(exc).__name__,
         "error_message": str(exc),
         "full_traceback": traceback.format_exc(),
-        "suggestion": _load_suggestion(),
+        "repair_feedback": list(repair_feedback),
+        "suggestion": " ".join(repair_feedback),
     }
+
+
+def _load_repair_feedback(exc: Exception) -> tuple[str, ...]:
+    """Return a concise repair instruction for a candidate load failure."""
+
+    if isinstance(exc, SyntaxError):
+        line = f" at line {exc.lineno}" if exc.lineno is not None else ""
+        return (f"Fix the syntax error{line}: {exc.msg}.",)
+    if isinstance(exc, AttributeError) and "candidate module must expose" in str(exc):
+        config = active_evaluator_config(DEFAULT_CONFIG)
+        if config.candidate_policy_surface == "eviction_only":
+            return (
+                "Define score_eviction(block, now, frequency, priority) as the only candidate "
+                "entry point.",
+            )
+        return (
+            "Define build_candidate(capacity_blocks, block_size_tokens, seed=None) and return "
+            "the policy object.",
+        )
+    if isinstance(exc, (ImportError, ModuleNotFoundError)):
+        return ("Use only available top-level standard-library or documented primitive imports.",)
+    if isinstance(exc, NameError):
+        return ("Add the missing top-level import or remove the undefined name.",)
+    if isinstance(exc, TypeError):
+        return ("Match the documented factory and primitive call signatures exactly.",)
+    return (_load_suggestion(),)
 
 
 def _success_result(
@@ -342,11 +482,39 @@ def _success_result(
     *,
     include_hidden: bool = False,
 ) -> EvaluatorResult:
+    config = active_evaluator_config(DEFAULT_CONFIG)
+    complexity_cost = float(prefix_result.score_breakdown.get("complexity_cost", 0.0))
+    raw_score = float(prefix_result.combined_score) + complexity_cost
+    if config.search_score_mode == "combined":
+        search_score = float(prefix_result.combined_score)
+    elif config.search_score_mode == "raw_before_complexity":
+        search_score = raw_score
+    else:
+        return _error_result(
+            f"unknown search score mode {config.search_score_mode}",
+            {
+                "error_type": "ConfigurationError",
+                "error_message": f"unknown search score mode {config.search_score_mode}",
+            },
+        )
     metrics = {
-        "combined_score": prefix_result.combined_score,
+        "combined_score": search_score,
+        "charged_combined_score": prefix_result.combined_score,
+        "raw_score_before_complexity": raw_score,
         "success": prefix_result.success,
         "invalid_fraction": prefix_result.invalid_fraction,
     }
+    repair_feedback: tuple[str, ...] = ()
+    if not prefix_result.success:
+        invalid_reasons = tuple(
+            dict.fromkeys(
+                trial.invalid_reason for trial in prefix_result.trials if trial.invalid_reason
+            )
+        )
+        metrics["error"] = "candidate failed runtime policy validation: " + (
+            "; ".join(invalid_reasons) or "unknown invalid candidate result"
+        )
+        repair_feedback = _runtime_repair_feedback(invalid_reasons)
     for split, split_metrics in prefix_result.split_metrics.items():
         if split == "hidden" and not include_hidden:
             continue
@@ -355,8 +523,13 @@ def _success_result(
                 metrics[f"{split}_{key}"] = value
     metrics.update(_selection_feedback_metrics(prefix_result))
     per_example_scores, feedback_per_example = _workload_failure_feedback(prefix_result)
+    promotion_feedback = _promotion_complexity_feedback(prefix_result)
+    if promotion_feedback is not None:
+        per_example_scores.append(0.0)
+        feedback_per_example.append(promotion_feedback)
     metrics["per_example_scores"] = per_example_scores
     metrics["feedback_per_example"] = feedback_per_example
+    metrics.update(_promotion_eligibility_metrics(prefix_result))
 
     artifacts = {
         "split_metrics": {
@@ -373,13 +546,45 @@ def _success_result(
         "candidate_metadata": prefix_result.candidate_metadata,
         "score_breakdown": prefix_result.score_breakdown,
     }
+    if repair_feedback:
+        artifacts["repair_feedback"] = list(repair_feedback)
+        artifacts["suggestion"] = " ".join(repair_feedback)
     return EvaluatorResult(metrics=metrics, artifacts=artifacts)
+
+
+def _runtime_repair_feedback(invalid_reasons: tuple[str, ...]) -> tuple[str, ...]:
+    """Translate runtime policy-contract failures into focused repair instructions."""
+
+    repairs = []
+    for reason in invalid_reasons:
+        if reason.startswith("policy must implement "):
+            method = reason.removeprefix("policy must implement ")
+            repairs.append(f"Implement {method} with the documented signature.")
+        elif reason.startswith("factory raised "):
+            repairs.append(
+                "Fix build_candidate so it accepts capacity_blocks, block_size_tokens, and seed "
+                "and returns the policy object."
+            )
+        elif " returned non-numeric score" in reason or " returned non-finite score" in reason:
+            method = reason.split(maxsplit=1)[0]
+            repairs.append(f"Make {method} return one finite int or float on every path.")
+        elif " raised " in reason:
+            method = reason.split(maxsplit=1)[0]
+            repairs.append(
+                f"Repair {method} using only documented fields; remove guessed attributes and "
+                "fallback logic."
+            )
+        elif reason.startswith("candidate used "):
+            repairs.append("Delete or bound candidate state to stay within the memory limit.")
+        else:
+            repairs.append(f"Repair this runtime contract failure: {reason}.")
+    return tuple(dict.fromkeys(repairs))
 
 
 def _selection_feedback_metrics(
     prefix_result: PrefixEvaluationResult,
 ) -> dict[str, float]:
-    """Flatten selection diagnostics so Levi can retain and expose them."""
+    """Flatten selection and targeted guidance diagnostics for Levi."""
 
     metrics = {
         f"selection_{key}": float(value)
@@ -406,20 +611,55 @@ def _selection_feedback_metrics(
         )
 
     for workload, values in prefix_result.workload_metrics.items():
-        if not workload.startswith("validation/"):
+        if not (workload.startswith("validation/") or workload in _MUTATION_GUIDANCE_WORKLOADS):
             continue
-        workload_name = workload.removeprefix("validation/").replace("-", "_")
+        split, workload_name = workload.split("/", maxsplit=1)
+        workload_name = workload_name.replace("-", "_")
         for key in _WORKLOAD_FEEDBACK_KEYS:
             value = values.get(key)
             if isinstance(value, (int, float, bool)):
-                metrics[f"validation_workload_{workload_name}_{key}"] = float(value)
+                metrics[f"{split}_workload_{workload_name}_{key}"] = float(value)
     return metrics
+
+
+def _promotion_eligibility_metrics(
+    prefix_result: PrefixEvaluationResult,
+) -> dict[str, float | bool]:
+    """Report whether an exploratory candidate clears the final complexity gate."""
+
+    config = active_evaluator_config(DEFAULT_CONFIG)
+    limit = config.promotion_max_candidate_complexity
+    complexity = int(prefix_result.candidate_metadata.get("scoring_fn_complexity", 0))
+    if limit is None:
+        return {"promotion_eligible": True, "promotion_complexity_excess": 0.0}
+    excess = max(0, complexity - limit)
+    return {
+        "promotion_eligible": excess == 0,
+        "promotion_complexity_excess": float(excess),
+    }
+
+
+def _promotion_complexity_feedback(prefix_result: PrefixEvaluationResult) -> str | None:
+    """Ask exploratory over-cap candidates to preserve behavior while simplifying."""
+
+    config = active_evaluator_config(DEFAULT_CONFIG)
+    limit = config.promotion_max_candidate_complexity
+    complexity = int(prefix_result.candidate_metadata.get("scoring_fn_complexity", 0))
+    if limit is None or complexity <= limit:
+        return None
+    excess = complexity - limit
+    return (
+        f"Exploration-only candidate: behavioral evaluation completed at effective complexity "
+        f"{complexity}, but final promotion requires at most {limit}. Delete or simplify at least "
+        f"{excess} effective AST nodes while preserving the eviction behavior and score gains. "
+        "Do not replace the removed code with another subsystem."
+    )
 
 
 def _workload_failure_feedback(
     prefix_result: PrefixEvaluationResult,
 ) -> tuple[list[float], list[str]]:
-    """Build focused validation-only diagnostics for Levi mutation prompts."""
+    """Build focused non-quarantined diagnostics for Levi mutation prompts."""
 
     breakdown = prefix_result.score_breakdown
     summary = (
@@ -434,9 +674,10 @@ def _workload_failure_feedback(
         f"fairness={breakdown.get('fairness_cost', 0.0):.3f}, "
         f"complexity={breakdown.get('complexity_cost', 0.0):.3f})."
     )
-    diagnostics = []
+    diagnostics: dict[str, tuple[float, str]] = {}
     for workload, values in prefix_result.workload_metrics.items():
-        if not workload.startswith("validation/"):
+        is_target = workload in _MUTATION_GUIDANCE_WORKLOADS
+        if not (workload.startswith("validation/") or is_target):
             continue
         token_hit = _metric(values, "token_hit_rate")
         worst_quarter = _metric(values, "worst_quarter_token_hit_rate")
@@ -456,30 +697,43 @@ def _workload_failure_feedback(
                 - min(0.2, churn / 10_000.0),
             ),
         )
-        diagnostics.append(
+        role = "Targeted mutation-guidance workload" if is_target else "Weak validation workload"
+        diagnostics[workload] = (
+            quality,
             (
-                quality,
-                (
-                    f"{summary} Weak validation workload {workload}: "
-                    f"token_hit={token_hit:.3f}, "
-                    f"block_hit={_metric(values, 'block_hit_rate'):.3f}, "
-                    f"worst_quarter={worst_quarter:.3f}, "
-                    f"request_p10={request_p10:.3f}, "
-                    f"waste={waste:.3f}, "
-                    f"utility={_metric(values, 'admission_token_utility'):.3f}, "
-                    f"avoidable_eviction={avoidable:.3f}, "
-                    f"churn_per_1k={churn:.1f}, "
-                    f"underfill={_metric(values, 'policy_underfill_rate'):.3f}. "
-                    "Make one focused change that improves this workload without "
-                    "worsening cache economics or complexity."
-                ),
-            )
+                f"{summary} {role} {workload}: "
+                f"token_hit={token_hit:.3f}, "
+                f"block_hit={_metric(values, 'block_hit_rate'):.3f}, "
+                f"worst_quarter={worst_quarter:.3f}, "
+                f"request_p10={request_p10:.3f}, "
+                f"waste={waste:.3f}, "
+                f"utility={_metric(values, 'admission_token_utility'):.3f}, "
+                f"avoidable_eviction={avoidable:.3f}, "
+                f"short_reuse_after_eviction="
+                f"{_metric(values, 'short_reuse_after_eviction_missed_token_rate'):.3f}, "
+                f"churn_per_1k={churn:.1f}, "
+                f"underfill={_metric(values, 'policy_underfill_rate'):.3f}. "
+                "Make one focused change that improves this workload without "
+                "worsening cache economics or complexity."
+            ),
         )
 
-    weakest = sorted(diagnostics, key=lambda item: item[0])[:_MAX_FEEDBACK_WORKLOADS]
+    selected = [
+        diagnostics[workload]
+        for workload in _MUTATION_GUIDANCE_WORKLOADS
+        if workload in diagnostics
+    ]
+    remaining = [
+        diagnostic
+        for workload, diagnostic in diagnostics.items()
+        if workload not in _MUTATION_GUIDANCE_WORKLOADS
+    ]
+    selected.extend(
+        sorted(remaining, key=lambda item: item[0])[: _MAX_FEEDBACK_WORKLOADS - len(selected)]
+    )
     return (
-        [quality for quality, _ in weakest],
-        [feedback for _, feedback in weakest],
+        [quality for quality, _ in selected],
+        [feedback for _, feedback in selected],
     )
 
 
@@ -502,6 +756,12 @@ def _error_result(message: str, artifacts: dict) -> EvaluatorResult:
 
 
 def _load_suggestion() -> str:
+    config = active_evaluator_config(DEFAULT_CONFIG)
+    if config.candidate_policy_surface == "eviction_only":
+        return (
+            "Define `score_eviction(block, now, frequency, priority)` as a top-level "
+            "function and return one finite numeric eviction rank."
+        )
     return (
         "Ensure the module defines `candidate_factory(capacity_blocks, "
         "block_size_tokens, seed=None)` or `build_candidate(...)` and returns an "

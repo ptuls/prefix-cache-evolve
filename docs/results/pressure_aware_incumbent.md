@@ -1,78 +1,95 @@
 # Pressure-Aware Incumbent Promotion
 
-The original 300-evaluation compact-policy search completed 298 recorded evaluations
-and produced the pressure-aware policy. Focused follow-up refinements then promoted
-the current deployable incumbent:
+> The promotion score below was measured on the historical 8-token,
+> 48/96-block discovery verifier. The operative production-oriented verifier
+> now uses 16-token blocks and 24/48-block tiers; see
+> [`block_size_robustness.md`](block_size_robustness.md).
+
+The promoted deployable incumbent is the exact winner from the retained historical
+discovery search:
 
 - Stable source:
   `src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py`
-- Latest 300-budget run: `runs/20260607_231959_613687`
-- Retained latest-run artifact: `artifacts/prefix_kv_cache_runs/20260607T135914Z`
-- Reported latest-run model cost: `$3.608`
-- Selection score: `76.630`, up from the compact seed's `74.321`
-- Aggregate probe score: `75.002`
-- Hidden score: `9.691`
-- Strongest latest-run mutation: `76.121`
+- Evolution run: `runs/20260608_093834_121786`
+- Retained run artifact: `artifacts/prefix_kv_cache_runs/20260608T001616Z`
+- Reported model cost: `$4.558`
+- Selection score: `77.230`
+- Raw selection before complexity: `85.462`
+- Charged aggregate probe score: `74.785`
+- Hidden score: `11.158`
+- Agentic surrogate-to-probe tripwire: pass, `0.1025 < 0.12`
 
-## Policy Change
+## Discovered Change
 
-The promoted policy preserves the compact seed's decayed frequency, priority,
-structural-value, recompute-cost, and eviction terms. It adds:
+The winner makes exactly one semantic change to the prior `76.630` incumbent:
 
-- a decayed global admission-pressure signal derived from recent cache pressure and
-  miss rate;
-- stronger admission resistance for deep, low-evidence blocks during pressure bursts;
-- last-access-gap reuse evidence;
-- priority credit only on observed cache hits rather than all misses from a
-  high-priority request.
-- recurrence-gated depth relief: a first deep miss retains the full depth penalty,
-  while repeated observed accesses progressively relax it.
-- a small extra admission throttle once decayed pressure exceeds `0.8`.
+```python
+- 0.18 * max(0.0, 1.0 - priority) * max(0.0, self._admission_pressure - 0.25)
+```
 
-The winning mutation refined the strongest GPT-5.5 paradigm by accumulating admission
-pressure across requests with a four-step half-life and reducing the pressure penalty
-for blocks that already have reuse or priority evidence. The follow-up diagnosis
-separated agent-trace underfill from stochastic-mix noise: the former needed a narrow
-escape from categorical deep rejection, while the latter still needed persistent
-pressure throttling. The latest 300-budget run independently refined the sustained
-pressure coefficient to `0.22`; composing it with recurrence-gated depth relief
-produced the strongest current policy.
+The term begins throttling low-priority admissions under moderate persistent pressure,
+earlier than the existing all-block threshold at pressure `0.8`. It preserves
+priority-backed blocks while reducing noisy admission and cache turnover.
 
-## Adjudication
+## Exact Ablation
 
-| Candidate | Selection | Raw before cx | Mean | Min contrib. | Churn cost | Underfill cost | Cx | Probe | Agent hit | Cyclic hit | Hidden |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| Compact seed | 74.321 | 80.914 | 73.991 | 21.293 | 5.925 | 0.781 | 473 | 47.425 | 0.2295 | 0.8272 | -1.951 |
-| Original pressure-aware policy | 76.069 | 84.185 | 74.870 | 20.251 | 2.464 | 0.810 | 624 | 54.543 | 0.2476 | 0.8812 | 6.527 |
-| Recurrence-aware refinement | 76.480 | 84.241 | 75.066 | 20.244 | 2.615 | 0.791 | 588 | 74.602 | 0.3756 | 0.8812 | 7.266 |
-| Current composed incumbent | 76.630 | 84.598 | 75.044 | 20.251 | 2.230 | 0.804 | 609 | 75.002 | 0.3760 | 0.8812 | 9.691 |
+The saved seed and winner differ only by the discovered fourth admission term, making
+the run's seed-versus-winner decomposition an exact controlled ablation.
 
-The current policy improves selection, aggregate probe, agent-trace behavior, and
-hidden score. Relative to the original pressure-aware policy, capacity-48/96 token
-hit rises from `0.654`/`0.658` to `0.674`/`0.687`; validation churn falls from
-`164.2` to `148.7` per 1,000 requests. Simplifying fixed decay parameters offsets
-the added focused terms, keeping effective complexity at `609` versus `624`.
+| Candidate | Selection | Raw before cx | Churn cost | Validation churn/1k | Cx | Probe | Hidden |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Without fourth term | 76.630 | 84.598 | 2.230 | 148.7 | 609 | 75.002 | 9.691 |
+| Promoted incumbent | 77.230 | 85.462 | 1.391 | 92.7 | 636 | 74.785 | 11.158 |
 
-The latest diversified run completed 298 recorded evaluations with one occupied
-archive cell, 254 errors, and two accepted improvements at evaluations 84 and 235.
-Its best-score curve rose from `76.069` to `76.115` and finally `76.121`. Because
-data-driven initialization retained only duplicate valid seed variants, the archive
-never reached the three occupied cells required by punctuated equilibrium.
+Removing the term loses `0.600` charged selection and `0.863` raw selection, forfeits
+a `37.6%` reduction in validation churn, and loses `1.467` hidden points. The term is
+load-bearing, not incidental.
 
-## Remaining Weakness
+## Probe Adjudication
 
-Agent-trace performance improves but remains behind robust replacement baselines:
+The `-0.217` charged aggregate-probe delta is not a quiet behavioral regression.
+Raw probe score improves by `0.047`; the entire charged decline comes from the
+`0.264` larger source-complexity cost.
 
-| Policy | Agent trace token hit | Cyclic pressure token hit |
-|---|---:|---:|
-| Pressure-aware incumbent | 0.376 | 0.881 |
-| TinyLFU-LRU | 0.382 | 0.764 |
-| vLLM APC | 0.393 | 0.802 |
-| Oracle future reuse | 0.402 | 0.894 |
+| Probe component | Delta with term |
+|---|---:|
+| Raw probe before complexity | +0.047 |
+| Mean workload score | +0.012 |
+| Minimum-workload contribution | +0.024 |
+| Churn cost | -0.013 |
+| Underfill cost | +0.002 |
+| Agent-trace token hit | +0.000046 |
+| Agent-trace churn per 1k | -1.736 |
+| Cyclic token hit | 0.000 |
+| Cyclic churn per 1k | 0.000 |
+| Complexity cost | +0.264 |
 
-The incumbent now approaches robust replacement baselines on irregular branching
-agent traces while using far less churn: `57.3` per 1,000 agent-trace requests versus
-thousands for the replacement baselines. Stochastic serving mixes remain the clearest
-selection weakness, but sustained-pressure throttling reduces their churn from
-`277.8` to `191.0` per 1,000 requests and token-weighted admission waste from `0.647`
-to `0.573`.
+The tripwire also passes, so promotion does not weaken held-out probe discipline.
+Full details are retained in
+[`priority_aware_pressure_ablation.md`](priority_aware_pressure_ablation.md).
+
+## Methodological Result
+
+The important outcome is not only the `77.230` score. Earlier seed-locked searches
+optimized the combined scalar from one archive region and could not structurally
+retain specialist steps for the two remaining weak workloads. The successful run
+changed the search process without leaking the held-out probe:
+
+- mutation feedback always included the non-quarantined `agentic_tool_workflows`
+  surrogate and selectable `stochastic_serving_mix`;
+- agentic hit and underfill plus stochastic-mix hit became specialist archive
+  dimensions;
+- the held-out `agent_trace_branching` probe remained reporting-only;
+- an automatic surrogate-to-probe divergence tripwire guarded against proxy drift.
+
+That search discovered one compact pressure term that improves both targeted
+weaknesses operationally:
+
+| Workload | Churn/1k before | Churn/1k after | Waste before | Waste after |
+|---|---:|---:|---:|---:|
+| Agentic tool workflows | 142.4 | 74.7 | 0.104 | 0.044 |
+| Stochastic serving mix | 191.0 | 164.9 | 0.573 | 0.556 |
+
+The result supports held-out-faithful diagnostics and specialist archive dimensions as
+a practical way to escape seed-locked scalar-search basins while preserving final
+probe quarantine.

@@ -30,6 +30,7 @@ classifiers = [
 ]
 dependencies = [
   "loguru>=0.7",
+  "pydantic>=2.10,<3",
   "pyyaml>=6.0",
 ]
 
@@ -51,6 +52,8 @@ repository = "https://github.com/ptuls/prefix-cache-evolve"
 [project.scripts]
 prefix-cache-evolve = "prefix_cache_evolve.problems.prefix_kv_cache.runner:main"
 prefix-cache-ablate-structured = "prefix_cache_evolve.tools.ablate_structured:main"
+prefix-cache-analyze-eviction = "prefix_cache_evolve.tools.analyze_eviction:main"
+prefix-cache-analyze-reasoning-kv = "prefix_cache_evolve.tools.analyze_reasoning_kv:main"
 prefix-cache-lab = "prefix_cache_evolve.problems.prefix_kv_cache.lab:main"
 prefix-cache-tune-compact = "prefix_cache_evolve.tools.tune_compact:main"
 
@@ -73,6 +76,8 @@ packages = ["src/prefix_cache_evolve"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "configs/prefix_kv_cache.yaml" = "prefix_cache_evolve/configs/prefix_kv_cache.yaml"
+"configs/prefix_kv_cache_discovery.yaml" = "prefix_cache_evolve/configs/prefix_kv_cache_discovery.yaml"
+"configs/prefix_kv_cache_eviction_specialist.yaml" = "prefix_cache_evolve/configs/prefix_kv_cache_eviction_specialist.yaml"
 "configs/prefix_kv_trace_schema.json" = "prefix_cache_evolve/configs/prefix_kv_trace_schema.json"
 
 [tool.pytest.ini_options]

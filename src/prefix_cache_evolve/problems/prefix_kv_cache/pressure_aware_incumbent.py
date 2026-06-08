@@ -59,6 +59,7 @@ class CompactReusePolicy:
             - depth_penalty / max(1.0, 0.75 + 0.25 * frequency)
             - pressure_penalty
             - persistent_pressure_penalty
+            - 0.18 * max(0.0, 1.0 - priority) * max(0.0, self._admission_pressure - 0.25)
         )
 
     def score_eviction(self, block, now):

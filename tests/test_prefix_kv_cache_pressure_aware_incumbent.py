@@ -105,3 +105,20 @@ def test_persistent_pressure_strengthens_throttle_above_threshold() -> None:
     persistent_pressure_score = policy.score_admission(block, now=0)
 
     assert threshold_score - persistent_pressure_score > low_pressure_score - threshold_score
+
+
+def test_moderate_pressure_disproportionately_throttles_low_priority_admissions() -> None:
+    policy = CompactReusePolicy(1, 4)
+    low_priority = _block()
+    high_priority = _block()
+    high_priority.prefix_hash = 8
+    policy.on_cache_hit(high_priority, _request(priority=2), now=0)
+
+    policy._admission_pressure = 0.25
+    low_at_threshold = policy.score_admission(low_priority, now=0)
+    high_at_threshold = policy.score_admission(high_priority, now=0)
+    policy._admission_pressure = 0.75
+    low_under_pressure = policy.score_admission(low_priority, now=0)
+    high_under_pressure = policy.score_admission(high_priority, now=0)
+
+    assert low_at_threshold - low_under_pressure > high_at_threshold - high_under_pressure

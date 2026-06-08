@@ -1,14 +1,134 @@
 # Prefix Cache Evolve
 
-`prefix-cache-evolve` is a standalone research benchmark for designing and
-evaluating admission and eviction policies for LLM prefix KV caches. It combines
-a deterministic prefix-tree simulator, a multi-workload verifier, deployable and
-future-knowledge baselines, trace replay, and a Levi-driven code-evolution loop.
+Can LLM-guided program evolution discover better online prefix KV-cache
+admission and eviction heuristics than hand-written baselines?
+
+Prefix KV caches avoid repeated prefill work when requests share prompt
+prefixes. That matters for agentic systems, tool use, multi-turn sessions, and
+templated serving workloads, but limited capacity makes cache admission and
+eviction a consequential online decision. A policy must preserve reusable
+prefixes without causing excessive churn, unfairness, or unused capacity.
+
+`prefix-cache-evolve` is a reproducible benchmark and policy-search harness for
+studying that decision. It combines a deterministic prefix-tree simulator,
+strong deployable and future-knowledge baselines, diverse synthetic workloads,
+trace replay, and an LLM-guided code-evolution loop.
+
+## Research Questions
+
+1. Can program evolution produce deployable online policies that beat strong
+   hand-written baselines?
+2. Which online signals are genuinely useful: recurrence, subtree value,
+   admission pressure, tenant or session metadata, or priority?
+3. Which workload families and diagnostics expose overfitting or quiet
+   regressions?
+4. Can evolved policies transfer across cache geometries and from synthetic
+   workloads to production trace replay?
+
+The repo tests these questions with fixed multi-seed workload panels, strong
+deployable baselines, held-out probes, hidden final-adjudication workloads,
+cache-geometry sweeps, trace replay, and controlled ablations.
+
+## Answers So Far
+
+- **Program evolution can find competitive deployable policies.** On the
+  historical discovery verifier, the promoted policy scores `77.230`, ahead of
+  TinyLFU-LRU at `70.362`, the vLLM APC-style approximation at `60.178`, and LRU
+  at `51.186`.
+- **Admission pressure and online structural context have been more useful than
+  broad recurrence machinery.** Decayed pressure sharply reduced churn; broad
+  explicit recurrence terms hurt, while a narrow recurrence-backed exception
+  helped deep agentic reuse.
+- **Specialized workloads catch failures that an aggregate score hides.**
+  Agentic branching, stochastic serving mixes, and eviction-regret diagnostics
+  exposed policies that looked promising before admission regressions or
+  workload-specific weaknesses were examined.
+- **Transfer remains the main unresolved question.** On the current
+  production-oriented 16-token verifier, the incumbent narrowly trails
+  TinyLFU-LRU, and no public production trace is yet part of the headline
+  comparison.
+
+> This is not a drop-in replacement for vLLM, SGLang, TensorRT-LLM, or another
+> serving stack's cache management. It is a research benchmark and policy-search
+> harness for studying online prefix-cache heuristics under controlled workloads.
+
+## Headline Result
+
+On the historical 8-token discovery verifier, the promoted pressure-aware
+evolved policy scores `77.230`. It beats every deployable baseline in the
+comparison, including TinyLFU-LRU, the benchmark's vLLM APC-style approximation,
+and LRU, while still trailing the reporting-only future-reuse oracle.
+
+| Policy | Type | Combined score | Churn / 1k | Notes |
+|---|---|---:|---:|---|
+| Oracle future reuse | Reporting-only | 97.074 | 43.9 | Not deployable |
+| Pressure-aware incumbent | Deployable | 77.230 | 92.7 | Promoted evolved policy |
+| TinyLFU-LRU | Deployable | 70.362 | 161.1 | Strong admission baseline |
+| vLLM APC-style | Deployable | 60.178 | 807.9 | Behavioral approximation |
+| LRU | Deployable | 51.186 | 1385.0 | Generic baseline |
+
+Search provenance for the retained `77.230` result:
+
+| Search budget | Evaluations completed | Models used | Levi-reported model cost | Wall time |
+|---:|---:|---|---:|---:|
+| 300 evaluations | 298 | GPT-5.4-mini for mutations and variants; GPT-5.5 for diverse seeds and paradigm shifts, with medium reasoning | $4.56 | 37.5 min |
+
+The cost above is Levi's reported model/API spend for the retained search run;
+it excludes local verifier compute and development time. The retained local run
+ID is `20260608T001616Z`. Its reported evaluation can be reproduced from the
+[promoted policy](src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py),
+[discovery evaluator config](configs/prefix_kv_cache_discovery.yaml), and
+[committed workload manifest](docs/results/discovery_workload_manifest.json).
+
+That result does not transfer unchanged to every cache geometry. On the current
+production-oriented 16-token verifier, the incumbent scores `62.757` and
+narrowly trails TinyLFU-LRU at `63.548`. The incumbent still has higher
+validation token hit (`0.598` versus `0.580`) and substantially lower churn
+(`168.1` versus `499.0`). Closing that combined-score gap while preserving those
+advantages is an active research target. See the
+[baseline comparison](docs/results/baseline_comparison.md) and
+[block-size robustness report](docs/results/block_size_robustness.md).
+
+## System Overview
+
+![System diagram](assets/system_overview.png)
+
+* **Policy Proposal**: A seed, mutation, incumbent, or baseline cache policy being tested.
+
+* **Candidate Contract**: The required interface: a factory that returns a policy with admission, eviction, and lifecycle callback methods.
+
+* **Policy Evaluation**: Loads the policy, checks it, runs it against workloads, and produces evaluation results.
+
+* **Workload Panel**: Deterministic traffic scenarios used to test cache behavior across different serving patterns.
+
+* **Evaluator Config**: YAML settings for capacity, block size, seeds, workloads, limits, and scoring weights.
+
+* **Prefix KV-Cache Simulator**: Simulates cache state, prefix hits, admissions, evictions, active pins, and capacity pressure.
+
+* **Online Policy Decisions**: The policy’s per-request choices: admit missed blocks, evict resident blocks, and update internal state from callbacks.
+
+* **Trial Metrics**: Raw behavior measurements such as hit rate, churn, underfill, admission waste, fairness, latency proxy, and avoidable evictions.
+
+* **Aggregate Scores**: Combines trial metrics across workloads, seeds, and capacities into overall policy scores.
+
+* **Feedback / Diagnostics**: Explains weaknesses, regressions, static violations, and score costs to guide the next proposal.
+
+* **Reports / Artifacts**: Saved outputs such as baseline comparisons, metrics JSON, run summaries, manifests, and candidate programs.
+
+## Where Collaboration Helps
+
+Use the repo to benchmark a policy against controlled workloads, inspect its
+request-by-request behavior in the interactive lab, or evolve new policies. The
+highest-value contributions are workload models and anonymized trace replays
+that expose real serving failure modes, comparisons against production cache
+managers, and policy ideas that improve agentic trace branching or transfer
+across cache geometries.
 
 ## What Is Included
 
 - A deterministic prefix-cache simulator with root-contiguous hits, leaf-only
-  eviction, active decode pins, forced bypass, and partial blocks.
+  eviction, active decode pins, forced bypass, partial blocks, and an opt-in
+  shared prefix/decode KV-capacity stress mode.
 - Online candidate metadata for recurrence, subtree value, admission pressure,
   miss rate, priority, tenant, and session behavior.
 - Deployable baselines including vLLM APC, SGLang RadixAttention, LRU, LFU,
@@ -23,8 +143,66 @@ future-knowledge baselines, trace replay, and a Levi-driven code-evolution loop.
 - An anonymized metadata-only trace calibration and replay path.
 - Compact and structured policy seeds, a deterministic coefficient tuner, and a
   structured ablation harness.
+- Optional canonical primitives for bounded decay state and compact threshold
+  hinges, with bounded form-aware complexity credits.
 - A Levi adapter that persists the winning program and automatically decomposes
   the strongest generated non-seed mutation.
+
+## Reproducibility
+
+**Policy evaluation is deterministic for the same source, Python environment,
+evaluator config, and deterministic candidate policy. LLM-guided search is not
+expected to reproduce the same mutation sequence or winner.**
+
+The evaluator constructs each synthetic stream with a locally scoped
+`random.Random(actual_seed)`, where `actual_seed` is the configured base seed
+plus a deterministic family-position offset. Prefix IDs use stable
+cryptographic hashes rather than Python's process-randomized `hash()`.
+Capacity sweeps replay the same generated stream at every capacity.
+Candidates receive a separate fixed `policy_seed`, opaque request IDs, a
+normalized request type, and empty prompt-token metadata. Workload-generation
+seeds and descriptive synthetic labels are not candidate-visible.
+
+The `77.230` headline result uses synthetic traffic only. No private or external
+production trace contributes to that score. Its reproducibility inputs are all
+committed:
+
+- Workload generator:
+  [`prefix_kv_cache.py`](src/prefix_cache_evolve/evaluators/prefix_kv_cache.py)
+- Exact historical evaluator settings:
+  [`prefix_kv_cache_discovery.yaml`](configs/prefix_kv_cache_discovery.yaml)
+- Per-stream summaries and SHA-256 fingerprints:
+  [`discovery_workload_manifest.json`](docs/results/discovery_workload_manifest.json)
+- Workload descriptions and failure modes:
+  [`docs/technical_report.tex`](docs/technical_report.tex)
+
+The committed discovery manifest covers 81 ordered request streams and has
+panel fingerprint
+`4607782d231560f5d51c5f0347a789b7b82a7e8ff4d78ec5f1adb576c68d2c8f`.
+It also records the CPython version and workload-generator source hash; the
+repository's committed `uv.lock` pins dependency resolution.
+Recreate it and the headline comparison with:
+
+```bash
+.venv/bin/prefix-cache-evolve \
+  --workload-manifest \
+  --config configs/prefix_kv_cache_discovery.yaml \
+  --workload-manifest-output /tmp/discovery_workload_manifest.json
+diff -u docs/results/discovery_workload_manifest.json /tmp/discovery_workload_manifest.json
+
+.venv/bin/prefix-cache-evolve \
+  --baseline-report \
+  --candidate-program \
+  src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py \
+  --config configs/prefix_kv_cache_discovery.yaml
+```
+
+Production trace replay is a separate, user-supplied path. No canonical public
+production trace or download script is currently included, so trace-replay
+results are not part of the headline comparison. Calibration and replay reports
+record the input file SHA-256; replay reports also record the exact derived
+request-stream SHA-256. A published trace result should include the anonymized
+JSONL or a download script, its hash, and the replay parameters.
 
 ## Candidate Contract
 
@@ -93,20 +271,101 @@ uv pip install 'levi @ git+https://github.com/ttanv/levi.git'
 
 The main configuration is [`configs/prefix_kv_cache.yaml`](configs/prefix_kv_cache.yaml).
 The runner packages a fallback copy so the installed console command can still
-load its default configuration outside a source checkout.
+load its default configuration outside a source checkout. Workflow sections and
+problem-owned evaluator settings are validated by Pydantic before execution, so
+unknown keys and invalid ranges fail when the configuration is loaded.
 
-Full evolution runs target a 20-program initial population: the pressure-aware
-incumbent, four GPT-5.5-generated algorithmically diverse seeds, and three mixed
-variants per seed. Failed seed retries can consume additional evaluations. The
-data-driven archive retains both performance tradeoffs and structural policy
-differences before normal mutation begins.
+Eviction-specific exploration exposes only one candidate function:
+`score_eviction(block, now, frequency, priority)`. The evaluator composes that
+function with frozen admission decisions and lifecycle callbacks from the
+pressure-aware incumbent. Search ranks raw behavior before complexity so
+simplification alone cannot look like eviction progress. Function-only
+candidates may explore up to `1000` effective AST nodes:
+
+```bash
+.venv/bin/prefix-cache-evolve \
+  --iterations 300 \
+  --config configs/prefix_kv_cache_eviction_specialist.yaml \
+  --artifact-output artifacts/prefix_kv_cache_eviction_specialist_runs
+```
+
+The runner automatically uses a function-only eviction seed for this
+configuration. Every saved winner is composed back into the complete incumbent
+and receives a fail-closed `promotion_adjudication.json`. Promotion requires the
+composed deployable source to remain at most `650` effective nodes, strictly
+improve raw selection behavior, and pass selection, eviction-regret, aggregate
+probe, both probe-family, hidden, and agentic-tripwire checks.
+
+A completed 500-budget function-only run improved the raw specialist objective
+from `70.989` to `72.091` and filled all 16 archive cells. Its best function
+composes to `1,011` effective nodes, so it remains exploration-only and does not
+replace the incumbent.
+
+Decision-level follow-up confirms that the specialist is making substantive
+ranking changes: it changes `21.5%` of victims and reduces same-state avoidable
+choices by a net `131` over `5,402` evictions. A one-coefficient descendant
+reweight captures a smaller `+0.168` raw gain at unchanged complexity, but loses
+`0.006` hidden score and therefore also remains unpromoted. See the
+[eviction decision and distillation analysis](docs/results/eviction_policy_analysis.md).
+
+```bash
+.venv/bin/python -m prefix_cache_evolve.tools.analyze_eviction
+```
+
+The shared reasoning-KV robustness panel replays all existing algorithms with
+generated decode KV charged against the same capacity as reusable prefixes. The
+incumbent has the strongest deployable raw behavior, narrowly ahead of vLLM APC,
+but vLLM leads after the framework's incumbent-only complexity charge. The
+incumbent's `77.5%` average decode allocation-failure rate shows that eviction
+alone cannot sustain the synthetic reasoning bursts. See the
+[reasoning decode-KV robustness report](docs/results/reasoning_kv_robustness.md).
+
+```bash
+.venv/bin/python -m prefix_cache_evolve.tools.analyze_reasoning_kv
+```
+
+Main full-policy evolution initializes from the pressure-aware incumbent, requests
+four algorithmically diverse seeds, and requests three mixed variants per accepted
+seed. Failed seed retries can consume additional evaluations, so the exact number of
+scored initialization programs is run-dependent. The data-driven archive retains both
+performance tradeoffs and structural policy differences before normal mutation begins.
+
+The function-only eviction lane instead uses its incumbent-equivalent eviction seed,
+requests six diverse seeds and two variants per accepted seed, and uses a 16-cell
+archive. This is intentionally broader than the earlier specialist run, whose invalid
+full-policy seeds collapsed the archive to three cells.
+
+Mutation prompts reserve guidance slots for the non-quarantined
+`agentic_tool_workflows` surrogate and the selectable `stochastic_serving_mix`
+workload. Fine-grained feedback includes avoidable eviction and short-reuse
+after eviction for each selected workload. Those two eviction-regret metrics,
+agentic hit and underfill, and stochastic-mix hit are also archive dimensions,
+allowing specialist mutations to survive as stepping-stone parents without
+directly optimizing the held-out `agent_trace_branching` probe or changing the
+combined selection scalar.
+
+Static and runtime contract failures carry specific repair instructions into
+Levi's failure summaries. Mutation prompts also include a compact preflight
+checklist for syntax, entry points, documented fields and callbacks, imports,
+and complexity headroom.
+
+Every saved evolution run also writes an agentic surrogate-to-probe tripwire.
+It flags, and fails closed on missing metrics, when the absolute token-hit-rate
+gap between those workloads exceeds `0.12`; the held-out probe remains excluded
+from selection.
 
 ## Interactive Lab
+
+![Prefix Cache Lab demo](assets/prefix_lab.gif)
 
 The Prefix Cache Lab runs selected policies over the same deterministic
 synthetic request stream, then provides request-by-request playback in a local
 browser UI. It compares final rankings, metric trajectories, admissions,
 evictions, latency, and the resident prefix-block state after every request.
+The default production-oriented cache uses 16 tokens per block and 24 blocks,
+for 384 tokens of capacity. Synthetic token streams retain a fixed generation
+granularity, so changing cache block size changes cache chunking without also
+changing the traffic.
 
 ```bash
 .venv/bin/prefix-cache-lab --host 127.0.0.1 --port 8765
@@ -127,9 +386,9 @@ unreferenced leaf. The benchmark treats every modeled block-tree node as a
 cacheable radix unit, making the mapped policy behaviorally equivalent to the
 generic admit-all `lru` baseline. It does not model SGLang's cache-aware
 scheduler or attention kernels. It is a block-tree approximation: the benchmark
-charges capacity in fixed simulator blocks rather than SGLang's token/page-
-It remains selectable in the interactive lab but is excluded from default
-comparisons because it duplicates `lru` under this model.
+charges capacity in fixed simulator blocks rather than SGLang's native token/page
+accounting. It remains selectable in the interactive lab but is excluded from
+default comparisons because it duplicates `lru` under this model.
 
 - Paper: [Efficiently Programming Large Language Models using SGLang](https://arxiv.org/html/2312.07104v1)
 - Pinned SGLang implementation:
@@ -141,6 +400,14 @@ comparisons because it duplicates `lru` under this model.
 ## Reports And Analysis
 
 ```bash
+# Production block-size robustness over identical traffic and fixed
+# 384/768-token capacity tiers.
+.venv/bin/prefix-cache-evolve \
+  --block-size-report \
+  --candidate-program \
+  src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py \
+  --block-size-output docs/results/block_size_robustness.md
+
 # Quarantined recurrence/structure probe.
 .venv/bin/prefix-cache-evolve \
   --probe-report \
@@ -164,8 +431,9 @@ comparisons because it duplicates `lru` under this model.
 .venv/bin/prefix-cache-tune-compact --samples 180 --full-top 12
 ```
 
-Trace replay consumes anonymized request metadata while preserving hidden prompt
-content. See [`configs/prefix_kv_trace_schema.json`](configs/prefix_kv_trace_schema.json).
+Trace replay consumes user-supplied anonymized request metadata while preserving
+hidden prompt content. See
+[`configs/prefix_kv_trace_schema.json`](configs/prefix_kv_trace_schema.json).
 
 ```bash
 .venv/bin/prefix-cache-evolve --calibrate-trace trace.jsonl
@@ -177,21 +445,47 @@ content. See [`configs/prefix_kv_trace_schema.json`](configs/prefix_kv_trace_sch
 
 ## Current Result
 
-The pressure-aware incumbent is the recommended deployable candidate and the
-strongest current search parent. A 300-evaluation compact-policy search improved
-selection from `74.321` to `76.069`; a focused recurrence-gated depth refinement
-then raised selection to `76.480`. Composing that refinement with the persistent
-pressure throttle found by the latest 300-budget run raises selection to `76.630`,
-aggregate probe to `75.002`, and hidden score to `9.691`.
+The promoted pressure-aware incumbent scored `77.230` under the discovery-run
+verifier, which used 8-token blocks and 48/96-block capacity tiers. A controlled
+ablation shows its discovered moderate-pressure penalty for low-priority
+admissions is load-bearing: removing only that term lowers selection to
+`76.630`, restores validation churn from `92.7` to `148.7` per 1,000 requests,
+and lowers hidden score from `11.158` to `9.691`. Its charged aggregate probe
+score is `0.217` lower only because the complexity charge rises by `0.264`; raw
+probe behavior improves by `0.047`, agent churn falls, cyclic behavior is
+unchanged, and the agentic surrogate-to-probe tripwire passes at `0.1025 < 0.12`.
 
-Key retained findings:
+The operative production-oriented verifier now uses 16-token blocks and
+24/48-block tiers, preserving the same 384/768-token capacities. Use
+`--block-size-report` to compare 8-, 16-, and 32-token physical blocks over
+identical synthetic token streams before promoting a new incumbent. On this
+panel, the incumbent scores `62.757` at 16 tokens and narrowly trails
+TinyLFU-LRU's `63.548` only after the incumbent's `8.232` complexity charge.
+Before complexity, the incumbent scores `70.989`; it also has higher validation
+token hit (`0.598` versus `0.580`) and much lower churn (`168.1` versus `499.0`).
+At 32 tokens the incumbent leads the compared policies, but all combined scores
+are negative, indicating that coarse granularity is a poor fit for these
+irregular-prefix workloads.
+
+The larger methodological result is that held-out-faithful surrogate diagnostics
+in mutation feedback, paired with specialist dimensions in the behavior archive,
+let search discover one compact pressure term that improves both targeted
+weaknesses. Earlier seed-locked runs optimizing only the combined scalar could
+not structurally retain and combine those specialist steps. The exact policy
+is committed alongside the exact discovery evaluator config and workload
+fingerprints linked in [Reproducibility](#reproducibility).
+
+Supporting findings:
 
 - Decayed admission pressure sharply reduces churn while preserving useful
   reused branches.
 - A small extra throttle above sustained admission pressure `0.8` reduces noisy
   churn without suppressing recurrence-backed deep admissions.
+- Penalizing low-priority admissions once pressure exceeds `0.25` cuts validation
+  churn by `37.6%` with nearly unchanged validation, agent-trace, and cyclic hit
+  rates. The apparent aggregate-probe regression is entirely complexity accounting.
 - Recurrence-gated depth relief raises agent-trace hit rate from `0.230` to
-  `0.376` while holding agent-trace churn to `57.3` per 1,000 requests.
+  `0.376` while holding agent-trace churn to `55.6` per 1,000 requests.
 - Broad explicit recurrence terms increased churn in the structured ablation;
   recurrence evidence is useful when it only relaxes an otherwise categorical
   depth penalty.
@@ -202,10 +496,13 @@ Key retained findings:
 
 See:
 
-- [`docs/architecture.md`](docs/architecture.md)
 - [`docs/technical_report.tex`](docs/technical_report.tex)
 - [`docs/results/baseline_comparison.md`](docs/results/baseline_comparison.md)
+- [`docs/results/block_size_robustness.md`](docs/results/block_size_robustness.md)
+- [`docs/results/eviction_policy_analysis.md`](docs/results/eviction_policy_analysis.md)
 - [`docs/results/pressure_aware_incumbent.md`](docs/results/pressure_aware_incumbent.md)
+- [`docs/results/priority_aware_pressure_ablation.md`](docs/results/priority_aware_pressure_ablation.md)
+- [`docs/results/reasoning_kv_robustness.md`](docs/results/reasoning_kv_robustness.md)
 - [`docs/results/structured_ablation.md`](docs/results/structured_ablation.md)
 - [`docs/results/three_run_adjudication.md`](docs/results/three_run_adjudication.md)
 

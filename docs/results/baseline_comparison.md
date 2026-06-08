@@ -2,11 +2,21 @@
 
 Candidate: `src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py`
 
+> Historical discovery-verifier result: 8-token blocks and 48/96-block
+> capacity tiers. The operative production-oriented verifier now uses
+> 16-token blocks and 24/48-block tiers; see
+> [`block_size_robustness.md`](block_size_robustness.md).
+
 Command:
 
 ```bash
-.venv/bin/python -m prefix_cache_evolve.problems.prefix_kv_cache.runner --baseline-report --candidate-program src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py --config /Users/paul.t/work/prefix-cache-evolve/configs/prefix_kv_cache.yaml
+.venv/bin/python -m prefix_cache_evolve.problems.prefix_kv_cache.runner --baseline-report --candidate-program src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py --config configs/prefix_kv_cache_discovery.yaml
 ```
+
+The synthetic access streams are summarized and fingerprinted in
+[`discovery_workload_manifest.json`](discovery_workload_manifest.json). The
+panel SHA-256 is
+`4607782d231560f5d51c5f0347a789b7b82a7e8ff4d78ec5f1adb576c68d2c8f`.
 
 ## Headline
 
@@ -15,7 +25,7 @@ The candidate clears the deployable credibility baselines in this capacity sweep
 | Rank | Policy | Group | Combined score | Capacity 48 token hit | Capacity 96 token hit | Worst-quarter hit | Request p10 hit | Token-wtd admission waste | Admission token utility | Avoidable eviction | Priority-burst weighted hit | Priority-noise token hit | Policy underfill | Churn per 1k |
 |---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | 1 | `oracle_future_reuse` | reporting-only/future-knowledge | 97.074 | 0.683 | 0.745 | 0.548 | 0.326 | 0.017 | 13.164 | 0.000 | 0.780 | 0.602 | 0.141 | 43.9 |
-| 2 | `candidate` | deployable | 76.630 | 0.674 | 0.687 | 0.521 | 0.324 | 0.421 | 7.944 | 0.065 | 0.766 | 0.596 | 0.067 | 148.7 |
+| 2 | `candidate` | deployable | 77.230 | 0.674 | 0.687 | 0.521 | 0.324 | 0.407 | 8.143 | 0.074 | 0.766 | 0.596 | 0.070 | 92.7 |
 | 3 | `tinylfu_lru` | deployable | 70.362 | 0.618 | 0.690 | 0.457 | 0.299 | 0.357 | 8.062 | 0.108 | 0.722 | 0.575 | 0.112 | 161.1 |
 | 4 | `future_reuse_heuristic` | reporting-only/future-knowledge | 69.857 | 0.669 | 0.740 | 0.542 | 0.323 | 0.706 | 2.440 | 0.005 | 0.776 | 0.602 | 0.000 | 1197.3 |
 | 5 | `prefix_anchor` | deployable | 60.199 | 0.639 | 0.724 | 0.507 | 0.321 | 0.705 | 2.298 | 0.110 | 0.735 | 0.578 | 0.000 | 1363.3 |
@@ -34,7 +44,7 @@ The candidate clears the deployable credibility baselines in this capacity sweep
 | Policy | phase_shift_prompts token hit | multi_tenant_skew token hit | hotset_cold_scan token hit | concurrent_long_generation token hit | stochastic_serving_mix token hit | rolling_template_versions token hit | heavy_tailed_prefix_lengths token hit | priority_burst_recovery token hit | priority_one_off_noise token hit | tenant_phase_shift_cycles token hit | Validation block hit | Validation churn per 1k |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | `oracle_future_reuse` | 0.794 | 0.822 | 0.644 | 0.924 | 0.600 | 0.847 | 0.697 | 0.519 | 0.602 | 0.561 | 0.663 | 43.9 |
-| `candidate` | 0.794 | 0.802 | 0.638 | 0.890 | 0.467 | 0.847 | 0.631 | 0.506 | 0.596 | 0.525 | 0.625 | 148.7 |
+| `candidate` | 0.794 | 0.802 | 0.638 | 0.890 | 0.467 | 0.847 | 0.631 | 0.506 | 0.596 | 0.519 | 0.625 | 92.7 |
 | `tinylfu_lru` | 0.759 | 0.757 | 0.614 | 0.854 | 0.474 | 0.814 | 0.587 | 0.478 | 0.575 | 0.529 | 0.603 | 161.1 |
 | `future_reuse_heuristic` | 0.794 | 0.822 | 0.644 | 0.924 | 0.574 | 0.847 | 0.656 | 0.516 | 0.602 | 0.543 | 0.654 | 1197.3 |
 | `prefix_anchor` | 0.794 | 0.812 | 0.620 | 0.924 | 0.495 | 0.847 | 0.593 | 0.490 | 0.578 | 0.509 | 0.627 | 1363.3 |
@@ -55,7 +65,7 @@ These recurrence-heavy families are evaluated and reported but excluded from the
 | Policy | agent_trace_branching token hit | cyclic_working_set_pressure token hit | Probe block hit | Probe churn per 1k |
 |---|---:|---:|---:|---:|
 | `oracle_future_reuse` | 0.402 | 0.894 | 0.640 | 2967.0 |
-| `candidate` | 0.376 | 0.881 | 0.612 | 28.6 |
+| `candidate` | 0.376 | 0.881 | 0.612 | 27.8 |
 | `tinylfu_lru` | 0.382 | 0.764 | 0.558 | 3107.6 |
 | `future_reuse_heuristic` | 0.394 | 0.892 | 0.634 | 3375.9 |
 | `prefix_anchor` | 0.389 | 0.847 | 0.605 | 3602.4 |
@@ -71,8 +81,8 @@ These recurrence-heavy families are evaluated and reported but excluded from the
 
 ## Notes
 
-- Candidate `scoring_fn_complexity` in this report is `609`; the combined score includes that penalty.
-- Candidate score breakdown: mean workload `75.044`, minimum-workload contribution `20.251`, churn cost `2.230`, underfill cost `0.804`, fairness cost `7.663`, and complexity cost `7.968`.
+- Candidate `scoring_fn_complexity` in this report is `636`; the combined score includes that penalty.
+- Candidate score breakdown: mean workload `75.009`, minimum-workload contribution `20.341`, churn cost `1.391`, underfill cost `0.835`, fairness cost `7.663`, and complexity cost `8.232`.
 - `policy_underfill_rate` is policy bypass multiplied by unused mean capacity. It penalizes deliberate bypass while cache space remains idle, without charging natural underfill when the policy admits every miss.
 - `future_reuse_heuristic` and `oracle_future_reuse` use simulator-provided future knowledge and are not deployable. The former is count-weighted; the latter is a Belady-style next-use oracle constrained by the simulator's leaf-only eviction model.
 - `tinylfu_lru` admits only shallow or repeated blocks, so it often trades lower hit rate for lower churn.

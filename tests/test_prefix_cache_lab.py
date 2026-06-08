@@ -34,11 +34,22 @@ def test_lab_catalog_exposes_candidates_baselines_and_public_workloads() -> None
     assert catalog["source"]["id"] == "synthetic"
     assert all(workload["description"] for workload in catalog["workloads"])
     assert policies["candidate"]["group"] == "candidate"
-    assert policies["candidate"]["label"] == "Pressure-aware candidate"
+    assert policies["candidate"]["label"] == "Priority-aware pressure incumbent"
+    assert policies["candidate"]["status"] == "promoted incumbent"
+    assert policies["candidate"]["promoted"] is True
+    assert policies["candidate"]["benchmark_selection_score"] == 77.230
+    assert policies["candidate"]["benchmark_context"] == "discovery · 8-token verifier"
+    assert "low-priority admissions" in policies["candidate"]["description"]
     assert policies["vllm_apc"]["group"] == "deployable"
+    assert policies["vllm_apc"]["status"] == "deployable"
+    assert policies["vllm_apc"]["promoted"] is False
+    assert policies["vllm_apc"]["benchmark_selection_score"] is None
+    assert policies["vllm_apc"]["benchmark_context"] is None
     assert policies["sglang_radix_attention"]["group"] == "deployable"
     assert "sglang_radix_attention" not in catalog["defaults"]["policies"]
-    assert catalog["defaults"]["capacity_blocks"] == 48
+    assert catalog["defaults"]["capacity_blocks"] == 24
+    assert catalog["defaults"]["block_size_tokens"] == 16
+    assert catalog["defaults"]["workload_token_granularity"] == 8
     assert catalog["defaults"]["workload"] == "agentic_tool_workflows"
     assert policies["oracle_future_reuse"]["group"] == ("reporting-only/future-knowledge")
     assert "agentic_tool_workflows" in workloads
@@ -51,11 +62,16 @@ def test_lab_simulation_emits_aligned_policy_snapshots() -> None:
 
     assert result["source"] == "synthetic"
     assert result["config"]["request_count"] == 16
+    assert result["config"]["capacity_tokens"] == 96
+    assert result["config"]["workload_token_granularity"] == 8
     assert [policy["id"] for policy in result["policies"]] == [
         "candidate",
         "vllm_apc",
         "lru",
     ]
+    assert result["policies"][0]["promoted"] is True
+    assert result["policies"][0]["benchmark_selection_score"] == 77.230
+    assert result["policies"][1]["promoted"] is False
     for policy in result["policies"]:
         events = policy["events"]
         assert len(events) == 16
@@ -149,6 +165,47 @@ def test_request_telemetry_does_not_change_simulation_metrics() -> None:
     collector = Collector()
     assert run().as_dict() == run(collector).as_dict()
     assert len(collector.events) == len(requests)
+
+
+def test_eviction_telemetry_exposes_legal_victims_without_changing_metrics() -> None:
+    class Collector:
+        def __init__(self):
+            self.events = []
+
+        def on_eviction_decision(self, snapshot):
+            self.events.append(snapshot)
+
+    requests = build_workload(
+        "hotset_cold_scan",
+        request_count=16,
+        block_size_tokens=8,
+        seed=11,
+    )
+
+    def run(observer=None):
+        simulator = PrefixKVCacheSimulator(
+            capacity_blocks=4,
+            block_size_tokens=8,
+            prefill_cost_per_token=1.0,
+            lookup_cost_per_block=0.0,
+            eviction_cost_per_block=0.0,
+            eviction_decision_observer=observer,
+        )
+        return simulator.run(
+            baseline_lru_blocks(4, 8, 11),
+            requests,
+            split="lab",
+            workload="hotset_cold_scan",
+            seed=11,
+        )
+
+    collector = Collector()
+    assert run().as_dict() == run(collector).as_dict()
+    assert collector.events
+    for event in collector.events:
+        candidate_hashes = {candidate.block.prefix_hash for candidate in event.candidates}
+        assert event.victim_prefix_hash in candidate_hashes
+        assert all(candidate.next_reuse_distance is not None for candidate in event.candidates)
 
 
 @pytest.mark.parametrize(

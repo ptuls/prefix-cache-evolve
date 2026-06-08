@@ -37,25 +37,38 @@ prompt:
     The future-reuse fields are None for deployable candidates and only
     populated for oracle/reporting baselines.
 
+    The operative verifier uses 16-token physical cache blocks and 24/48-block
+    capacity tiers, equivalent to 384/768 cached tokens. Synthetic traffic is
+    generated at a fixed 8-token granularity so cache block-size comparisons
+    replay identical token streams. Do not hard-code either size; use the
+    supplied block and request fields.
+
     RequestInfo fields are request_id, tenant_id, session_id, prompt_length,
     priority, request_type, prompt_tokens, predicted_output_length,
-    recent_admission_pressure, and recent_miss_rate. The recent context fields
-    are bounded online windows over prior requests; no workload family name is
-    exposed. session_id is request-only metadata; PrefixBlockInfo has tenant_id
-    but no session_id. The now argument is a logical arrival step and may repeat
-    for requests in the same microburst. Do not probe guessed block attributes.
+    recent_admission_pressure, and recent_miss_rate. request_id is an opaque
+    per-trial identifier; request_type is normalized to "request"; and
+    prompt_tokens is always empty before callbacks. Do not use request_type or
+    prompt_tokens as policy signals. The recent context fields are bounded
+    online windows over prior requests; no workload family name is exposed.
+    session_id is request-only metadata; PrefixBlockInfo has tenant_id but no
+    session_id. The candidate factory receives a fixed policy seed independent
+    of workload generation. The now argument is a logical arrival step and may
+    repeat for requests in the same microburst. Do not probe guessed block
+    attributes.
 
     Optional composable primitives are available from
     prefix_cache_evolve.problems.prefix_kv_cache.primitives. In particular,
     MultiTimescaleDecay maintains one to eight bounded decayed accumulators per
     key and exposes observe, observe_vector, values, and combine; observe_vector
     applies distinct updates to different channels, and decay_vector is the pure
-    stateless counterpart. Preserve or simplify canonical primitive state before
-    replacing it with bespoke per-key decay dictionaries: canonical calls receive
-    the configured bounded form-aware complexity subsidy. Only introduce
+    stateless counterpart. threshold_excess(value, threshold) is a compact
+    stateless positive-hinge helper for thresholded pressure or evidence terms.
+    Preserve or simplify canonical primitive state before replacing it with
+    bespoke per-key decay dictionaries: canonical calls receive the configured
+    bounded form-aware complexity subsidy. Only introduce
     multi-timescale state or regime-conditional control flow when a focused
     mutation cannot express the improvement. Do not hard-code workload-family
-    names or request_type values.
+    names or use scrubbed request fields.
 
     Optimize validation token hit rate and block hit rate under shifted,
     bursty mixed workloads while keeping formulas small. Avoid prompt-token
@@ -74,15 +87,23 @@ prompt:
     checkpoints, resume paused branches, and replan after rollbacks. Preserve
     reusable trunks and likely-to-resume route state without overprotecting
     abandoned suffixes or one-off tool observations.
+    Mutation feedback always includes the non-quarantined
+    agentic_tool_workflows surrogate and stochastic_serving_mix target. Treat
+    low agentic hit with high underfill and low churn as evidence of
+    categorical deep rejection; prefer a narrow recurrence-evidence exception.
+    Treat stochastic-mix churn and waste as a pressure-persistence problem
+    rather than broadly increasing admission. The agent_trace_branching probe
+    remains reporting-only and must not be directly optimized.
 
     Default to local improvement of the supplied parent. Make exactly one
     semantic change per mutation. Preserve the existing class, imports, and
     state representation unless the mutation deletes or simplifies them. Keep
     effective complexity at or below 650 AST nodes. Do not add broad exception
     handlers, future-reuse references, schema fallbacks, unused imports, or
-    speculative state. Evaluator feedback identifies the parent's weakest
-    validation workloads and exact score costs; address one diagnosed weakness
-    without regressing cache economics or complexity.
+    speculative state. Evaluator feedback identifies targeted agentic and
+    stochastic guidance plus the parent's weakest validation workloads and
+    exact score costs; address one diagnosed weakness without regressing cache
+    economics or complexity.
   objectives:
     - "Maximize mean validation workload score while keeping the weakest workload competitive."
     - "Keep p95 deterministic latency and churn low."
@@ -94,11 +115,12 @@ prompt:
     - "Decay observed frequency and priority evidence so stale historical traffic does not remain permanently protected."
     - "Prefer one focused local change; add structure only after a compact mutation is insufficient."
     - "Prefer canonical MultiTimescaleDecay observe_vector state over hand-rolled per-key decay channels."
+    - "Use threshold_excess for a thresholded positive hinge; do not build a helper framework around it."
     - "Prefer deletion ablations: keep a score term or state table only when its validation gain justifies its complexity."
     - "Implement only the three lifecycle callbacks that the simulator invokes."
     - "Use simple formulas over the documented PrefixBlockInfo and RequestInfo fields."
     - "Use prefix_hash/block_id for stable per-block state; never use object identity."
-    - "Never hard-code workload-family names or request_type values."
+    - "Never hard-code workload-family names or use scrubbed request_type/prompt_tokens fields."
     - "Do not inspect hidden workloads; hidden is final reporting only."
 
 evaluator:
@@ -126,6 +148,11 @@ behavior:
     - validation_policy_underfill_rate
     - validation_cache_churn_per_1k
     - validation_wasted_admission_token_rate
+    - validation_avoidable_eviction_rate
+    - validation_short_reuse_after_eviction_missed_token_rate
+    - train_workload_agentic_tool_workflows_token_hit_rate
+    - train_workload_agentic_tool_workflows_policy_underfill_rate
+    - validation_workload_stochastic_serving_mix_token_hit_rate
 
 meta_advice:
   enabled: true
@@ -165,16 +192,18 @@ problem:
   description: >
     Search for adaptive prefix KV-cache scoring heuristics for LLM serving.
   settings:
-    capacity_blocks: 48
+    capacity_blocks: 24
     capacity_sweep_blocks:
+      - 24
       - 48
-      - 96
-    block_size_tokens: 8
+    block_size_tokens: 16
+    workload_token_granularity: 8
     request_count: 96
     seeds:
       - 11
       - 23
       - 37
+    policy_seed: 0
     family_request_multipliers:
       tenant_phase_shift_cycles: 3
       tenant_phase_shift_cycles_shifted: 4
@@ -182,6 +211,7 @@ problem:
     lookup_cost_per_block: 0.035
     eviction_cost_per_block: 0.2
     active_tokens_per_step: 64
+    kv_capacity_mode: prefix_only
     latency_norm: 0
     max_memory_bytes: 67108864
     form_aware_complexity: true

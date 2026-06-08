@@ -241,3 +241,5 @@ runs/
 *.lok
 *.lol
 *.lop
+
+.DS_Store

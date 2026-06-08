@@ -55,6 +55,12 @@ from prefix_cache_evolve.problems.prefix_kv_cache.runner import (
     save_run_artifacts,
     write_baseline_plots,
 )
+from prefix_cache_evolve.problems.prefix_kv_cache.specialist import (
+    candidate_evaluator,
+    compose_eviction_specialist_source,
+    eviction_only_source_violations,
+    fixed_admission_factory,
+)
 
 
 class AdmitAllLRU:
@@ -155,7 +161,13 @@ def test_evaluator_accepts_injected_workload_and_simulator_dependencies() -> Non
 
     class FakeSimulator:
         def __init__(self, **kwargs):
-            calls.append(("simulator", kwargs["capacity_blocks"]))
+            calls.append(
+                (
+                    "simulator",
+                    kwargs["capacity_blocks"],
+                    kwargs["block_size_tokens"],
+                )
+            )
 
         def run(
             self,
@@ -194,9 +206,82 @@ def test_evaluator_accepts_injected_workload_and_simulator_dependencies() -> Non
     assert result.success is True
     assert calls == [
         ("workload", "shared_system_prompt", 1, 8, 1003),
-        ("simulator", 4),
+        ("simulator", 4, 16),
         ("run", "validation", "shared_system_prompt", 1003, 0),
     ]
+
+
+def test_evaluator_can_fix_admission_while_candidate_controls_eviction() -> None:
+    config = EvaluatorConfig(
+        capacity_blocks=4,
+        request_count=12,
+        seeds=(3,),
+        train_families=("shared_system_prompt",),
+        validation_families=(),
+        probe_families=(),
+        fixed_admission_policy="unit_no_cache",
+    )
+    normal = PrefixKVCacheEvaluator(
+        config.with_updates(fixed_admission_policy=None),
+        splits=("train",),
+    )(lambda *_: AdmitAllLRU())
+    specialist = PrefixKVCacheEvaluator(
+        config,
+        splits=("train",),
+        fixed_admission_factory=baseline_no_cache,
+    )(lambda *_: AdmitAllLRU())
+
+    assert normal.split_metrics["train"]["admission_count"] > 0
+    assert specialist.split_metrics["train"]["admission_count"] == 0
+    assert specialist.split_metrics["train"]["token_hit_rate"] == 0.0
+    assert specialist.candidate_metadata["fixed_admission_policy"] == "unit_no_cache"
+
+
+def test_eviction_only_specialist_freezes_admission_and_callbacks() -> None:
+    calls = []
+
+    class BasePolicy(AdmitAllLRU):
+        def on_request_start(self, request, now: int) -> None:
+            calls.append("base_request")
+
+        def on_cache_hit(self, block, request, now: int) -> None:
+            calls.append("base_hit")
+
+        def on_cache_miss(self, block, request, now: int) -> None:
+            calls.append("base_miss")
+
+        def _values(self, key, now):
+            return 2.0, 3.0
+
+    config = EvaluatorConfig(
+        capacity_blocks=4,
+        request_count=12,
+        seeds=(3,),
+        train_families=("shared_system_prompt",),
+        validation_families=(),
+        probe_families=(),
+        fixed_admission_policy="pressure_aware_incumbent",
+        candidate_policy_surface="eviction_only",
+    )
+    evaluator = candidate_evaluator(config, splits=("train",))
+    evaluator._base_factory = lambda *_args: BasePolicy()
+
+    def score_eviction(block, now, frequency, priority):
+        calls.append(("eviction", frequency, priority))
+        return float(now - block.last_accessed_at)
+
+    result = evaluator(score_eviction)
+
+    assert result.success is True
+    assert "base_request" in calls
+    assert "base_hit" in calls
+    assert "base_miss" in calls
+    assert ("eviction", 2.0, 3.0) in calls
+
+
+def test_fixed_admission_factory_rejects_unknown_policy() -> None:
+    with pytest.raises(ValueError, match="unknown fixed_admission_policy"):
+        fixed_admission_factory("unknown")
 
 
 def test_no_cache_zero_hits() -> None:
@@ -348,9 +433,11 @@ def test_subtree_aggregates_include_known_descendants() -> None:
 
     simulator.run(policy, requests, split="train", workload="unit", seed=1)
 
-    assert policy.hit_observations == [
-        (1, 1, 0.25, 2, 3),
-        (1, 2, 0.5, 2, 2),
+    assert policy.hit_observations[0][0] == policy.hit_observations[1][0]
+    assert policy.hit_observations[0][0] != 1
+    assert [observation[1:] for observation in policy.hit_observations] == [
+        (1, 0.25, 2, 3),
+        (2, 0.5, 2, 2),
     ]
     root = min(simulator.blocks.values(), key=lambda block: block.depth)
     assert simulator._subtree_hit_counts[root.prefix_hash] >= root.hit_count
@@ -406,6 +493,8 @@ def test_request_regime_context_is_bounded_and_independent_of_request_type() -> 
     first, simulator = run(tuple(f"type_{index}" for index in range(40)))
     second, _ = run(tuple("different" for _ in range(40)))
 
+    assert {observation[0] for observation in first} == {"request"}
+    assert {observation[0] for observation in second} == {"request"}
     assert first[0][1:] == (0.0, 0.0)
     assert first[1][1:] == (1.0, 1.0)
     assert first[2][1:] == (1.0, 1.0)
@@ -415,6 +504,119 @@ def test_request_regime_context_is_bounded_and_independent_of_request_type() -> 
     assert simulator._recent_miss_rates.maxlen == 32
     assert len(simulator._recent_admission_pressure) == 32
     assert len(simulator._recent_miss_rates) == 32
+
+
+def test_candidate_visible_request_metadata_is_scrubbed() -> None:
+    class CaptureRequest(AdmitAllLRU):
+        def __init__(self) -> None:
+            self.observed = []
+
+        def on_request_start(self, request, now: int) -> None:
+            self.observed.append(request)
+
+        def score_admission(self, block, now: int) -> float:
+            return -1.0
+
+    request = WorkloadRequest(
+        info=RequestInfo(
+            request_id=7,
+            tenant_id=3,
+            session_id=5,
+            prompt_length=4,
+            priority=2,
+            request_type="priority_one_off_noise",
+            prompt_tokens=(91, 92, 93, 94),
+            predicted_output_length=32,
+        ),
+        true_output_length=128,
+        prompt_tokens=(1, 2, 3, 4),
+    )
+    policy = CaptureRequest()
+    simulator = PrefixKVCacheSimulator(
+        capacity_blocks=2,
+        block_size_tokens=4,
+        prefill_cost_per_token=1.0,
+        lookup_cost_per_block=0.0,
+        eviction_cost_per_block=0.0,
+    )
+
+    simulator.run(policy, (request,), split="train", workload="unit", seed=1003)
+
+    assert len(policy.observed) == 1
+    visible = policy.observed[0]
+    assert visible.request_id != request.info.request_id
+    assert visible.request_type == "request"
+    assert visible.prompt_tokens == ()
+    assert visible.tenant_id == request.info.tenant_id
+    assert visible.session_id == request.info.session_id
+    assert visible.priority == request.info.priority
+    assert visible.predicted_output_length == request.info.predicted_output_length
+
+
+def test_deployable_candidate_never_receives_future_reuse_metadata() -> None:
+    class CaptureFutureReuse(AdmitAllLRU):
+        def __init__(self) -> None:
+            self.observed = []
+
+        def _record(self, channel, block) -> None:
+            self.observed.append(
+                (
+                    channel,
+                    block.estimated_future_reuse,
+                    block.estimated_next_reuse_distance,
+                )
+            )
+
+        def on_cache_hit(self, block, request, now: int) -> None:
+            self._record("hit", block)
+
+        def on_cache_miss(self, block, request, now: int) -> None:
+            self._record("miss", block)
+
+        def score_admission(self, block, now: int) -> float:
+            self._record("admission", block)
+            return 1.0
+
+        def score_eviction(self, block, now: int) -> float:
+            self._record("eviction", block)
+            return float(now - block.last_accessed_at)
+
+    requests = tuple(
+        WorkloadRequest(
+            info=RequestInfo(
+                request_id=request_id,
+                tenant_id=0,
+                session_id=0,
+                prompt_length=4,
+                priority=0,
+                request_type="unit",
+                prompt_tokens=(),
+            ),
+            true_output_length=1,
+            prompt_tokens=tuple([token] * 4),
+        )
+        for request_id, token in enumerate((1, 2, 1, 3))
+    )
+    policy = CaptureFutureReuse()
+    simulator = PrefixKVCacheSimulator(
+        capacity_blocks=2,
+        block_size_tokens=4,
+        prefill_cost_per_token=1.0,
+        lookup_cost_per_block=0.0,
+        eviction_cost_per_block=0.0,
+        expose_future_reuse=False,
+    )
+
+    simulator.run(policy, requests, split="train", workload="unit", seed=1003)
+
+    assert policy.observed
+    assert {channel for channel, _, _ in policy.observed} == {
+        "admission",
+        "eviction",
+        "hit",
+        "miss",
+    }
+    assert {(future, distance) for _, future, distance in policy.observed} == {(None, None)}
 
 
 def test_discrete_baselines_break_equal_priority_ties_with_lru() -> None:
@@ -498,6 +700,7 @@ def test_tenant_fair_lru_reduces_multi_tenant_fairness_gap() -> None:
         request_count=96,
         seeds=(3,),
         capacity_blocks=12,
+        block_size_tokens=8,
         validation_families=("multi_tenant_skew",),
     )
     evaluator = PrefixKVCacheEvaluator(config, splits=("validation",))
@@ -532,6 +735,7 @@ def test_adversarial_over_admission_high_churn() -> None:
         request_count=36,
         seeds=(3,),
         capacity_blocks=8,
+        block_size_tokens=8,
         hidden_families=("adversarial_unique_prompts",),
     )
     result = PrefixKVCacheEvaluator(config, splits=("hidden",))(lambda *_: AdmitAllLRU())
@@ -566,13 +770,36 @@ def test_factory_internal_type_error_is_not_retried() -> None:
     config = EvaluatorConfig(
         request_count=1,
         seeds=(3,),
+        policy_seed=17,
         train_families=("shared_system_prompt",),
     )
 
     result = PrefixKVCacheEvaluator(config, splits=("train",))(factory)
 
     assert result.invalid_fraction == 1.0
-    assert calls == [1003]
+    assert calls == [17]
+
+
+def test_policy_seed_is_independent_of_workload_seed() -> None:
+    seen_policy_seeds = []
+
+    def factory(capacity_blocks, block_size_tokens, seed=None):
+        seen_policy_seeds.append(seed)
+        return AdmitAllLRU()
+
+    config = EvaluatorConfig(
+        request_count=1,
+        seeds=(3, 7),
+        policy_seed=19,
+        train_families=("shared_system_prompt", "rag_template_reuse"),
+    )
+
+    result = PrefixKVCacheEvaluator(config, splits=("train",))(factory)
+
+    assert result.success is True
+    assert len({trial.seed for trial in result.trials}) == 4
+    assert seen_policy_seeds == [19, 19, 19, 19]
+    assert result.candidate_metadata["policy_seed"] == 19
 
 
 def test_missing_policy_hooks_are_structured_invalid_results() -> None:
@@ -641,8 +868,20 @@ def test_evaluate_source_minimal_policy(monkeypatch) -> None:
     assert len(result.metrics["per_example_scores"]) == len(result.metrics["feedback_per_example"])
     assert all(
         "Weak validation workload validation/" in feedback
+        or "Targeted mutation-guidance workload" in feedback
         for feedback in result.metrics["feedback_per_example"]
     )
+    assert any(
+        "Targeted mutation-guidance workload train/agentic_tool_workflows" in feedback
+        for feedback in result.metrics["feedback_per_example"]
+    )
+    assert any(
+        "Targeted mutation-guidance workload validation/stochastic_serving_mix" in feedback
+        for feedback in result.metrics["feedback_per_example"]
+    )
+    assert "train_workload_agentic_tool_workflows_token_hit_rate" in result.metrics
+    assert "train_workload_agentic_tool_workflows_policy_underfill_rate" in result.metrics
+    assert "validation_workload_stochastic_serving_mix_token_hit_rate" in result.metrics
     assert all(
         "probe/" not in feedback and "hidden/" not in feedback
         for feedback in result.metrics["feedback_per_example"]
@@ -690,10 +929,17 @@ def test_evaluate_source_rejects_static_policy_violations(monkeypatch) -> None:
     result = levi_evaluator.evaluate_source(source)
 
     assert result.metrics["success"] is False
+    assert result.metrics["error"].startswith("Repair before retry:")
     assert "future-knowledge field estimated_future_reuse" in result.metrics["error"]
     assert "broad exception handlers are not allowed" in result.metrics["error"]
     assert "unused import math" in result.metrics["error"]
     assert "unused import random" in result.metrics["error"]
+    assert any(
+        "Remove estimated_future_reuse" in repair for repair in result.artifacts["repair_feedback"]
+    )
+    assert any(
+        "Delete math from the imports" in repair for repair in result.artifacts["repair_feedback"]
+    )
 
 
 def test_evaluate_source_rejects_excessive_complexity(monkeypatch) -> None:
@@ -709,6 +955,158 @@ def test_evaluate_source_rejects_excessive_complexity(monkeypatch) -> None:
     assert result.metrics["success"] is False
     assert "effective complexity" in result.metrics["error"]
     assert "exceeds limit 1" in result.metrics["error"]
+    assert "Delete or simplify at least" in result.artifacts["suggestion"]
+
+
+def test_evaluate_source_scores_over_promotion_cap_and_requests_simplification(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        levi_evaluator,
+        "DEFAULT_CONFIG",
+        EvaluatorConfig(
+            capacity_blocks=4,
+            request_count=2,
+            seeds=(3,),
+            train_families=("shared_system_prompt",),
+            validation_families=("shared_system_prompt",),
+            probe_families=(),
+            max_candidate_complexity=10_000,
+            promotion_max_candidate_complexity=1,
+        ),
+    )
+
+    result = levi_evaluator.evaluate_source(_minimal_policy_source("-1.0", "0.0"))
+
+    assert result.metrics["success"] is True
+    assert result.metrics["promotion_eligible"] is False
+    assert result.metrics["promotion_complexity_excess"] > 0
+    assert any(
+        "Exploration-only candidate: behavioral evaluation completed" in feedback
+        for feedback in result.metrics["feedback_per_example"]
+    )
+    assert result.artifacts["workload_metrics"]
+
+
+def test_evaluate_source_eviction_only_uses_raw_behavioral_search_score(monkeypatch) -> None:
+    monkeypatch.setattr(
+        levi_evaluator,
+        "DEFAULT_CONFIG",
+        EvaluatorConfig(
+            capacity_blocks=4,
+            request_count=2,
+            seeds=(3,),
+            train_families=("shared_system_prompt",),
+            validation_families=("shared_system_prompt",),
+            probe_families=(),
+            fixed_admission_policy="pressure_aware_incumbent",
+            candidate_policy_surface="eviction_only",
+            search_score_mode="raw_before_complexity",
+        ),
+    )
+    source = textwrap.dedent(
+        """
+        def score_eviction(block, now, frequency, priority):
+            return now - block.last_accessed_at - frequency - priority
+        """
+    )
+
+    result = levi_evaluator.evaluate_source(source)
+
+    assert result.metrics["success"] is True
+    assert result.metrics["combined_score"] == result.metrics["raw_score_before_complexity"]
+    assert result.metrics["combined_score"] > result.metrics["charged_combined_score"]
+
+
+def test_evaluate_source_eviction_only_rejects_full_policy_surface(monkeypatch) -> None:
+    monkeypatch.setattr(
+        levi_evaluator,
+        "DEFAULT_CONFIG",
+        EvaluatorConfig(
+            candidate_policy_surface="eviction_only",
+            fixed_admission_policy="pressure_aware_incumbent",
+        ),
+    )
+
+    result = levi_evaluator.evaluate_source(_minimal_policy_source("-1.0", "0.0"))
+
+    assert result.metrics["success"] is False
+    assert "eviction-only specialist must not define policy classes" in result.metrics["error"]
+    assert "must define exactly one score_eviction function" in result.metrics["error"]
+
+
+def test_evaluate_source_eviction_only_reports_decorator_repair(monkeypatch) -> None:
+    monkeypatch.setattr(
+        levi_evaluator,
+        "DEFAULT_CONFIG",
+        EvaluatorConfig(
+            candidate_policy_surface="eviction_only",
+            fixed_admission_policy="pressure_aware_incumbent",
+        ),
+    )
+    source = textwrap.dedent(
+        """
+        @staticmethod
+        def score_eviction(block, now, frequency, priority):
+            return 0.0
+        """
+    )
+
+    result = levi_evaluator.evaluate_source(source)
+
+    assert result.metrics["success"] is False
+    assert result.artifacts["repair_feedback"] == [
+        "Remove decorators from score_eviction so exploration and promotion execute "
+        "the same function body."
+    ]
+
+
+def test_evaluate_source_reports_syntax_repair_before_complexity(monkeypatch) -> None:
+    monkeypatch.setattr(
+        levi_evaluator,
+        "DEFAULT_CONFIG",
+        EvaluatorConfig(max_candidate_complexity=1),
+    )
+
+    result = levi_evaluator.evaluate_source("def build_candidate(:\n    pass\n")
+
+    assert result.metrics["success"] is False
+    assert "syntax error at line 1" in result.metrics["error"]
+    assert "effective complexity" not in result.metrics["error"]
+    assert result.artifacts["violations"] == ["syntax error at line 1: invalid syntax"]
+
+
+def test_evaluate_source_reports_runtime_contract_repairs(monkeypatch) -> None:
+    monkeypatch.setattr(
+        levi_evaluator,
+        "DEFAULT_CONFIG",
+        EvaluatorConfig(
+            request_count=1,
+            seeds=(3,),
+            train_families=("shared_system_prompt",),
+            validation_families=(),
+            probe_families=(),
+        ),
+    )
+    source = textwrap.dedent(
+        """
+        class Policy:
+            def score_admission(self, block, now):
+                return 0.0
+
+            def score_eviction(self, block, now):
+                return 0.0
+
+        def build_candidate(capacity_blocks, block_size_tokens, seed=None):
+            return Policy()
+        """
+    )
+
+    result = levi_evaluator.evaluate_source(source)
+
+    assert result.metrics["success"] is False
+    assert "policy must implement on_request_start()" in result.metrics["error"]
+    assert "Implement on_request_start()" in result.artifacts["suggestion"]
 
 
 def test_static_policy_checks_validate_multi_timescale_decay_constructor() -> None:
@@ -746,6 +1144,63 @@ def test_static_policy_checks_validate_multi_timescale_decay_constructor() -> No
     assert "MultiTimescaleDecay accepts only one positional argument" in invalid
     assert "MultiTimescaleDecay half-lives must be a sequence" in invalid
     assert valid == ()
+
+
+def test_static_policy_checks_validate_threshold_excess_signature() -> None:
+    config = EvaluatorConfig(reject_unsupported_source_patterns=True)
+    invalid_source = textwrap.dedent(
+        """
+        from prefix_cache_evolve.problems.prefix_kv_cache.primitives import threshold_excess
+
+        class Policy:
+            def score_admission(self, block, now):
+                return threshold_excess(block.depth)
+        """
+    )
+    valid_source = textwrap.dedent(
+        """
+        from prefix_cache_evolve.problems.prefix_kv_cache.primitives import threshold_excess
+
+        class Policy:
+            def score_admission(self, block, now):
+                return threshold_excess(block.depth, 2.0)
+        """
+    )
+
+    invalid = levi_evaluator._candidate_source_violations(
+        invalid_source,
+        complexity=1,
+        config=config,
+    )
+    valid = levi_evaluator._candidate_source_violations(
+        valid_source,
+        complexity=1,
+        config=config,
+    )
+
+    assert "threshold_excess requires value and threshold" in invalid
+    assert valid == ()
+
+
+def test_static_policy_checks_reject_scrubbed_request_fields() -> None:
+    config = EvaluatorConfig(reject_unsupported_source_patterns=True)
+    source = textwrap.dedent(
+        """
+        class Policy:
+            def on_request_start(self, request, now):
+                self.kind = request.request_type
+                self.tokens = request.prompt_tokens
+        """
+    )
+
+    violations = levi_evaluator._candidate_source_violations(
+        source,
+        complexity=1,
+        config=config,
+    )
+
+    assert "sanitized request field request_type is not a policy signal" in violations
+    assert "sanitized request field prompt_tokens is not a policy signal" in violations
 
 
 def test_evaluate_factory_uses_configured_timeout(monkeypatch) -> None:
@@ -1233,8 +1688,7 @@ def test_structure_probe_not_in_combined_selection_score() -> None:
         validation_families=("hotset_cold_scan",),
         probe_families=("agent_trace_branching",),
     )
-    config_b = replace(
-        config_a,
+    config_b = config_a.with_updates(
         probe_families=("cyclic_working_set_pressure",),
     )
 
@@ -1493,6 +1947,22 @@ class Policy:
     assert primitive_form_aware < hand_form_aware
     assert hand_raw <= math.ceil(1.6 * primitive_raw)
     assert primitive_form_aware >= math.ceil(0.75 * primitive_raw)
+
+
+def test_form_aware_complexity_gives_small_credit_to_threshold_excess() -> None:
+    source = """
+from prefix_cache_evolve.problems.prefix_kv_cache.primitives import threshold_excess
+
+
+class Policy:
+    def score_admission(self, block, now):
+        return threshold_excess(block.depth, 2.0)
+"""
+
+    raw = scoring_fn_complexity(source)
+    form_aware = scoring_fn_complexity(source, form_aware=True)
+
+    assert raw - form_aware == 1
 
 
 def test_active_complexity_mode_is_configurable(monkeypatch) -> None:
@@ -1768,6 +2238,9 @@ def test_capacity_sweep_reports_capacity_metrics() -> None:
     assert set(result.capacity_metrics) == {"capacity_8", "capacity_16"}
     assert {trial.capacity_blocks for trial in result.trials} == {8, 16}
     assert result.candidate_metadata["capacity_sweep_blocks"] == "8,16"
+    assert result.candidate_metadata["capacity_sweep_tokens"] == "128,256"
+    assert result.candidate_metadata["block_size_tokens"] == 16
+    assert result.candidate_metadata["workload_token_granularity"] == 8
     assert result.candidate_metadata["complexity_exponent"] == 0.75
     assert result.candidate_metadata["complexity_mode"] == "legacy_ast_nodes"
 
@@ -1853,7 +2326,7 @@ def test_existing_trials_can_be_rescored_without_rerunning_simulation() -> None:
         validation_families=("hotset_cold_scan",),
     )
     result = PrefixKVCacheEvaluator(config, splits=("validation",))(baseline_lru_blocks)
-    stricter = replace(config, churn_weight=1.0)
+    stricter = config.with_updates(churn_weight=1.0)
 
     rescored = PrefixKVCacheEvaluator(
         stricter,
@@ -1901,8 +2374,66 @@ def test_runner_default_report_matches_levi_capacity_sweep() -> None:
         block_size_tokens=None,
     )
 
-    assert default_config.effective_capacity_blocks() == (48, 96)
+    assert default_config.effective_capacity_blocks() == (24, 48)
+    assert default_config.effective_capacity_tokens() == (384, 768)
     assert explicit_config.effective_capacity_blocks() == (12,)
+
+
+def test_block_size_robustness_normalizes_capacity_and_replays_canonical_traffic(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    candidate_path = tmp_path / "candidate.py"
+    candidate_path.write_text("def build_candidate(): pass\n", encoding="utf-8")
+    observed_configs = []
+
+    def fake_evaluate_candidate(config, path, *, splits):
+        observed_configs.append(config)
+        assert path == candidate_path
+        assert splits == ("validation",)
+        return _report_result(12.0, capacities=config.effective_capacity_blocks())
+
+    fake_suite = SimpleNamespace(
+        evaluate=lambda config, baselines, *, splits: {
+            name: _report_result(10.0, capacities=config.effective_capacity_blocks())
+            for name in baselines
+        }
+    )
+    monkeypatch.setattr(prefix_runner, "_evaluate_candidate_program", fake_evaluate_candidate)
+    monkeypatch.setattr(prefix_runner, "BASELINE_SUITE_EVALUATOR", fake_suite)
+
+    output_path = tmp_path / "block_sizes.md"
+    prefix_runner.write_block_size_robustness_report(
+        output_path,
+        candidate_program=candidate_path,
+        quick=True,
+    )
+
+    assert [
+        (
+            config.block_size_tokens,
+            config.effective_capacity_blocks(),
+            config.effective_capacity_tokens(),
+            config.effective_workload_token_granularity(),
+        )
+        for config in observed_configs
+    ] == [
+        (8, (48, 96), (384, 768), 8),
+        (16, (24, 48), (384, 768), 8),
+        (32, (12, 24), (384, 768), 8),
+    ]
+    report = output_path.read_text(encoding="utf-8")
+    assert "identical synthetic token streams" in report
+    assert "| 16 | 12.000 | 12.000 | 0.000 | 1 / 4 | `candidate` | 0.000 |" in report
+    assert "| 16 | 24 / 48 | 384 / 768 | `candidate` |" in report
+
+
+def test_block_size_robustness_rejects_inexact_token_capacity() -> None:
+    with pytest.raises(ValueError, match="divisible"):
+        prefix_runner._capacity_blocks_for_token_tiers(
+            (385, 768),
+            block_size_tokens=16,
+        )
 
 
 def test_candidate_prompt_names_only_supported_lifecycle_callbacks() -> None:
@@ -1915,9 +2446,13 @@ def test_candidate_prompt_names_only_supported_lifecycle_callbacks() -> None:
     assert "now argument is a logical arrival step" in message
     assert "Priority is a deployable request signal, not proof of reuse" in message
     assert "Long-horizon tenant workloads repeatedly shift" in message
-    assert "Do not hard-code workload-family names or request_type values." in message
+    assert "Do not hard-code workload-family names or use scrubbed request fields." in message
+    assert 'request_type is normalized to "request"' in message
+    assert "candidate factory receives a fixed policy seed" in message
     assert "Make exactly one semantic change per mutation." in message
     assert "effective complexity at or below 650 AST nodes" in message
+    assert "targeted agentic and stochastic guidance" in message
+    assert "agent_trace_branching probe remains reporting-only" in message
     for field in (
         "prev_last_accessed_at",
         "last_access_gap",
@@ -1930,6 +2465,7 @@ def test_candidate_prompt_names_only_supported_lifecycle_callbacks() -> None:
         "MultiTimescaleDecay",
         "observe_vector",
         "decay_vector",
+        "threshold_excess",
     ):
         assert field in message
     for callback in (
@@ -1958,7 +2494,11 @@ def test_candidate_config_matches_default_verifier_panel_and_score_weights() -> 
     assert loaded.timeout_s == 90
     assert loaded.request_count == 96
     assert loaded.seeds == (11, 23, 37)
-    assert loaded.effective_capacity_blocks() == (48, 96)
+    assert loaded.policy_seed == 0
+    assert loaded.effective_capacity_blocks() == (24, 48)
+    assert loaded.effective_capacity_tokens() == (384, 768)
+    assert loaded.block_size_tokens == 16
+    assert loaded.workload_token_granularity == 8
     assert loaded.max_candidate_complexity == 650
     assert loaded.reject_unsupported_source_patterns is True
     for field in (
@@ -2008,14 +2548,61 @@ def test_candidate_search_configuration_is_forwarded_to_levi() -> None:
     assert kwargs["pipeline"]["eval_timeout"] == raw["evaluator"]["timeout"]
     assert kwargs["pipeline"]["n_eval_processes"] == raw["evaluator"]["parallel_evaluations"]
     assert kwargs["cascade"]["enabled"] == raw["evaluator"]["cascade_evaluation"]
+    assert {
+        "train_workload_agentic_tool_workflows_token_hit_rate",
+        "train_workload_agentic_tool_workflows_policy_underfill_rate",
+        "validation_workload_stochastic_serving_mix_token_hit_rate",
+        "validation_avoidable_eviction_rate",
+        "validation_short_reuse_after_eviction_missed_token_rate",
+    }.issubset(kwargs["behavior"]["score_keys"])
+
+
+def test_eviction_specialist_config_fixes_admission_and_separates_promotion_cap() -> None:
+    path = Path("configs/prefix_kv_cache_eviction_specialist.yaml")
+    workflow_config = prefix_runner._CONFIG_LOADER.load(path)
+    evaluator_config = load_evaluator_config(path)
+
+    assert evaluator_config.fixed_admission_policy == "pressure_aware_incumbent"
+    assert evaluator_config.candidate_policy_surface == "eviction_only"
+    assert evaluator_config.search_score_mode == "raw_before_complexity"
+    assert evaluator_config.max_candidate_complexity == 1000
+    assert evaluator_config.promotion_max_candidate_complexity == 650
+    assert evaluator_config.effective_capacity_blocks() == (24, 48)
+    assert evaluator_config.effective_capacity_tokens() == (384, 768)
+    assert {
+        "validation_avoidable_eviction_rate",
+        "validation_short_reuse_after_eviction_missed_token_rate",
+    }.issubset(workflow_config.behavior["score_keys"])
+    assert "raw behavioral improvement" in workflow_config.problem_description
+    assert "remain at most 650" in workflow_config.problem_description.lower()
+    assert workflow_config.function_signature == (
+        "def score_eviction(block, now, frequency, priority):"
+    )
+    assert workflow_config.init["n_diverse_seeds"] == 6
+    assert workflow_config.cvt["n_centroids"] == 16
 
 
 def test_prefix_evaluator_config_rejects_inactive_settings() -> None:
-    with pytest.raises(ValueError, match="unsupported prefix KV-cache evaluator"):
+    with pytest.raises(ValueError, match=r"(?s)seed_count.*Extra inputs are not permitted"):
         evaluator_config_from_settings({"seed_count": 3})
 
-    with pytest.raises(ValueError, match="unsupported prefix KV-cache scoring"):
+    with pytest.raises(ValueError, match=r"(?s)complexity_cap.*Extra inputs are not permitted"):
         evaluator_config_from_settings({"scoring": {"complexity_cap": 500}})
+
+
+def test_evaluator_config_validates_direct_values_and_updates() -> None:
+    with pytest.raises(ValueError, match=r"(?s)capacity_blocks.*greater than 0"):
+        EvaluatorConfig(capacity_blocks=0)
+
+    with pytest.raises(ValueError, match=r"(?s)min_seed_weight.*less than or equal to 1"):
+        EvaluatorConfig(min_seed_weight=1.1)
+
+    with pytest.raises(ValueError, match=r"(?s)kv_capacity_mode.*Input should be"):
+        EvaluatorConfig(kv_capacity_mode="unknown")
+
+    config = EvaluatorConfig().with_updates(scoring={"churn_weight": 0.5})
+
+    assert config.churn_weight == 0.5
 
 
 def test_active_evaluator_config_applies_quick_worker_override(monkeypatch) -> None:
@@ -2059,6 +2646,29 @@ def test_demo_run_evolution_uses_requested_seed_program(tmp_path, monkeypatch) -
     assert captured["source"] == "chosen seed\n"
     assert captured["config_path"] == str(Path("configs/prefix_kv_cache.yaml").resolve())
     assert captured["quick"] == "1"
+
+
+def test_demo_run_evolution_uses_function_only_seed_for_eviction_specialist(monkeypatch) -> None:
+    captured = {}
+
+    class FakeWorkflow:
+        def execute(self, iterations):
+            return SimpleNamespace()
+
+    def fake_build_workflow(provider, *, program_source):
+        captured["source"] = program_source.text()
+        return FakeWorkflow()
+
+    monkeypatch.setattr(prefix_runner, "_build_workflow", fake_build_workflow)
+
+    prefix_runner.demo_run_evolution(
+        iterations=1,
+        config_file="configs/prefix_kv_cache_eviction_specialist.yaml",
+        artifact_output=None,
+    )
+
+    assert "def score_eviction(block, now, frequency, priority):" in captured["source"]
+    assert "def score_admission" not in captured["source"]
 
 
 def test_demo_run_evolution_defaults_to_pressure_aware_incumbent(monkeypatch) -> None:
@@ -2538,6 +3148,7 @@ def test_tenant_session_reentry_rewards_selective_admission() -> None:
         request_count=48,
         seeds=(3,),
         capacity_blocks=12,
+        block_size_tokens=8,
         hidden_families=("tenant_session_reentry",),
     )
     evaluator = PrefixKVCacheEvaluator(config, splits=("hidden",))
@@ -2564,6 +3175,7 @@ def test_hotset_cold_scan_displaces_lru_and_rewards_scan_resistance() -> None:
         request_count=48,
         seeds=(3,),
         capacity_blocks=12,
+        block_size_tokens=8,
         validation_families=("hotset_cold_scan",),
     )
     evaluator = PrefixKVCacheEvaluator(config, splits=("validation",))
@@ -2599,6 +3211,68 @@ def test_concurrent_long_generation_exercises_pinned_capacity_pressure() -> None
     assert metrics["forced_bypass_count"] > 0
     assert metrics["arrival_span_steps"] == 24
     assert metrics["active_request_count_peak"] > 2
+
+
+def test_reasoning_burst_exposes_noisy_long_outputs_and_microbursts() -> None:
+    requests = build_workload(
+        "reasoning_burst",
+        request_count=24,
+        block_size_tokens=16,
+        seed=3,
+    )
+
+    assert all(request.info.predicted_output_length is not None for request in requests)
+    assert max(request.true_output_length for request in requests) >= 1024
+    assert any(
+        request.info.predicted_output_length != request.true_output_length for request in requests
+    )
+    assert [request.arrival_step for request in requests[:6]] == [0, 0, 0, 1, 1, 1]
+
+
+def test_shared_kv_capacity_models_decode_pressure_without_changing_default() -> None:
+    base = EvaluatorConfig(
+        request_count=24,
+        seeds=(3,),
+        capacity_blocks=24,
+        block_size_tokens=16,
+        validation_families=("reasoning_burst",),
+        family_request_multipliers={},
+    )
+    prefix_only = PrefixKVCacheEvaluator(base, splits=("validation",))(baseline_lru_blocks)
+    shared = PrefixKVCacheEvaluator(
+        base.with_updates(kv_capacity_mode="shared"),
+        splits=("validation",),
+    )(baseline_lru_blocks)
+    shared_no_cache = PrefixKVCacheEvaluator(
+        base.with_updates(kv_capacity_mode="shared"),
+        splits=("validation",),
+    )(baseline_no_cache)
+    prefix_metrics = prefix_only.workload_metrics["validation/reasoning_burst"]
+    shared_metrics = shared.workload_metrics["validation/reasoning_burst"]
+    shared_no_cache_metrics = shared_no_cache.workload_metrics["validation/reasoning_burst"]
+
+    assert prefix_metrics["decode_kv_blocks_requested"] == 0
+    assert prefix_metrics["decode_kv_occupancy_peak"] == 0
+    assert prefix_metrics["memory_occupancy_mean"] == prefix_metrics["prefix_kv_occupancy_mean"]
+    assert shared_metrics["decode_kv_blocks_requested"] > 0
+    assert shared_metrics["decode_kv_occupancy_peak"] > 0
+    assert shared_metrics["decode_pressure_eviction_count"] > 0
+    assert shared_metrics["decode_kv_allocation_failure_blocks"] > 0
+    assert shared_metrics["prefix_kv_occupancy_mean"] < prefix_metrics["prefix_kv_occupancy_mean"]
+    assert shared_no_cache_metrics["decode_kv_occupancy_mean"] > 0
+    assert shared_no_cache_metrics["policy_underfill_rate"] == 1.0
+
+
+def test_unknown_kv_capacity_mode_is_rejected() -> None:
+    with pytest.raises(ValueError, match="kv capacity mode"):
+        PrefixKVCacheSimulator(
+            capacity_blocks=4,
+            block_size_tokens=4,
+            prefill_cost_per_token=1.0,
+            lookup_cost_per_block=0.0,
+            eviction_cost_per_block=0.0,
+            kv_capacity_mode="unknown",
+        )
 
 
 def test_structural_prefix_metrics_are_reported() -> None:
@@ -2640,6 +3314,10 @@ def test_structural_prefix_metrics_are_reported() -> None:
     assert "final_quarter_token_hit_rate" in metrics
     assert "worst_recovery_phase_token_hit_rate" in metrics
     assert "tenant_token_hit_rate_p10" in metrics
+    assert "prefix_kv_occupancy_mean" in metrics
+    assert "decode_kv_occupancy_mean" in metrics
+    assert "decode_kv_allocation_failure_rate" in metrics
+    assert "decode_pressure_eviction_rate" in metrics
     assert "token_hit_rate_worst_trial" in metrics
     assert "token_hit_rate_stddev_across_trials" in metrics
     assert metrics["token_hit_rate"] != metrics["block_hit_rate"]
@@ -2652,6 +3330,7 @@ def test_shared_system_prompt_reports_role_hit_contributions() -> None:
         request_count=48,
         seeds=(3,),
         capacity_blocks=12,
+        block_size_tokens=8,
         train_families=("shared_system_prompt",),
     )
     result = PrefixKVCacheEvaluator(config, splits=("train",))(baseline_lru_blocks)
@@ -2700,6 +3379,7 @@ def test_admission_stays_prefix_contiguous() -> None:
         request_count=1,
         seeds=(3,),
         capacity_blocks=8,
+        block_size_tokens=8,
         train_families=("shared_system_prompt",),
     )
     result = PrefixKVCacheEvaluator(config, splits=("train",))(lambda *_: policy)
@@ -2725,6 +3405,7 @@ def test_rejected_admission_still_observes_rest_of_missed_chain() -> None:
         request_count=1,
         seeds=(3,),
         capacity_blocks=8,
+        block_size_tokens=8,
         train_families=("shared_system_prompt",),
     )
     result = PrefixKVCacheEvaluator(config, splits=("train",))(lambda *_: policy)
@@ -2863,6 +3544,49 @@ def test_write_baseline_plots_creates_svg_files(tmp_path, monkeypatch) -> None:
         assert "</svg>" in text
 
 
+def test_agentic_surrogate_probe_tripwire_passes_within_threshold() -> None:
+    tripwire = prefix_runner._agentic_surrogate_probe_tripwire(
+        {
+            "train/agentic_tool_workflows": {"token_hit_rate": 0.48},
+            "probe/agent_trace_branching": {"token_hit_rate": 0.38},
+        },
+        threshold=0.12,
+    )
+
+    assert tripwire["status"] == "pass"
+    assert tripwire["flagged"] is False
+    assert tripwire["surrogate_minus_probe"] == pytest.approx(0.10)
+    assert tripwire["absolute_gap"] == pytest.approx(0.10)
+    assert tripwire["selection_score_excludes_probe"] is True
+
+
+def test_agentic_surrogate_probe_tripwire_flags_excessive_divergence() -> None:
+    tripwire = prefix_runner._agentic_surrogate_probe_tripwire(
+        {
+            "train/agentic_tool_workflows": {"token_hit_rate": 0.60},
+            "probe/agent_trace_branching": {"token_hit_rate": 0.30},
+        },
+        threshold=0.12,
+    )
+
+    assert tripwire["status"] == "flagged"
+    assert tripwire["flagged"] is True
+    assert tripwire["flag_reason"] == "divergence_exceeds_threshold"
+    assert tripwire["surrogate_minus_probe"] == pytest.approx(0.30)
+    assert tripwire["absolute_gap"] == pytest.approx(0.30)
+
+
+def test_agentic_surrogate_probe_tripwire_fails_closed_without_both_metrics() -> None:
+    tripwire = prefix_runner._agentic_surrogate_probe_tripwire(
+        {"train/agentic_tool_workflows": {"token_hit_rate": 0.48}},
+    )
+
+    assert tripwire["status"] == "flagged"
+    assert tripwire["flagged"] is True
+    assert tripwire["flag_reason"] == "missing_or_invalid_metric"
+    assert tripwire["absolute_gap"] is None
+
+
 def test_save_run_artifacts_persists_best_program_and_metadata(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(
         prefix_runner,
@@ -2917,7 +3641,13 @@ def test_save_run_artifacts_persists_best_program_and_metadata(tmp_path, monkeyp
         archive_size=3,
         runtime_seconds=4.0,
         metrics={"combined_score": 12.5},
-        artifacts={"split_metrics": {"validation": {"token_hit_rate": 0.5}}},
+        artifacts={
+            "split_metrics": {"validation": {"token_hit_rate": 0.5}},
+            "workload_metrics": {
+                "train/agentic_tool_workflows": {"token_hit_rate": 0.48},
+                "probe/agent_trace_branching": {"token_hit_rate": 0.38},
+            },
+        },
         metadata={"levi_runtime_seconds": 4.0},
     )
     config_snapshot = tmp_path / "input-config.yaml"
@@ -2950,6 +3680,18 @@ def test_save_run_artifacts_persists_best_program_and_metadata(tmp_path, monkeyp
     assert '"config_snapshot": "config_snapshot.yaml"' in (run_dir / "run_summary.json").read_text(
         encoding="utf-8"
     )
+    workload_manifest = json.loads((run_dir / "workload_manifest.json").read_text(encoding="utf-8"))
+    assert len(workload_manifest["panel_sha256"]) == 64
+    tripwire = json.loads(
+        (run_dir / "agentic_surrogate_probe_tripwire.json").read_text(encoding="utf-8")
+    )
+    assert tripwire["status"] == "pass"
+    assert tripwire["absolute_gap"] == pytest.approx(0.10)
+    assert "Status: PASS" in (run_dir / "agentic_surrogate_probe_tripwire.md").read_text(
+        encoding="utf-8"
+    )
+    run_summary = json.loads((run_dir / "run_summary.json").read_text(encoding="utf-8"))
+    assert run_summary["agentic_surrogate_probe_tripwire"]["status"] == "pass"
     assert (run_dir / "config_snapshot.yaml").read_text(
         encoding="utf-8"
     ) == config_snapshot.read_text(encoding="utf-8")
@@ -3046,6 +3788,204 @@ def test_persist_best_generated_mutation_decomposes_strongest_non_seed(
     report = (tmp_path / "best_generated_mutation_decomposition.md").read_text(encoding="utf-8")
     assert "Best generated mutation" in report
     assert "Agent hit" in report
+
+
+def test_specialist_promotion_adjudication_fails_over_complexity_limit(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    (tmp_path / "best_program.py").write_text("candidate\n", encoding="utf-8")
+
+    def fake_decomposition(config, candidate_path):
+        assert config.fixed_admission_policy is None
+        assert config.max_candidate_complexity is None
+        assert config.promotion_max_candidate_complexity is None
+        is_candidate = candidate_path.name == "best_program.py"
+        score = 12.0 if is_candidate else 10.0
+        return {
+            "candidate": str(candidate_path),
+            "raw_complexity": 700 if is_candidate else 600,
+            "effective_complexity": 651 if is_candidate else 600,
+            "primitive_subsidy_nodes": 49 if is_candidate else 0,
+            "primitive_subsidy_exercised": is_candidate,
+            "selection": {
+                "combined_score": score,
+                "score_breakdown": {"complexity_cost": 0.0},
+                "split_metrics": {
+                    "validation": {
+                        "avoidable_eviction_rate": 0.1,
+                        "short_reuse_after_eviction_missed_token_rate": 0.1,
+                    }
+                },
+                "workload_metrics": {
+                    "train/agentic_tool_workflows": {"token_hit_rate": 0.48},
+                },
+            },
+            "probe": {
+                "combined_score": score,
+                "workload_metrics": {
+                    "probe/agent_trace_branching": {"token_hit_rate": 0.40},
+                    "probe/cyclic_working_set_pressure": {"token_hit_rate": 0.80},
+                },
+            },
+            "hidden": {"combined_score": score},
+        }
+
+    monkeypatch.setattr(prefix_runner, "_candidate_panel_decomposition", fake_decomposition)
+
+    payload = prefix_runner._persist_specialist_promotion_adjudication(
+        tmp_path,
+        config=EvaluatorConfig(
+            max_candidate_complexity=900,
+            promotion_max_candidate_complexity=650,
+            fixed_admission_policy="pressure_aware_incumbent",
+        ),
+    )
+
+    assert payload is not None
+    assert payload["status"] == "fail"
+    assert payload["eligible"] is False
+    assert payload["checks"]["complexity_within_promotion_limit"]["passed"] is False
+    assert payload["checks"]["selection_non_regression"]["passed"] is True
+    assert (
+        json.loads((tmp_path / "promotion_adjudication.json").read_text(encoding="utf-8"))["status"]
+        == "fail"
+    )
+    assert "exploration-only" in (tmp_path / "promotion_adjudication.md").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_eviction_only_promotion_adjudication_composes_complete_candidate(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    (tmp_path / "best_program.py").write_text(
+        "def score_eviction(block, now, frequency, priority):\n"
+        "    return now - block.last_accessed_at - frequency - priority\n",
+        encoding="utf-8",
+    )
+    captured_paths = []
+
+    def fake_decomposition(config, candidate_path):
+        assert config.fixed_admission_policy is None
+        assert config.candidate_policy_surface == "full"
+        captured_paths.append(candidate_path)
+        is_candidate = candidate_path.name == "promotion_candidate.py"
+        score = 11.0 if is_candidate else 10.0
+        return {
+            "candidate": str(candidate_path),
+            "raw_complexity": 640 if is_candidate else 636,
+            "effective_complexity": 640 if is_candidate else 636,
+            "primitive_subsidy_nodes": 0,
+            "primitive_subsidy_exercised": False,
+            "selection": {
+                "combined_score": score,
+                "score_breakdown": {"complexity_cost": 1.0},
+                "split_metrics": {
+                    "validation": {
+                        "avoidable_eviction_rate": 0.1,
+                        "short_reuse_after_eviction_missed_token_rate": 0.1,
+                    }
+                },
+                "workload_metrics": {
+                    "train/agentic_tool_workflows": {"token_hit_rate": 0.50},
+                },
+            },
+            "probe": {
+                "combined_score": score,
+                "workload_metrics": {
+                    "probe/agent_trace_branching": {"token_hit_rate": 0.40},
+                    "probe/cyclic_working_set_pressure": {"token_hit_rate": 0.80},
+                },
+            },
+            "hidden": {"combined_score": score},
+        }
+
+    monkeypatch.setattr(prefix_runner, "_candidate_panel_decomposition", fake_decomposition)
+
+    payload = prefix_runner._persist_specialist_promotion_adjudication(
+        tmp_path,
+        config=EvaluatorConfig(
+            max_candidate_complexity=1000,
+            promotion_max_candidate_complexity=650,
+            fixed_admission_policy="pressure_aware_incumbent",
+            candidate_policy_surface="eviction_only",
+            search_score_mode="raw_before_complexity",
+        ),
+    )
+
+    assert payload is not None
+    assert payload["status"] == "pass"
+    assert (tmp_path / "promotion_candidate.py").is_file()
+    assert captured_paths[0].name == "promotion_candidate.py"
+    assert "def score_admission(self, block, now):" in (
+        tmp_path / "promotion_candidate.py"
+    ).read_text(encoding="utf-8")
+
+
+def test_compose_eviction_specialist_source_replaces_only_eviction_method() -> None:
+    base_source = Path(
+        "src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py"
+    ).read_text(encoding="utf-8")
+    specialist_source = textwrap.dedent(
+        """
+        import statistics
+
+        EVICTION_SCALE = 1.25
+
+        def score_eviction(block, now, frequency, priority):
+            age = statistics.fmean((0.0, now - block.last_accessed_at))
+            return EVICTION_SCALE * age - frequency - priority
+        """
+    )
+
+    composed = compose_eviction_specialist_source(specialist_source, base_source)
+
+    assert "def score_admission(self, block, now):" in composed
+    assert "frequency, priority = self._values(block.prefix_hash, now)" in composed
+    assert "return EVICTION_SCALE * age - frequency - priority" in composed
+    assert "def score_eviction(block, now, frequency, priority):" not in composed
+
+
+@pytest.mark.parametrize(
+    "source, expected_violation",
+    [
+        (
+            """
+            def score_eviction(block, now, frequency, priority):
+                return 0.0
+
+            def build_candidate(*args):
+                return None
+            """,
+            "must expose score_eviction, not a policy factory",
+        ),
+        (
+            """
+            @staticmethod
+            def score_eviction(block, now, frequency, priority):
+                return 0.0
+            """,
+            "score_eviction must be undecorated so promotion composition preserves behavior",
+        ),
+        (
+            """
+            def score_eviction(block, now, frequency, priority=0):
+                return 0.0
+            """,
+            "signature must be score_eviction(block, now, frequency, priority)",
+        ),
+    ],
+)
+def test_eviction_only_contract_rejects_uncomposable_score_surface(
+    source: str,
+    expected_violation: str,
+) -> None:
+    assert any(
+        expected_violation in violation
+        for violation in eviction_only_source_violations(textwrap.dedent(source))
+    )
 
 
 def _minimal_policy_source(admission_expr: str, eviction_expr: str) -> str:

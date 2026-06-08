@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+from prefix_cache_evolve.evaluators.contracts import PrefixBlockInfo
+
 
 @dataclass(frozen=True, slots=True)
 class CacheBlockSnapshot:
@@ -50,10 +52,37 @@ class RequestSnapshot:
     cache: tuple[CacheBlockSnapshot, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class EvictionCandidateSnapshot:
+    """One legal victim considered during an eviction decision."""
+
+    block: PrefixBlockInfo
+    score: float
+    next_reuse_distance: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class EvictionDecisionSnapshot:
+    """Immutable diagnostic view of one eviction-ranking decision."""
+
+    now: int
+    victim_prefix_hash: int
+    candidates: tuple[EvictionCandidateSnapshot, ...]
+
+
 class SimulatorObserver(Protocol):
     """Consumes request-complete snapshots without changing simulator behavior."""
 
     def on_request_complete(self, snapshot: RequestSnapshot) -> None:
         """Record or stream one completed request."""
+
+        ...
+
+
+class EvictionDecisionObserver(Protocol):
+    """Consumes diagnostic eviction snapshots without changing simulator behavior."""
+
+    def on_eviction_decision(self, snapshot: EvictionDecisionSnapshot) -> None:
+        """Record one completed eviction-ranking decision."""
 
         ...

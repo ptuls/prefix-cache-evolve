@@ -1,9 +1,85 @@
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Protocol
 
 import yaml
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    NonNegativeFloat,
+    PositiveFloat,
+    PositiveInt,
+)
+
+
+class _StrictConfigModel(BaseModel):
+    """Base class for validated repository configuration sections."""
+
+    model_config = ConfigDict(extra="forbid", validate_default=True)
+
+
+class LLMConfig(_StrictConfigModel):
+    """LLM settings accepted by the workflow YAML."""
+
+    primary_model: str | None = None
+    secondary_model: str | None = None
+    temperature: float | None = None
+    max_tokens: PositiveInt | None = None
+
+
+class EvaluatorRuntimeConfig(_StrictConfigModel):
+    """Evaluator process settings accepted by the workflow YAML."""
+
+    timeout: PositiveFloat | None = None
+    cascade_evaluation: bool | None = None
+    parallel_evaluations: PositiveInt | None = None
+
+
+class PromptConfig(_StrictConfigModel):
+    """Prompt settings accepted by the workflow YAML."""
+
+    system_message: str | None = None
+    objectives: list[str] = Field(default_factory=list)
+
+
+class ProblemConfig(_StrictConfigModel):
+    """Problem description and problem-owned settings."""
+
+    description: str | None = None
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class SearchConfig(_StrictConfigModel):
+    """Search notes accepted by the workflow YAML."""
+
+    notes: str | None = None
+
+
+class WorkflowFileConfig(_StrictConfigModel):
+    """Validated top-level schema for repository workflow YAML files."""
+
+    max_iterations: PositiveInt | None = None
+    function_signature: str | None = None
+    description: str | None = None
+    llm: LLMConfig = Field(default_factory=LLMConfig)
+    prompt: PromptConfig = Field(default_factory=PromptConfig)
+    evaluator: EvaluatorRuntimeConfig = Field(default_factory=EvaluatorRuntimeConfig)
+    problem: ProblemConfig = Field(default_factory=ProblemConfig)
+    search: SearchConfig = Field(default_factory=SearchConfig)
+    init: dict[str, Any] = Field(default_factory=dict)
+    cvt: dict[str, Any] = Field(default_factory=dict)
+    behavior: dict[str, Any] = Field(default_factory=dict)
+    meta_advice: dict[str, Any] = Field(default_factory=dict)
+    pipeline: dict[str, Any] = Field(default_factory=dict)
+    punctuated_equilibrium: dict[str, Any] = Field(default_factory=dict)
+    prompt_overrides: dict[str, Any] = Field(default_factory=dict)
+    cascade: dict[str, Any] = Field(default_factory=dict)
+    run_cost: dict[str, Any] = Field(default_factory=dict)
+    budget_dollars: NonNegativeFloat | None = None
+    budget_seconds: NonNegativeFloat | None = None
+    output_dir: str | None = None
 
 
 def _litellm_model_name(model: str | None) -> str | None:
@@ -12,29 +88,30 @@ def _litellm_model_name(model: str | None) -> str | None:
     return model if "/" in model else f"openai/{model}"
 
 
-@dataclass
-class LeviRunConfig:
+class LeviRunConfig(BaseModel):
     """Resolved Levi configuration for one evolution run."""
 
-    max_iterations: int
+    model_config = ConfigDict(extra="forbid", validate_assignment=True, validate_default=True)
+
+    max_iterations: PositiveInt
     problem_description: str
     function_signature: str
     model: str | None = None
     paradigm_model: str | None = None
     mutation_model: str | None = None
-    budget_dollars: float | None = None
-    budget_seconds: float | None = None
+    budget_dollars: NonNegativeFloat | None = None
+    budget_seconds: NonNegativeFloat | None = None
     output_dir: str | None = None
-    pipeline: dict[str, Any] = field(default_factory=dict)
-    behavior: dict[str, Any] = field(default_factory=dict)
-    cvt: dict[str, Any] = field(default_factory=dict)
-    init: dict[str, Any] = field(default_factory=dict)
-    meta_advice: dict[str, Any] = field(default_factory=dict)
-    punctuated_equilibrium: dict[str, Any] = field(default_factory=dict)
-    prompt_overrides: dict[str, Any] = field(default_factory=dict)
-    cascade: dict[str, Any] = field(default_factory=dict)
-    run_cost: dict[str, Any] = field(default_factory=dict)
-    raw: dict[str, Any] = field(default_factory=dict)
+    pipeline: dict[str, Any] = Field(default_factory=dict)
+    behavior: dict[str, Any] = Field(default_factory=dict)
+    cvt: dict[str, Any] = Field(default_factory=dict)
+    init: dict[str, Any] = Field(default_factory=dict)
+    meta_advice: dict[str, Any] = Field(default_factory=dict)
+    punctuated_equilibrium: dict[str, Any] = Field(default_factory=dict)
+    prompt_overrides: dict[str, Any] = Field(default_factory=dict)
+    cascade: dict[str, Any] = Field(default_factory=dict)
+    run_cost: dict[str, Any] = Field(default_factory=dict)
+    raw: dict[str, Any] = Field(default_factory=dict)
 
     def evolve_kwargs(self) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
@@ -77,7 +154,11 @@ class ConfigLoader:
         raw_data = self._read_yaml(path)
         return self.from_dict(raw_data)
 
-    def from_dict(self, data: dict[str, Any]) -> LeviRunConfig:
+    def from_dict(self, data: object) -> LeviRunConfig:
+        data = WorkflowFileConfig.model_validate(data).model_dump(
+            exclude_none=True,
+            exclude_unset=True,
+        )
         llm = data.get("llm", {}) or {}
         evaluator = data.get("evaluator", {}) or {}
         pipeline: dict[str, Any] = dict(data.get("pipeline", {}) or {})
@@ -129,7 +210,7 @@ class ConfigLoader:
             raw=data,
         )
 
-    def _read_yaml(self, path: Path) -> dict[str, Any]:
+    def _read_yaml(self, path: Path) -> object:
         with path.open("r", encoding="utf-8") as handle:
             data = yaml.safe_load(handle)
         return data or {}

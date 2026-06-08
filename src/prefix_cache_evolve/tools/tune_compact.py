@@ -160,7 +160,7 @@ def _run_decay_ablation(
     frequency_half_life: float,
     priority_half_life: float,
 ) -> None:
-    config = EvaluatorConfig(capacity_sweep_blocks=(48, 96))
+    config = EvaluatorConfig(capacity_sweep_blocks=(24, 48))
     variants = {
         "no_decay": replace(
             DEFAULT_PARAMETERS,
@@ -223,14 +223,14 @@ def main() -> None:
     quick_config = EvaluatorConfig(
         request_count=48,
         seeds=(3,),
-        capacity_sweep_blocks=(48, 96),
+        capacity_sweep_blocks=(24, 48),
     )
     sampled = [
         (_evaluate(parameters, quick_config), parameters)
         for parameters in (_sample_parameters(rng) for _ in range(args.samples))
     ]
 
-    full_config = EvaluatorConfig(capacity_sweep_blocks=(48, 96))
+    full_config = EvaluatorConfig(capacity_sweep_blocks=(24, 48))
     finalists = [
         (_evaluate(parameters, full_config), quick_score, parameters)
         for quick_score, parameters in sorted(sampled, key=lambda item: item[0], reverse=True)[

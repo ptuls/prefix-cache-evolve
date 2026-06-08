@@ -8,7 +8,16 @@ from prefix_cache_evolve.problems.prefix_kv_cache.primitives import (
     MAX_DECAY_TIMESCALES,
     MultiTimescaleDecay,
     decay_vector,
+    threshold_excess,
 )
+
+
+def test_threshold_excess_is_a_finite_positive_hinge() -> None:
+    assert threshold_excess(0.8, 0.25) == pytest.approx(0.55)
+    assert threshold_excess(0.2, 0.25) == 0.0
+
+    with pytest.raises(ValueError, match="finite"):
+        threshold_excess(math.inf, 0.25)
 
 
 def test_decay_vector_is_pure_and_deterministic() -> None:

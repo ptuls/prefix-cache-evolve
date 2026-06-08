@@ -1,0 +1,136 @@
+max_iterations: 300
+
+function_signature: "def score_eviction(block, now, frequency, priority):"
+
+llm:
+  primary_model: "gpt-5.4-mini"
+  secondary_model: "gpt-5.5"
+  temperature: 0.3
+  max_tokens: 6000
+
+prompt:
+  system_message: >
+    You are improving only the eviction ranking of a compact LLM prefix
+    KV-cache policy. The candidate entry point is one top-level function with
+    the exact signature score_eviction(block, now, frequency, priority). Do not
+    decorate it or add argument defaults. The evaluator composes its body with
+    frozen admission and lifecycle callbacks from the stable pressure-aware
+    incumbent. Do not define a policy class, build_candidate, candidate_factory,
+    score_admission, or lifecycle callbacks.
+
+    Eviction chooses the highest score among inactive resident leaves only, so
+    higher score means "evict sooner." Active, interior, and non-resident
+    blocks cannot be evicted. frequency and priority are frozen incumbent state
+    summaries observed before the ranking call. Focus on reducing avoidable
+    eviction and short reuse after eviction while preserving token hit and
+    churn.
+
+    PrefixBlockInfo is a frozen online value object. Use only documented
+    PrefixBlockInfo fields. Do not add guessed schema fallbacks, future-reuse
+    references, broad exception handlers, workload-family checks, request-type
+    checks, or mutable global state. Top-level imports, constants, and compact
+    pure helper functions are allowed.
+
+    The operative verifier uses 16-token physical cache blocks and 24/48-block
+    capacity tiers, equivalent to 384/768 cached tokens. Synthetic traffic is
+    generated at a fixed 8-token granularity so cache block-size comparisons
+    replay identical token streams. Do not hard-code either size.
+
+    The function-only exploration safety cap is 1000 effective AST nodes.
+    Search ranks candidates by raw behavioral score before complexity, so
+    simplification alone cannot masquerade as eviction progress. Final
+    promotion composes the winning function into the complete incumbent and
+    requires that deployable source to remain at most 650 effective AST nodes.
+    Make one focused semantic change per mutation.
+  objectives:
+    - "Reduce avoidable evictions and misses shortly after eviction."
+    - "Improve raw behavior while admission and lifecycle callbacks remain frozen."
+    - "Preserve token hit, churn, aggregate probe, both probe-family hit rates, hidden score, and the agentic tripwire."
+    - "Keep the ranking function compact enough that the final composed policy can clear 650 effective AST nodes."
+
+evaluator:
+  timeout: 90
+  cascade_evaluation: false
+  parallel_evaluations: 2
+
+init:
+  n_diverse_seeds: 6
+  n_variants_per_seed: 2
+  diversity_llm_kwargs:
+    reasoning_effort: medium
+
+cvt:
+  n_centroids: 16
+  data_driven_centroids: true
+
+behavior:
+  ast_features:
+    - cyclomatic_complexity
+    - subscript_count
+  score_keys:
+    - validation_token_hit_rate
+    - validation_avoidable_eviction_rate
+    - validation_short_reuse_after_eviction_missed_token_rate
+    - validation_cache_churn_per_1k
+    - validation_wasted_admission_token_rate
+    - train_workload_agentic_tool_workflows_avoidable_eviction_rate
+    - validation_workload_stochastic_serving_mix_avoidable_eviction_rate
+
+meta_advice:
+  enabled: true
+  interval: 24
+  max_tokens: 500
+
+pipeline:
+  n_llm_workers: 4
+  n_parents: 1
+  n_inspirations: 0
+  output_mode: diff
+
+punctuated_equilibrium:
+  enabled: true
+  reasoning_effort: medium
+  max_tokens: 12000
+
+prompt_overrides:
+  paradigm_shift: >
+    Produce one compact eviction-ranking paradigm shift. Admission is fixed to
+    the incumbent and candidates can modify only the function
+    score_eviction(block, now, frequency, priority). Candidates up to 1000
+    effective AST nodes are explored, but the composed deployable policy must
+    remain at most 650. Preserve measured raw behavioral gains while keeping
+    the function compact. Do not define a class, factory, or callbacks.
+
+problem:
+  description: >
+    Search function-only eviction-ranking improvements while composing frozen
+    admission and callbacks from the stable pressure-aware incumbent.
+  settings:
+    capacity_blocks: 24
+    capacity_sweep_blocks:
+      - 24
+      - 48
+    block_size_tokens: 16
+    workload_token_granularity: 8
+    request_count: 96
+    seeds:
+      - 11
+      - 23
+      - 37
+    policy_seed: 0
+    family_request_multipliers:
+      tenant_phase_shift_cycles: 3
+      tenant_phase_shift_cycles_shifted: 4
+    form_aware_complexity: true
+    max_candidate_complexity: 1000
+    promotion_max_candidate_complexity: 650
+    fixed_admission_policy: pressure_aware_incumbent
+    candidate_policy_surface: eviction_only
+    search_score_mode: raw_before_complexity
+    reject_unsupported_source_patterns: true
+
+search:
+  notes: >
+    Search score excludes the complexity charge. Require a real raw behavioral
+    improvement, then simplify only as needed for the composed policy to pass
+    final promotion.

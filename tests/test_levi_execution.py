@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from prefix_cache_evolve.evaluator_entry import EvaluatorResult
 from prefix_cache_evolve.workflow.configuration import ConfigLoader
@@ -20,6 +21,19 @@ from prefix_cache_evolve.workflow.execution import (
     _module_name_from_package_path,
     _persist_levi_paradigm_candidate_capture,
 )
+
+
+def test_workflow_config_loader_validates_top_level_and_nested_settings() -> None:
+    loader = ConfigLoader()
+
+    with pytest.raises(ValueError, match=r"(?s)unexpected.*Extra inputs are not permitted"):
+        loader.from_dict({"unexpected": {}})
+
+    with pytest.raises(ValueError, match=r"(?s)parallel_evaluations.*greater than 0"):
+        loader.from_dict({"evaluator": {"parallel_evaluations": 0}})
+
+    with pytest.raises(ValueError, match=r"(?s)prompt.*Input should be a valid dictionary"):
+        loader.from_dict({"prompt": []})
 
 
 def test_levi_score_function_exposes_combined_score() -> None:
@@ -125,6 +139,31 @@ def test_levi_score_function_rejects_unsuccessful_results() -> None:
     assert score_fn(lambda: None) == {"error": "candidate rejected by static policy checks"}
 
 
+def test_levi_score_function_forwards_structured_repair_feedback() -> None:
+    def evaluate_factory(_factory):
+        return EvaluatorResult(
+            metrics={
+                "combined_score": -2001.0,
+                "success": False,
+                "error": "candidate rejected by static policy checks",
+            },
+            artifacts={
+                "repair_feedback": [
+                    "Delete or simplify at least 20 effective AST nodes.",
+                ],
+            },
+        )
+
+    score_fn = LeviScoreFunction(evaluate_factory)
+
+    assert score_fn(lambda: None) == {
+        "error": (
+            "Repair before retry: Delete or simplify at least 20 effective AST nodes. "
+            "Failure: candidate rejected by static policy checks."
+        )
+    }
+
+
 def test_levi_code_adapter_accepts_failure_feedback() -> None:
     from levi.artifacts.code import CodeAdapter
     from levi.core import Program
@@ -146,6 +185,7 @@ def test_levi_code_adapter_accepts_failure_feedback() -> None:
 
     assert "## Evaluator Feedback" in prompt
     assert "weak validation workload validation/agentic_replan" in prompt
+    assert "## Preflight Repair Checks" in prompt
     assert prompt.index("## Evaluator Feedback") < prompt.index("## Output")
 
 
@@ -420,4 +460,45 @@ def test_levi_runner_records_generated_snapshot_path(tmp_path, monkeypatch) -> N
     assert result.metadata["levi_snapshot_path"] == str(output_dir / "snapshot.json")
     assert result.metadata["levi_paradigm_candidates_dir"] == str(
         output_dir / "paradigm_candidates"
+    )
+
+
+def test_levi_runner_prefers_configured_function_signature(tmp_path, monkeypatch) -> None:
+    captured = {}
+    program_path = tmp_path / "program.py"
+    program_path.write_text(
+        "def score_eviction(block, now, frequency, priority):\n    return 0.0\n",
+        encoding="utf-8",
+    )
+
+    def evolve_code(_description, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            best_program=program_path.read_text(encoding="utf-8"),
+            best_score=1.0,
+        )
+
+    runner = LeviRunner(
+        evolve_code=evolve_code,
+        evaluator_path=(
+            Path(__file__).resolve().parents[1]
+            / "src/prefix_cache_evolve/problems/prefix_kv_cache/evaluator.py"
+        ),
+        problem_description="test",
+        function_signature="def build_candidate():",
+    )
+    monkeypatch.setattr(
+        runner,
+        "_evaluate_best_program",
+        lambda _source: EvaluatorResult(metrics={"combined_score": 1.0}, artifacts={}),
+    )
+    config = SimpleNamespace(
+        function_signature="def score_eviction(block, now, frequency, priority):",
+        evolve_kwargs=lambda: {},
+    )
+
+    runner.run(program_path, config)
+
+    assert captured["function_signature"] == (
+        "def score_eviction(block, now, frequency, priority):"
     )

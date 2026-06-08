@@ -1,0 +1,88 @@
+# Exact evaluator settings for the historical 77.230 discovery result.
+#
+# This intentionally contains evaluator settings only. It reproduces the reported
+# synthetic request panel and scoring, not the nondeterministic LLM-guided search.
+
+evaluator:
+  timeout: 90
+
+problem:
+  settings:
+    capacity_blocks: 48
+    capacity_sweep_blocks:
+      - 48
+      - 96
+    block_size_tokens: 8
+    workload_token_granularity: 8
+    request_count: 96
+    seeds:
+      - 11
+      - 23
+      - 37
+    policy_seed: 0
+    family_request_multipliers:
+      tenant_phase_shift_cycles: 3
+      tenant_phase_shift_cycles_shifted: 4
+    prefill_cost_per_token: 1
+    lookup_cost_per_block: 0.035
+    eviction_cost_per_block: 0.2
+    active_tokens_per_step: 64
+    latency_norm: 0
+    max_memory_bytes: 67108864
+    form_aware_complexity: true
+    max_candidate_complexity: 650
+    reject_unsupported_source_patterns: true
+    train_families:
+      - shared_system_prompt
+      - rag_template_reuse
+      - long_context_mixed
+      - session_continuation_growth
+      - agentic_tool_workflows
+    validation_families:
+      - phase_shift_prompts
+      - multi_tenant_skew
+      - hotset_cold_scan
+      - concurrent_long_generation
+      - stochastic_serving_mix
+      - rolling_template_versions
+      - heavy_tailed_prefix_lengths
+      - priority_burst_recovery
+      - priority_one_off_noise
+      - tenant_phase_shift_cycles
+    probe_families:
+      - agent_trace_branching
+      - cyclic_working_set_pressure
+    hidden_families:
+      - adversarial_unique_prompts
+      - cross_family_mixture
+      - tenant_session_reentry
+      - stochastic_serving_mix_shifted
+      - rolling_template_versions_shifted
+      - heavy_tailed_prefix_lengths_shifted
+      - priority_burst_recovery_shifted
+      - cyclic_working_set_pressure_shifted
+      - priority_one_off_noise_shifted
+      - tenant_phase_shift_cycles_shifted
+    scoring:
+      w_avg_tok: 80
+      w_avg_blk: 60
+      min_workload_weight: 0.5
+      min_seed_weight: 0.15
+      request_tail_weight: 12
+      worst_window_weight: 12
+      priority_hit_weight: 8
+      wasted_admission_weight: 6
+      admission_utility_weight: 1
+      avoidable_eviction_weight: 8
+      latency_weight: 35
+      latency_cap: 40
+      churn_weight: 0.015
+      churn_cap: 25
+      underfill_weight: 12
+      underfill_cap: 15
+      fairness_weight: 80
+      fairness_cap: 30
+      k_complex: 0.065
+      complexity_exponent: 0.75
+      v_min: -1000
+      invalid_surcharge: 1000

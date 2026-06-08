@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
-from dataclasses import fields, replace
 from pathlib import Path
-from typing import Any, Iterator, Mapping
+from typing import Iterator, Mapping
 
 import yaml
 
 from prefix_cache_evolve.evaluators.prefix_kv_cache import EvaluatorConfig
+from prefix_cache_evolve.workflow.configuration import WorkflowFileConfig
 
 PREFIX_KV_CONFIG_ENV = "PREFIX_CACHE_EVOLVE_CONFIG"
 PREFIX_KV_QUICK_ENV = "PREFIX_CACHE_EVOLVE_QUICK"
@@ -20,103 +20,27 @@ DEFAULT_CONFIG_PATH = (
     _REPOSITORY_CONFIG_PATH if _REPOSITORY_CONFIG_PATH.exists() else _PACKAGED_CONFIG_PATH
 )
 
-_TUPLE_FIELDS = {
-    "capacity_sweep_blocks",
-    "seeds",
-    "train_families",
-    "validation_families",
-    "probe_families",
-    "hidden_families",
-}
-_MAPPING_FIELDS = {"family_request_multipliers"}
-_SCORING_FIELDS = {
-    "w_avg_tok",
-    "w_avg_blk",
-    "min_workload_weight",
-    "min_seed_weight",
-    "request_tail_weight",
-    "worst_window_weight",
-    "priority_hit_weight",
-    "wasted_admission_weight",
-    "admission_utility_weight",
-    "avoidable_eviction_weight",
-    "latency_weight",
-    "latency_cap",
-    "churn_weight",
-    "churn_cap",
-    "underfill_weight",
-    "underfill_cap",
-    "fairness_weight",
-    "fairness_cap",
-    "k_complex",
-    "complexity_exponent",
-    "v_min",
-    "invalid_surcharge",
-}
-_DIRECT_FIELDS = (
-    {field.name for field in fields(EvaluatorConfig)}
-    - _TUPLE_FIELDS
-    - _MAPPING_FIELDS
-    - _SCORING_FIELDS
-)
-
 
 def load_evaluator_config(path: Path = DEFAULT_CONFIG_PATH) -> EvaluatorConfig:
     """Load the evaluator settings that are operative for reports and evolution."""
 
     with path.open("r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle) or {}
-    data = _mapping(data, label="root")
-    problem = _mapping(data.get("problem"), label="problem")
-    settings = _mapping(problem.get("settings"), label="problem.settings")
-    config = evaluator_config_from_settings(settings)
-    evaluator = _mapping(data.get("evaluator"), label="evaluator")
-    if evaluator.get("timeout") is not None:
-        config = replace(config, timeout_s=float(evaluator["timeout"]))
+    document = WorkflowFileConfig.model_validate(data)
+    config = evaluator_config_from_settings(document.problem.settings)
+    if document.evaluator.timeout is not None:
+        config = config.with_updates(timeout_s=document.evaluator.timeout)
     return config
 
 
 def evaluator_config_from_settings(
-    settings: Mapping[str, Any],
+    settings: Mapping[str, object],
     *,
     base: EvaluatorConfig | None = None,
 ) -> EvaluatorConfig:
     """Overlay YAML problem settings onto an evaluator configuration."""
 
-    supported_settings = _DIRECT_FIELDS | _TUPLE_FIELDS | _MAPPING_FIELDS | {"scoring"}
-    unknown_settings = sorted(set(settings) - supported_settings)
-    if unknown_settings:
-        raise ValueError(
-            "unsupported prefix KV-cache evaluator settings: " + ", ".join(unknown_settings)
-        )
-    kwargs: dict[str, Any] = {}
-    for name in _DIRECT_FIELDS:
-        if name in settings:
-            kwargs[name] = settings[name]
-    for name in _TUPLE_FIELDS:
-        if name in settings:
-            kwargs[name] = tuple(settings[name])
-    for name in _MAPPING_FIELDS:
-        if name in settings:
-            kwargs[name] = dict(settings[name])
-    scoring = _mapping(settings.get("scoring"), label="problem.settings.scoring")
-    unknown_scoring = sorted(set(scoring) - _SCORING_FIELDS)
-    if unknown_scoring:
-        raise ValueError(
-            "unsupported prefix KV-cache scoring settings: " + ", ".join(unknown_scoring)
-        )
-    for name in _SCORING_FIELDS:
-        if name in scoring:
-            kwargs[name] = scoring[name]
-    return replace(base or EvaluatorConfig(), **kwargs)
-
-
-def _mapping(value: Any, *, label: str) -> Mapping[str, Any]:
-    if value is None:
-        return {}
-    if not isinstance(value, Mapping):
-        raise ValueError(f"{label} must be a mapping")
-    return value
+    return (base or EvaluatorConfig()).with_updates(**dict(settings))
 
 
 def active_evaluator_config(default: EvaluatorConfig) -> EvaluatorConfig:
@@ -125,8 +49,7 @@ def active_evaluator_config(default: EvaluatorConfig) -> EvaluatorConfig:
     path = os.environ.get(PREFIX_KV_CONFIG_ENV)
     config = load_evaluator_config(Path(path)) if path else default
     if os.environ.get(PREFIX_KV_QUICK_ENV) == "1":
-        config = replace(
-            config,
+        config = config.with_updates(
             request_count=36,
             seeds=(3,),
             family_request_multipliers={},

@@ -39,6 +39,10 @@ class BaselineRegistry:
         for specification in specifications:
             if specification.name in self._specifications:
                 raise ValueError(f"duplicate baseline {specification.name!r}")
+            if specification.deployable and specification.requires_future_reuse:
+                raise ValueError(
+                    f"deployable baseline {specification.name!r} cannot require future reuse"
+                )
             self._specifications[specification.name] = specification
 
     def factories(

@@ -11,7 +11,10 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import (
     PrefixKVCacheEvaluator,
     baseline_lru_blocks,
 )
-from prefix_cache_evolve.problems.prefix_kv_cache.runner import replay_trace_report
+from prefix_cache_evolve.problems.prefix_kv_cache.runner import (
+    calibrate_trace_report,
+    replay_trace_report,
+)
 from prefix_cache_evolve.problems.prefix_kv_cache.trace_replay import (
     calibrate_anonymized_trace,
     load_anonymized_trace,
@@ -98,6 +101,33 @@ def test_trace_calibration_reports_mix_depth_bursts_and_lengths(tmp_path) -> Non
     assert calibration["prefix_depth_blocks"]["p95"] == 3.0
     assert calibration["output_length_tokens"]["p99"] == 256.0
     assert calibration["arrival_bursts"]["same_bucket_request_fraction"] == pytest.approx(2 / 3)
+
+
+def test_trace_calibration_report_records_source_hash(tmp_path) -> None:
+    trace_path = tmp_path / "trace.jsonl"
+    output_path = tmp_path / "calibration.json"
+    _write_trace(
+        trace_path,
+        [
+            _record(
+                timestamp_ms=0,
+                prefix_path=["root", "branch"],
+                prompt_length=8,
+                request_type="chat",
+            )
+        ],
+    )
+
+    payload = calibrate_trace_report(
+        trace_path,
+        output_path=output_path,
+        arrival_bucket_ms=100,
+        request_limit=None,
+    )
+
+    assert output_path.exists()
+    assert payload["trace_path"] == str(trace_path)
+    assert len(payload["trace_sha256"]) == 64
 
 
 def test_trace_loader_rejects_raw_prompt_content_even_when_nested(tmp_path) -> None:
@@ -188,6 +218,8 @@ def test_replay_report_runs_deployable_baselines_on_fixed_trace(tmp_path) -> Non
     assert output_path.exists()
     assert payload["request_count"] == 3
     assert payload["capacity_blocks"] == [4]
+    assert len(payload["trace_sha256"]) == 64
+    assert len(payload["request_stream_sha256"]) == 64
     assert payload["results"]["candidate"]["success"] is True
     assert payload["results"]["lru"]["split_metrics"]["validation"]["token_hit_rate"] > 0.0
 

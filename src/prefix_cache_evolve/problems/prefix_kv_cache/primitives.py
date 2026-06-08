@@ -10,6 +10,16 @@ MAX_DECAY_TIMESCALES = 8
 DEFAULT_MAX_DECAY_KEYS = 1024
 
 
+def threshold_excess(value: float, threshold: float) -> float:
+    """Return the positive amount by which ``value`` exceeds ``threshold``."""
+
+    value = float(value)
+    threshold = float(threshold)
+    if not math.isfinite(value) or not math.isfinite(threshold):
+        raise ValueError("value and threshold must be finite")
+    return max(0.0, value - threshold)
+
+
 def decay_vector(
     values: Sequence[float],
     half_lives: Sequence[float],

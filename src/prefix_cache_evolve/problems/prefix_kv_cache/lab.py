@@ -34,9 +34,12 @@ _DEFAULT_POLICIES = (
     "tinylfu_lru",
     "lru",
 )
+_INCUMBENT_ID = "candidate"
+_INCUMBENT_BENCHMARK_SELECTION_SCORE = 77.230
 _POLICY_DESCRIPTIONS = {
     "candidate": (
-        "Pressure-aware online reuse policy promoted from the 300-evaluation compact search."
+        "Promoted priority-aware pressure policy. It throttles low-priority admissions "
+        "under moderate sustained pressure while preserving recurrence-backed reuse."
     ),
     "no_cache": "Control policy that bypasses every cache admission.",
     "lru": "Admit all blocks and evict the least recently used legal leaf.",
@@ -87,7 +90,7 @@ def _display_name(name: str) -> str:
     """Convert an internal identifier to a concise UI label."""
 
     special_names = {
-        "candidate": "Pressure-aware candidate",
+        "candidate": "Priority-aware pressure incumbent",
         "lru": "LRU",
         "lfu": "LFU",
         "tinylfu_lru": "TinyLFU + LRU",
@@ -95,6 +98,23 @@ def _display_name(name: str) -> str:
         "sglang_radix_attention": "SGLang RadixAttention",
     }
     return special_names.get(name, name.replace("_", " ").title())
+
+
+def _policy_metadata(name: str) -> dict[str, Any]:
+    """Return stable UI metadata for a policy."""
+
+    group = "candidate" if name == _INCUMBENT_ID else BASELINE_REGISTRY.group(name)
+    promoted = name == _INCUMBENT_ID
+    return {
+        "id": name,
+        "label": _display_name(name),
+        "description": _POLICY_DESCRIPTIONS[name],
+        "group": group,
+        "status": "promoted incumbent" if promoted else group,
+        "promoted": promoted,
+        "benchmark_selection_score": (_INCUMBENT_BENCHMARK_SELECTION_SCORE if promoted else None),
+        "benchmark_context": "discovery · 8-token verifier" if promoted else None,
+    }
 
 
 class _SnapshotCollector:
@@ -112,6 +132,7 @@ class SimulationLab:
 
     def __init__(self) -> None:
         config = EvaluatorConfig()
+        self._workload_token_granularity = config.effective_workload_token_granularity()
         self._workloads = tuple(
             dict.fromkeys(
                 config.train_families + config.validation_families + config.probe_families
@@ -130,18 +151,13 @@ class SimulationLab:
                 "id": "synthetic",
                 "label": "Synthetic traffic",
                 "description": (
-                    "Deterministic generated requests. The event contract is ready "
-                    "for a future live-traffic adapter."
+                    "Deterministic generated requests with fixed token streams, so "
+                    "cache block-size changes remain directly comparable."
                 ),
             },
             "policies": [
                 {
-                    "id": name,
-                    "label": _display_name(name),
-                    "description": _POLICY_DESCRIPTIONS[name],
-                    "group": (
-                        "candidate" if name == "candidate" else BASELINE_REGISTRY.group(name)
-                    ),
+                    **_policy_metadata(name),
                     "default_selected": name in _DEFAULT_POLICIES,
                 }
                 for name in self._factories
@@ -158,8 +174,9 @@ class SimulationLab:
                 "policies": list(_DEFAULT_POLICIES),
                 "workload": "agentic_tool_workflows",
                 "request_count": 64,
-                "capacity_blocks": 48,
-                "block_size_tokens": 8,
+                "capacity_blocks": 24,
+                "block_size_tokens": 16,
+                "workload_token_granularity": self._workload_token_granularity,
                 "seed": 11,
             },
             "limits": {
@@ -185,7 +202,7 @@ class SimulationLab:
         requests = build_workload(
             workload,
             request_count=request_count,
-            block_size_tokens=block_size_tokens,
+            block_size_tokens=self._workload_token_granularity,
             seed=seed,
         )
         config = EvaluatorConfig(
@@ -210,6 +227,8 @@ class SimulationLab:
                 "request_count": request_count,
                 "capacity_blocks": capacity_blocks,
                 "block_size_tokens": block_size_tokens,
+                "capacity_tokens": capacity_blocks * block_size_tokens,
+                "workload_token_granularity": self._workload_token_granularity,
                 "seed": seed,
             },
             "policies": policy_results,
@@ -261,9 +280,7 @@ class SimulationLab:
             seed=seed,
         )
         return {
-            "id": name,
-            "label": _display_name(name),
-            "group": ("candidate" if name == "candidate" else BASELINE_REGISTRY.group(name)),
+            **_policy_metadata(name),
             "summary": _summary(metrics),
             "events": collector.events,
         }

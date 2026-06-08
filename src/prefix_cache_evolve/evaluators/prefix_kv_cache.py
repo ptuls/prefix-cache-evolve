@@ -10,7 +10,17 @@ import tracemalloc
 from collections import deque
 from dataclasses import dataclass, field, replace
 from statistics import mean, median, pstdev
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Literal, Mapping
+
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    NonNegativeFloat,
+    PositiveFloat,
+    PositiveInt,
+    model_validator,
+)
 
 from prefix_cache_evolve.evaluators.baselines import (
     BASELINE_REGISTRY as BASELINE_REGISTRY,
@@ -80,6 +90,9 @@ from prefix_cache_evolve.evaluators.contracts import (
 )
 from prefix_cache_evolve.evaluators.telemetry import (
     CacheBlockSnapshot,
+    EvictionCandidateSnapshot,
+    EvictionDecisionObserver,
+    EvictionDecisionSnapshot,
     RequestSnapshot,
     SimulatorObserver,
 )
@@ -98,6 +111,7 @@ _ACCESS_GAP_EW_ALPHA = 0.25
 _REGIME_WINDOW_REQUESTS = 32
 _PREFIX_ROLES = ("system", "developer", "user")
 _TOKEN_PREFIX_ROLES: dict[int, str] = {}
+_KV_CAPACITY_MODES = ("prefix_only", "shared")
 
 
 @dataclass(frozen=True)
@@ -141,14 +155,17 @@ class WorkloadConfig:
     seed_offset: int = 0
 
 
-@dataclass
-class EvaluatorConfig:
+class EvaluatorConfig(BaseModel):
     """Configuration for prefix KV-cache evaluation and scoring."""
 
-    capacity_blocks: int = 48
-    capacity_sweep_blocks: tuple[int, ...] = ()
-    block_size_tokens: int = 8
+    model_config = ConfigDict(extra="forbid", frozen=True, validate_default=True)
+
+    capacity_blocks: PositiveInt = 24
+    capacity_sweep_blocks: tuple[PositiveInt, ...] = ()
+    block_size_tokens: PositiveInt = 16
+    workload_token_granularity: PositiveInt = 8
     seeds: tuple[int, ...] = (11, 23, 37)
+    policy_seed: int = 0
     train_families: tuple[str, ...] = (
         "shared_system_prompt",
         "rag_template_reuse",
@@ -184,45 +201,79 @@ class EvaluatorConfig:
         "priority_one_off_noise_shifted",
         "tenant_phase_shift_cycles_shifted",
     )
-    request_count: int = 96
-    family_request_multipliers: dict[str, int] = field(
+    request_count: PositiveInt = 96
+    family_request_multipliers: dict[str, PositiveInt] = Field(
         default_factory=lambda: {
             "tenant_phase_shift_cycles": 3,
             "tenant_phase_shift_cycles_shifted": 4,
         }
     )
-    prefill_cost_per_token: float = 1.0
-    lookup_cost_per_block: float = 0.035
-    eviction_cost_per_block: float = 0.2
-    active_tokens_per_step: int = 64
-    w_avg_tok: float = 80.0
-    w_avg_blk: float = 60.0
-    min_workload_weight: float = 0.5
-    min_seed_weight: float = 0.15
-    request_tail_weight: float = 12.0
-    worst_window_weight: float = 12.0
-    priority_hit_weight: float = 8.0
-    wasted_admission_weight: float = 6.0
-    admission_utility_weight: float = 1.0
-    avoidable_eviction_weight: float = 8.0
-    latency_norm: float = 0.0
-    latency_weight: float = 35.0
-    latency_cap: float = 40.0
-    churn_weight: float = 0.015
-    churn_cap: float = 25.0
-    underfill_weight: float = 12.0
-    underfill_cap: float = 15.0
-    fairness_weight: float = 80.0
-    fairness_cap: float = 30.0
-    k_complex: float = 0.065
-    complexity_exponent: float = 0.75
+    prefill_cost_per_token: NonNegativeFloat = 1.0
+    lookup_cost_per_block: NonNegativeFloat = 0.035
+    eviction_cost_per_block: NonNegativeFloat = 0.2
+    active_tokens_per_step: PositiveInt = 64
+    kv_capacity_mode: Literal["prefix_only", "shared"] = "prefix_only"
+    w_avg_tok: NonNegativeFloat = 80.0
+    w_avg_blk: NonNegativeFloat = 60.0
+    min_workload_weight: NonNegativeFloat = 0.5
+    min_seed_weight: float = Field(default=0.15, ge=0.0, le=1.0)
+    request_tail_weight: NonNegativeFloat = 12.0
+    worst_window_weight: NonNegativeFloat = 12.0
+    priority_hit_weight: NonNegativeFloat = 8.0
+    wasted_admission_weight: NonNegativeFloat = 6.0
+    admission_utility_weight: NonNegativeFloat = 1.0
+    avoidable_eviction_weight: NonNegativeFloat = 8.0
+    latency_norm: NonNegativeFloat = 0.0
+    latency_weight: NonNegativeFloat = 35.0
+    latency_cap: NonNegativeFloat = 40.0
+    churn_weight: NonNegativeFloat = 0.015
+    churn_cap: NonNegativeFloat = 25.0
+    underfill_weight: NonNegativeFloat = 12.0
+    underfill_cap: NonNegativeFloat = 15.0
+    fairness_weight: NonNegativeFloat = 80.0
+    fairness_cap: NonNegativeFloat = 30.0
+    k_complex: NonNegativeFloat = 0.065
+    complexity_exponent: PositiveFloat = 0.75
     v_min: float = -1_000.0
-    invalid_surcharge: float = 1_000.0
-    timeout_s: float = 30.0
-    max_memory_bytes: int = 64 * 1024 * 1024
+    invalid_surcharge: NonNegativeFloat = 1_000.0
+    timeout_s: PositiveFloat = 30.0
+    max_memory_bytes: PositiveInt = 64 * 1024 * 1024
     form_aware_complexity: bool = False
-    max_candidate_complexity: int | None = None
+    max_candidate_complexity: PositiveInt | None = None
+    promotion_max_candidate_complexity: PositiveInt | None = None
+    fixed_admission_policy: str | None = None
+    candidate_policy_surface: Literal["full", "eviction_only"] = "full"
+    search_score_mode: Literal["combined", "raw_before_complexity"] = "combined"
     reject_unsupported_source_patterns: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _flatten_scoring_settings(cls, value: object) -> object:
+        """Accept the YAML scoring subsection while retaining a flat runtime API."""
+
+        if not isinstance(value, Mapping):
+            return value
+        values = dict(value)
+        scoring = values.pop("scoring", None)
+        if scoring is None:
+            return values
+        if not isinstance(scoring, Mapping):
+            raise ValueError("scoring must be a mapping")
+        duplicates = sorted(set(values).intersection(scoring))
+        if duplicates:
+            raise ValueError(
+                "scoring fields must not also appear at the settings root: " + ", ".join(duplicates)
+            )
+        values.update(scoring)
+        return values
+
+    def with_updates(self, **updates: object) -> EvaluatorConfig:
+        """Return a validated copy with the supplied settings overlaid."""
+
+        normalized = type(self)._flatten_scoring_settings(updates)
+        if not isinstance(normalized, Mapping):
+            raise TypeError("evaluator config updates must be a mapping")
+        return type(self).model_validate({**self.model_dump(), **dict(normalized)})
 
     def effective_capacity_blocks(self) -> tuple[int, ...]:
         """Returns the capacities evaluated for each workload and seed."""
@@ -236,6 +287,23 @@ class EvaluatorConfig:
             if capacity not in capacities:
                 capacities.append(capacity)
         return tuple(capacities)
+
+    def effective_capacity_tokens(self) -> tuple[int, ...]:
+        """Returns evaluated cache capacities expressed in tokens."""
+
+        if self.block_size_tokens <= 0:
+            raise ValueError("block size tokens must be positive")
+        return tuple(
+            capacity * self.block_size_tokens for capacity in self.effective_capacity_blocks()
+        )
+
+    def effective_workload_token_granularity(self) -> int:
+        """Returns the canonical token granularity used to build synthetic traffic."""
+
+        granularity = int(self.workload_token_granularity)
+        if granularity <= 0:
+            raise ValueError("workload token granularity must be positive")
+        return granularity
 
     def workload_configs(self, splits: Iterable[str]) -> tuple[WorkloadConfig, ...]:
         configs: list[WorkloadConfig] = []
@@ -339,6 +407,16 @@ class TrialMetrics:
     worst_recovery_phase_p95_latency_proxy: float = 0.0
     memory_occupancy_mean: float = 0.0
     memory_occupancy_peak: int = 0
+    prefix_kv_occupancy_mean: float = 0.0
+    prefix_kv_occupancy_peak: int = 0
+    decode_kv_occupancy_mean: float = 0.0
+    decode_kv_occupancy_peak: int = 0
+    decode_kv_blocks_requested: int = 0
+    decode_kv_blocks_allocated: int = 0
+    decode_kv_allocation_failure_blocks: int = 0
+    decode_kv_allocation_failure_rate: float = 0.0
+    decode_pressure_eviction_count: int = 0
+    decode_pressure_eviction_rate: float = 0.0
     arrival_span_steps: int = 0
     active_request_count_peak: int = 0
     max_prefill_cost: float = 0.0
@@ -427,6 +505,16 @@ class TrialMetrics:
             "worst_recovery_phase_p95_latency_proxy": (self.worst_recovery_phase_p95_latency_proxy),
             "memory_occupancy_mean": self.memory_occupancy_mean,
             "memory_occupancy_peak": self.memory_occupancy_peak,
+            "prefix_kv_occupancy_mean": self.prefix_kv_occupancy_mean,
+            "prefix_kv_occupancy_peak": self.prefix_kv_occupancy_peak,
+            "decode_kv_occupancy_mean": self.decode_kv_occupancy_mean,
+            "decode_kv_occupancy_peak": self.decode_kv_occupancy_peak,
+            "decode_kv_blocks_requested": self.decode_kv_blocks_requested,
+            "decode_kv_blocks_allocated": self.decode_kv_blocks_allocated,
+            "decode_kv_allocation_failure_blocks": self.decode_kv_allocation_failure_blocks,
+            "decode_kv_allocation_failure_rate": self.decode_kv_allocation_failure_rate,
+            "decode_pressure_eviction_count": self.decode_pressure_eviction_count,
+            "decode_pressure_eviction_rate": self.decode_pressure_eviction_rate,
             "arrival_span_steps": self.arrival_span_steps,
             "active_request_count_peak": self.active_request_count_peak,
             "max_prefill_cost": self.max_prefill_cost,
@@ -513,6 +601,43 @@ class _AdmissionAccounting:
             self.evicted_without_hit_count += 1
 
 
+@dataclass
+class _CapacityOutcome:
+    """Capacity effects produced outside one prompt admission."""
+
+    evictions: int = 0
+    high_descendant_evictions: int = 0
+    avoidable_evictions: int = 0
+    avoidable_short_reuse_evictions: int = 0
+    decode_blocks_requested: int = 0
+    decode_blocks_allocated: int = 0
+    decode_allocation_failure_blocks: int = 0
+    decode_pressure_evictions: int = 0
+
+    def merge(self, other: _CapacityOutcome) -> None:
+        """Accumulate another capacity outcome."""
+
+        self.evictions += other.evictions
+        self.high_descendant_evictions += other.high_descendant_evictions
+        self.avoidable_evictions += other.avoidable_evictions
+        self.avoidable_short_reuse_evictions += other.avoidable_short_reuse_evictions
+        self.decode_blocks_requested += other.decode_blocks_requested
+        self.decode_blocks_allocated += other.decode_blocks_allocated
+        self.decode_allocation_failure_blocks += other.decode_allocation_failure_blocks
+        self.decode_pressure_evictions += other.decode_pressure_evictions
+
+
+@dataclass
+class _ActiveDecode:
+    """Decode KV allocation state for one in-flight request."""
+
+    started_at: int
+    release_at: int
+    total_tokens: int
+    attempted_blocks: int = 0
+    allocated_blocks: int = 0
+
+
 class InvalidCandidateError(RuntimeError):
     """Raised when a candidate returns an invalid score or crashes."""
 
@@ -578,9 +703,11 @@ class PrefixKVCacheSimulator:
         lookup_cost_per_block: float,
         eviction_cost_per_block: float,
         active_tokens_per_step: int = 64,
+        kv_capacity_mode: str = "prefix_only",
         expose_future_reuse: bool = False,
         max_memory_bytes: int | None = None,
         observer: SimulatorObserver | None = None,
+        eviction_decision_observer: EvictionDecisionObserver | None = None,
     ) -> None:
         self.capacity_blocks = capacity_blocks
         self.block_size_tokens = block_size_tokens
@@ -588,9 +715,13 @@ class PrefixKVCacheSimulator:
         self.lookup_cost_per_block = lookup_cost_per_block
         self.eviction_cost_per_block = eviction_cost_per_block
         self.active_tokens_per_step = active_tokens_per_step
+        if kv_capacity_mode not in _KV_CAPACITY_MODES:
+            raise ValueError(f"kv capacity mode must be one of {', '.join(_KV_CAPACITY_MODES)}")
+        self.kv_capacity_mode = kv_capacity_mode
         self.expose_future_reuse = expose_future_reuse
         self.max_memory_bytes = max_memory_bytes
         self.observer = observer
+        self.eviction_decision_observer = eviction_decision_observer
         self.blocks: dict[int, _BlockState] = {}
         self._release_events: dict[int, list[int]] = {}
         self._resident_hashes: set[int] = set()
@@ -601,6 +732,8 @@ class PrefixKVCacheSimulator:
         self._subtree_active_ref_counts: dict[int, int] = {}
         self._evicted_hashes: set[int] = set()
         self._last_evicted_at: dict[int, int] = {}
+        self._active_decodes: list[_ActiveDecode] = []
+        self._decode_resident_blocks = 0
         self._recent_admission_pressure: deque[float] = deque(maxlen=_REGIME_WINDOW_REQUESTS)
         self._recent_miss_rates: deque[float] = deque(maxlen=_REGIME_WINDOW_REQUESTS)
 
@@ -648,6 +781,8 @@ class PrefixKVCacheSimulator:
         recovery_phase_records: list[list[tuple[int, int, float]]] = []
         previous_was_recovery = False
         occupancies: list[int] = []
+        prefix_occupancies: list[int] = []
+        decode_occupancies: list[int] = []
         active_request_releases: dict[int, int] = {}
         active_request_count = 0
         active_request_count_peak = 0
@@ -674,6 +809,7 @@ class PrefixKVCacheSimulator:
         admission_accounting = _AdmissionAccounting()
         avoidable_eviction_count = 0
         avoidable_short_reuse_eviction_count = 0
+        decode_capacity_outcome = _CapacityOutcome()
 
         try:
             self._validate_policy(policy)
@@ -692,6 +828,15 @@ class PrefixKVCacheSimulator:
             for request_index, (now, request) in enumerate(
                 zip(arrival_steps, requests, strict=True)
             ):
+                decode_capacity_outcome.merge(
+                    self._advance_decodes(
+                        policy,
+                        now,
+                        future_reuse,
+                        audit_future_reuse,
+                        admission_accounting,
+                    )
+                )
                 self._release_expired(now)
                 for release_at in sorted(step for step in active_request_releases if step <= now):
                     active_request_count -= active_request_releases.pop(release_at)
@@ -714,6 +859,9 @@ class PrefixKVCacheSimulator:
 
                 visible_request = replace(
                     request.info,
+                    request_id=_stable_hash(("candidate-request", seed, request.info.request_id)),
+                    request_type="request",
+                    prompt_tokens=(),
                     recent_admission_pressure=_window_mean(self._recent_admission_pressure),
                     recent_miss_rate=_window_mean(self._recent_miss_rates),
                 )
@@ -726,7 +874,7 @@ class PrefixKVCacheSimulator:
                 admission_count_before = admission_count
                 policy_bypass_tokens_before = policy_bypass_tokens
                 forced_bypass_tokens_before = forced_bypass_tokens
-                request_hit_capacity = self.resident_count >= self.capacity_blocks
+                request_hit_capacity = self.total_resident_count >= self.capacity_blocks
                 hit_blocks += matched_len
                 tokens_hit = sum(block.token_count for block in request_blocks[:matched_len])
                 hit_tokens += tokens_hit
@@ -844,7 +992,7 @@ class PrefixKVCacheSimulator:
                     request_hit_capacity = (
                         request_hit_capacity
                         or evictions > 0
-                        or self.resident_count >= self.capacity_blocks
+                        or self.total_resident_count >= self.capacity_blocks
                     )
                     eviction_count += evictions
                     high_descendant_evictions += high_descendant_victims
@@ -878,7 +1026,24 @@ class PrefixKVCacheSimulator:
                         (tokens_hit, request.info.prompt_length, latency)
                     )
                 previous_was_recovery = is_recovery_request
-                occupancies.append(self.resident_count)
+                decode_start_outcome = self._start_decode(
+                    policy,
+                    now,
+                    request.true_output_length,
+                    duration,
+                    future_reuse,
+                    audit_future_reuse,
+                    admission_accounting,
+                )
+                decode_capacity_outcome.merge(decode_start_outcome)
+                request_hit_capacity = (
+                    request_hit_capacity
+                    or decode_start_outcome.evictions > 0
+                    or self.total_resident_count >= self.capacity_blocks
+                )
+                occupancies.append(self.total_resident_count)
+                prefix_occupancies.append(self.resident_count)
+                decode_occupancies.append(self.decode_resident_count)
                 self._recent_admission_pressure.append(float(request_hit_capacity))
                 self._recent_miss_rates.append(
                     1.0 - tokens_hit / max(1, request.info.prompt_length)
@@ -891,7 +1056,7 @@ class PrefixKVCacheSimulator:
                     matched_len=matched_len,
                     hit_tokens=tokens_hit,
                     admissions=admission_count - admission_count_before,
-                    evictions=per_request_evictions,
+                    evictions=per_request_evictions + decode_start_outcome.evictions,
                     bypassed_tokens=(
                         policy_bypass_tokens
                         - policy_bypass_tokens_before
@@ -901,7 +1066,7 @@ class PrefixKVCacheSimulator:
                     latency=latency,
                     cumulative_hit_tokens=hit_tokens,
                     cumulative_total_tokens=total_tokens,
-                    cumulative_evictions=eviction_count,
+                    cumulative_evictions=eviction_count + decode_capacity_outcome.evictions,
                 )
         except InvalidCandidateError as exc:
             return TrialMetrics(
@@ -936,11 +1101,24 @@ class PrefixKVCacheSimulator:
             _percentile([latency for _, _, latency in records], 95)
             for records in recovery_phase_records
         ]
+        total_eviction_count = eviction_count + decode_capacity_outcome.evictions
+        total_high_descendant_evictions = (
+            high_descendant_evictions + decode_capacity_outcome.high_descendant_evictions
+        )
+        total_avoidable_eviction_count = (
+            avoidable_eviction_count + decode_capacity_outcome.avoidable_evictions
+        )
+        total_avoidable_short_reuse_eviction_count = (
+            avoidable_short_reuse_eviction_count
+            + decode_capacity_outcome.avoidable_short_reuse_evictions
+        )
         memory_occupancy_mean = mean(occupancies) if occupancies else 0.0
+        prefix_kv_occupancy_mean = mean(prefix_occupancies) if prefix_occupancies else 0.0
+        decode_kv_occupancy_mean = mean(decode_occupancies) if decode_occupancies else 0.0
         policy_bypass_token_rate = policy_bypass_tokens / max(1, total_tokens)
         policy_underfill_rate = policy_bypass_token_rate * max(
             0.0,
-            1.0 - memory_occupancy_mean / self.capacity_blocks,
+            1.0 - prefix_kv_occupancy_mean / self.capacity_blocks,
         )
         structural_metrics = _structural_metrics(
             depth_total_blocks=depth_total_blocks,
@@ -949,8 +1127,8 @@ class PrefixKVCacheSimulator:
             depth_hit_tokens=depth_hit_tokens,
             prefix_role_hit_tokens=prefix_role_hit_tokens,
             total_hit_tokens=hit_tokens,
-            high_descendant_evictions=high_descendant_evictions,
-            eviction_count=eviction_count,
+            high_descendant_evictions=total_high_descendant_evictions,
+            eviction_count=total_eviction_count,
             cold_deep_admission_opportunities=cold_deep_admission_opportunities,
             cold_deep_admissions=cold_deep_admissions,
             reuse_after_eviction_missed_blocks=reuse_after_eviction_missed_blocks,
@@ -992,7 +1170,7 @@ class PrefixKVCacheSimulator:
             recompute_cost=recompute_cost,
             lookup_block_count=lookup_block_count,
             lookup_blocks_per_request=lookup_block_count / request_count,
-            eviction_count=eviction_count,
+            eviction_count=total_eviction_count,
             admission_count=admission_count,
             admission_score_count=admission_score_count,
             admission_rejection_count=admission_rejection_count,
@@ -1019,12 +1197,12 @@ class PrefixKVCacheSimulator:
             ),
             evicted_without_hit_count=admission_accounting.evicted_without_hit_count,
             evicted_without_hit_rate=(
-                admission_accounting.evicted_without_hit_count / max(1, eviction_count)
+                admission_accounting.evicted_without_hit_count / max(1, total_eviction_count)
             ),
             policy_bypass_tokens=policy_bypass_tokens,
             policy_bypass_token_rate=policy_bypass_token_rate,
             policy_underfill_rate=policy_underfill_rate,
-            cache_churn_per_1k=eviction_count * 1000.0 / request_count,
+            cache_churn_per_1k=total_eviction_count * 1000.0 / request_count,
             forced_bypass_count=forced_bypass_count,
             forced_bypass_tokens=forced_bypass_tokens,
             forced_bypass_token_rate=forced_bypass_tokens / max(1, total_tokens),
@@ -1034,11 +1212,11 @@ class PrefixKVCacheSimulator:
             ),
             eviction_reuse_distance_p50=_percentile(eviction_reuse_distances, 50),
             eviction_reuse_distance_p95=_percentile(eviction_reuse_distances, 95),
-            avoidable_eviction_count=avoidable_eviction_count,
-            avoidable_eviction_rate=avoidable_eviction_count / max(1, eviction_count),
-            avoidable_short_reuse_eviction_count=(avoidable_short_reuse_eviction_count),
+            avoidable_eviction_count=total_avoidable_eviction_count,
+            avoidable_eviction_rate=total_avoidable_eviction_count / max(1, total_eviction_count),
+            avoidable_short_reuse_eviction_count=(total_avoidable_short_reuse_eviction_count),
             avoidable_short_reuse_eviction_rate=(
-                avoidable_short_reuse_eviction_count / max(1, eviction_count)
+                total_avoidable_short_reuse_eviction_count / max(1, total_eviction_count)
             ),
             tenant_count=len(tenant_rates),
             tenant_fairness_penalty=fairness_penalty,
@@ -1067,6 +1245,23 @@ class PrefixKVCacheSimulator:
             ),
             memory_occupancy_mean=memory_occupancy_mean,
             memory_occupancy_peak=max(occupancies) if occupancies else 0,
+            prefix_kv_occupancy_mean=prefix_kv_occupancy_mean,
+            prefix_kv_occupancy_peak=max(prefix_occupancies) if prefix_occupancies else 0,
+            decode_kv_occupancy_mean=decode_kv_occupancy_mean,
+            decode_kv_occupancy_peak=max(decode_occupancies) if decode_occupancies else 0,
+            decode_kv_blocks_requested=decode_capacity_outcome.decode_blocks_requested,
+            decode_kv_blocks_allocated=decode_capacity_outcome.decode_blocks_allocated,
+            decode_kv_allocation_failure_blocks=(
+                decode_capacity_outcome.decode_allocation_failure_blocks
+            ),
+            decode_kv_allocation_failure_rate=(
+                decode_capacity_outcome.decode_allocation_failure_blocks
+                / max(1, decode_capacity_outcome.decode_blocks_requested)
+            ),
+            decode_pressure_eviction_count=decode_capacity_outcome.decode_pressure_evictions,
+            decode_pressure_eviction_rate=(
+                decode_capacity_outcome.decode_pressure_evictions / max(1, total_eviction_count)
+            ),
             arrival_span_steps=(arrival_steps[-1] - arrival_steps[0] + 1 if arrival_steps else 0),
             active_request_count_peak=active_request_count_peak,
             max_prefill_cost=max_prefill_cost,
@@ -1078,6 +1273,14 @@ class PrefixKVCacheSimulator:
     @property
     def resident_count(self) -> int:
         return len(self._resident_hashes)
+
+    @property
+    def decode_resident_count(self) -> int:
+        return self._decode_resident_blocks
+
+    @property
+    def total_resident_count(self) -> int:
+        return self.resident_count + self.decode_resident_count
 
     def match_resident_prefix(self, blocks: list[_BlockState]) -> int:
         """Return the largest root-contiguous resident prefix length."""
@@ -1192,9 +1395,15 @@ class PrefixKVCacheSimulator:
         high_descendant_evictions = 0
         avoidable_evictions = 0
         avoidable_short_reuse_evictions = 0
-        while self.resident_count > self.capacity_blocks:
-            evictable = self._evictable_blocks()
-            if not evictable:
+        while self.total_resident_count > self.capacity_blocks:
+            outcome = self._evict_one(
+                policy,
+                now,
+                future_reuse,
+                audit_future_reuse,
+                admission_accounting,
+            )
+            if outcome is None:
                 self._unpin(block)
                 self._cancel_release(block, release_at)
                 self._remove_resident(block)
@@ -1205,50 +1414,10 @@ class PrefixKVCacheSimulator:
                     avoidable_evictions,
                     avoidable_short_reuse_evictions,
                 )
-            scored = [
-                (
-                    self._score(
-                        policy.score_eviction,
-                        self._info(candidate, now, future_reuse),
-                        now,
-                    ),
-                    candidate.prefix_hash,
-                    candidate,
-                )
-                for candidate in evictable
-            ]
-            _, _, victim = max(scored)
-            victim_next_reuse = audit_future_reuse.next_distance(
-                victim.prefix_hash,
-                now,
-            )
-            alternative_next_reuse = [
-                audit_future_reuse.next_distance(candidate.prefix_hash, now)
-                for candidate in evictable
-                if candidate.prefix_hash != victim.prefix_hash
-            ]
-            furthest_alternative_reuse = max(
-                (distance for distance in alternative_next_reuse if distance is not None),
-                default=None,
-            )
-            if (
-                victim_next_reuse is not None
-                and furthest_alternative_reuse is not None
-                and victim_next_reuse < furthest_alternative_reuse
-            ):
-                avoidable_evictions += 1
-                if (
-                    victim_next_reuse <= _SHORT_REUSE_DISTANCE_STEPS
-                    and furthest_alternative_reuse > _SHORT_REUSE_DISTANCE_STEPS
-                ):
-                    avoidable_short_reuse_evictions += 1
-            if self._descendant_counts.get(victim.prefix_hash, 0) >= _HIGH_DESCENDANT_MIN_COUNT:
-                high_descendant_evictions += 1
-            admission_accounting.record(victim, evicted=True)
-            self._evicted_hashes.add(victim.prefix_hash)
-            self._last_evicted_at[victim.prefix_hash] = now
-            self._remove_resident(victim)
-            evictions += 1
+            evictions += outcome.evictions
+            high_descendant_evictions += outcome.high_descendant_evictions
+            avoidable_evictions += outcome.avoidable_evictions
+            avoidable_short_reuse_evictions += outcome.avoidable_short_reuse_evictions
         block.admission_tracked = True
         return (
             True,
@@ -1257,6 +1426,209 @@ class PrefixKVCacheSimulator:
             avoidable_evictions,
             avoidable_short_reuse_evictions,
         )
+
+    def _evict_one(
+        self,
+        policy: PrefixKVPolicy,
+        now: int,
+        future_reuse: _FutureReuseTracker,
+        audit_future_reuse: _FutureReuseTracker,
+        admission_accounting: _AdmissionAccounting,
+    ) -> _CapacityOutcome | None:
+        """Evict one legal prefix leaf using the candidate policy."""
+
+        evictable = self._evictable_blocks()
+        if not evictable:
+            return None
+        scored = []
+        for candidate in evictable:
+            info = self._info(candidate, now, future_reuse)
+            scored.append(
+                (
+                    self._score(policy.score_eviction, info, now),
+                    candidate.prefix_hash,
+                    candidate,
+                    info,
+                )
+            )
+        _, _, victim, _ = max(scored, key=lambda item: (item[0], item[1]))
+        victim_next_reuse = audit_future_reuse.next_distance(victim.prefix_hash, now)
+        if self.eviction_decision_observer is not None:
+            self.eviction_decision_observer.on_eviction_decision(
+                EvictionDecisionSnapshot(
+                    now=now,
+                    victim_prefix_hash=victim.prefix_hash,
+                    candidates=tuple(
+                        EvictionCandidateSnapshot(
+                            block=info,
+                            score=score,
+                            next_reuse_distance=audit_future_reuse.next_distance(
+                                candidate.prefix_hash,
+                                now,
+                            ),
+                        )
+                        for score, _, candidate, info in scored
+                    ),
+                )
+            )
+        alternative_next_reuse = [
+            audit_future_reuse.next_distance(candidate.prefix_hash, now)
+            for candidate in evictable
+            if candidate.prefix_hash != victim.prefix_hash
+        ]
+        furthest_alternative_reuse = max(
+            (distance for distance in alternative_next_reuse if distance is not None),
+            default=None,
+        )
+        outcome = _CapacityOutcome(evictions=1)
+        if (
+            victim_next_reuse is not None
+            and furthest_alternative_reuse is not None
+            and victim_next_reuse < furthest_alternative_reuse
+        ):
+            outcome.avoidable_evictions = 1
+            if (
+                victim_next_reuse <= _SHORT_REUSE_DISTANCE_STEPS
+                and furthest_alternative_reuse > _SHORT_REUSE_DISTANCE_STEPS
+            ):
+                outcome.avoidable_short_reuse_evictions = 1
+        if self._descendant_counts.get(victim.prefix_hash, 0) >= _HIGH_DESCENDANT_MIN_COUNT:
+            outcome.high_descendant_evictions = 1
+        admission_accounting.record(victim, evicted=True)
+        self._evicted_hashes.add(victim.prefix_hash)
+        self._last_evicted_at[victim.prefix_hash] = now
+        self._remove_resident(victim)
+        return outcome
+
+    def _advance_decodes(
+        self,
+        policy: PrefixKVPolicy,
+        now: int,
+        future_reuse: _FutureReuseTracker,
+        audit_future_reuse: _FutureReuseTracker,
+        admission_accounting: _AdmissionAccounting,
+    ) -> _CapacityOutcome:
+        """Advance in-flight decode KV through the current logical step."""
+
+        outcome = _CapacityOutcome()
+        if self.kv_capacity_mode != "shared":
+            return outcome
+        previous_step = getattr(self, "_decode_step", None)
+        first_step = now if previous_step is None else previous_step + 1
+        for step in range(first_step, now + 1):
+            self._release_expired(step)
+            retained_decodes = []
+            for decode in self._active_decodes:
+                if decode.release_at <= step:
+                    self._decode_resident_blocks -= decode.allocated_blocks
+                else:
+                    retained_decodes.append(decode)
+            self._active_decodes = retained_decodes
+            outcome.merge(
+                self._grow_decodes(
+                    policy,
+                    step,
+                    future_reuse,
+                    audit_future_reuse,
+                    admission_accounting,
+                )
+            )
+        self._decode_step = now
+        return outcome
+
+    def _start_decode(
+        self,
+        policy: PrefixKVPolicy,
+        now: int,
+        true_output_length: int,
+        duration: int,
+        future_reuse: _FutureReuseTracker,
+        audit_future_reuse: _FutureReuseTracker,
+        admission_accounting: _AdmissionAccounting,
+    ) -> _CapacityOutcome:
+        """Start one decode and allocate its first generated KV blocks."""
+
+        if self.kv_capacity_mode != "shared":
+            return _CapacityOutcome()
+        self._active_decodes.append(
+            _ActiveDecode(
+                started_at=now,
+                release_at=now + duration,
+                total_tokens=max(0, true_output_length),
+            )
+        )
+        return self._grow_decodes(
+            policy,
+            now,
+            future_reuse,
+            audit_future_reuse,
+            admission_accounting,
+        )
+
+    def _grow_decodes(
+        self,
+        policy: PrefixKVPolicy,
+        now: int,
+        future_reuse: _FutureReuseTracker,
+        audit_future_reuse: _FutureReuseTracker,
+        admission_accounting: _AdmissionAccounting,
+    ) -> _CapacityOutcome:
+        """Allocate newly generated decode blocks at one logical step."""
+
+        outcome = _CapacityOutcome()
+        for decode in self._active_decodes:
+            generated_tokens = min(
+                decode.total_tokens,
+                max(0, now - decode.started_at + 1) * self.active_tokens_per_step,
+            )
+            target_blocks = math.ceil(generated_tokens / self.block_size_tokens)
+            requested_blocks = max(0, target_blocks - decode.attempted_blocks)
+            decode.attempted_blocks = target_blocks
+            allocation = self._allocate_decode_blocks(
+                policy,
+                now,
+                requested_blocks,
+                future_reuse,
+                audit_future_reuse,
+                admission_accounting,
+            )
+            decode.allocated_blocks += allocation.decode_blocks_allocated
+            outcome.merge(allocation)
+        return outcome
+
+    def _allocate_decode_blocks(
+        self,
+        policy: PrefixKVPolicy,
+        now: int,
+        requested_blocks: int,
+        future_reuse: _FutureReuseTracker,
+        audit_future_reuse: _FutureReuseTracker,
+        admission_accounting: _AdmissionAccounting,
+    ) -> _CapacityOutcome:
+        """Allocate non-evictable decode blocks, evicting prefix leaves as needed."""
+
+        outcome = _CapacityOutcome(decode_blocks_requested=requested_blocks)
+        if requested_blocks <= 0:
+            return outcome
+        self._decode_resident_blocks += requested_blocks
+        while self.total_resident_count > self.capacity_blocks:
+            eviction = self._evict_one(
+                policy,
+                now,
+                future_reuse,
+                audit_future_reuse,
+                admission_accounting,
+            )
+            if eviction is None:
+                break
+            outcome.merge(eviction)
+            outcome.decode_pressure_evictions += eviction.evictions
+        overflow = max(0, self.total_resident_count - self.capacity_blocks)
+        if overflow:
+            self._decode_resident_blocks -= overflow
+        outcome.decode_allocation_failure_blocks = overflow
+        outcome.decode_blocks_allocated = requested_blocks - overflow
+        return outcome
 
     def _evictable_blocks(self) -> list[_BlockState]:
         return [
@@ -1516,12 +1888,14 @@ class PrefixKVCacheEvaluator:
         expose_future_reuse: bool = False,
         simulator_factory: Callable[..., PrefixKVCacheSimulator] = (PrefixKVCacheSimulator),
         workload_builder: Callable[..., tuple[WorkloadRequest, ...]] | None = None,
+        fixed_admission_factory: Callable[..., PrefixKVPolicy] | None = None,
     ) -> None:
         self.config = config or EvaluatorConfig()
         self.splits = splits
         self.expose_future_reuse = expose_future_reuse
         self._simulator_factory = simulator_factory
         self._workload_builder = workload_builder or build_workload
+        self._fixed_admission_factory = fixed_admission_factory
 
     def __call__(
         self,
@@ -1539,7 +1913,7 @@ class PrefixKVCacheEvaluator:
                     requests = self._workload_builder(
                         workload.family,
                         request_count=workload.request_count,
-                        block_size_tokens=self.config.block_size_tokens,
+                        block_size_tokens=self.config.effective_workload_token_granularity(),
                         seed=actual_seed,
                     )
                     trials.append(
@@ -1612,6 +1986,7 @@ class PrefixKVCacheEvaluator:
             lookup_cost_per_block=self.config.lookup_cost_per_block,
             eviction_cost_per_block=self.config.eviction_cost_per_block,
             active_tokens_per_step=self.config.active_tokens_per_step,
+            kv_capacity_mode=self.config.kv_capacity_mode,
             expose_future_reuse=self.expose_future_reuse,
             max_memory_bytes=self.config.max_memory_bytes,
         )
@@ -1626,8 +2001,19 @@ class PrefixKVCacheEvaluator:
                     factory,
                     capacity_blocks,
                     self.config.block_size_tokens,
-                    seed,
+                    self.config.policy_seed,
                 )
+                if self._fixed_admission_factory is not None:
+                    admission_policy = _build_policy(
+                        self._fixed_admission_factory,
+                        capacity_blocks,
+                        self.config.block_size_tokens,
+                        self.config.policy_seed,
+                    )
+                    policy = _FixedAdmissionPolicy(
+                        admission_policy=admission_policy,
+                        eviction_policy=policy,
+                    )
             except Exception as exc:
                 return TrialMetrics(
                     split=split,
@@ -1705,7 +2091,13 @@ class PrefixKVCacheEvaluator:
                 "capacity_sweep_blocks": ",".join(
                     str(value) for value in self.config.effective_capacity_blocks()
                 ),
+                "capacity_sweep_tokens": ",".join(
+                    str(value) for value in self.config.effective_capacity_tokens()
+                ),
                 "block_size_tokens": self.config.block_size_tokens,
+                "kv_capacity_mode": self.config.kv_capacity_mode,
+                "workload_token_granularity": self.config.effective_workload_token_granularity(),
+                "policy_seed": self.config.policy_seed,
                 "scoring_fn_complexity": scoring_fn_complexity,
                 "churn_weight": self.config.churn_weight,
                 "underfill_weight": self.config.underfill_weight,
@@ -1729,6 +2121,7 @@ class PrefixKVCacheEvaluator:
                     "configured" if self.config.latency_norm > 0.0 else "workload_capacity"
                 ),
                 "expose_future_reuse": self.expose_future_reuse,
+                "fixed_admission_policy": self.config.fixed_admission_policy or "",
                 "reporting_invalid_fraction": invalid_fraction,
                 "selection_invalid_fraction": selection_invalid_fraction,
             },
@@ -1881,6 +2274,8 @@ def build_workload(
         "cyclic_working_set_pressure": _cyclic_working_set_pressure,
         "cyclic_working_set_pressure_shifted": _cyclic_working_set_pressure_shifted,
         "concurrent_long_generation": _concurrent_long_generation,
+        "reasoning_burst": _reasoning_burst,
+        "reasoning_burst_shifted": _reasoning_burst_shifted,
         "stochastic_serving_mix": _stochastic_serving_mix,
         "stochastic_serving_mix_shifted": _stochastic_serving_mix_shifted,
         "rolling_template_versions": _rolling_template_versions,
@@ -1928,6 +2323,49 @@ def _build_policy(
         "candidate factory must accept (capacity_blocks, block_size_tokens, seed), "
         "(capacity_blocks, block_size_tokens), or no arguments"
     )
+
+
+class _FixedAdmissionPolicy:
+    """Uses one policy for admission and another policy for eviction."""
+
+    _REQUIRED_METHODS = (
+        "on_request_start",
+        "score_admission",
+        "score_eviction",
+        "on_cache_hit",
+        "on_cache_miss",
+    )
+
+    def __init__(
+        self,
+        *,
+        admission_policy: PrefixKVPolicy,
+        eviction_policy: PrefixKVPolicy,
+    ) -> None:
+        for policy in (admission_policy, eviction_policy):
+            for method_name in self._REQUIRED_METHODS:
+                if not callable(getattr(policy, method_name, None)):
+                    raise TypeError(f"policy must implement {method_name}()")
+        self._admission_policy = admission_policy
+        self._eviction_policy = eviction_policy
+
+    def on_request_start(self, request: RequestInfo, now: int) -> None:
+        self._admission_policy.on_request_start(request, now)
+        self._eviction_policy.on_request_start(request, now)
+
+    def score_admission(self, block: PrefixBlockInfo, now: int) -> float:
+        return self._admission_policy.score_admission(block, now)
+
+    def score_eviction(self, block: PrefixBlockInfo, now: int) -> float:
+        return self._eviction_policy.score_eviction(block, now)
+
+    def on_cache_hit(self, block: PrefixBlockInfo, request: RequestInfo, now: int) -> None:
+        self._admission_policy.on_cache_hit(block, request, now)
+        self._eviction_policy.on_cache_hit(block, request, now)
+
+    def on_cache_miss(self, block: PrefixBlockInfo, request: RequestInfo, now: int) -> None:
+        self._admission_policy.on_cache_miss(block, request, now)
+        self._eviction_policy.on_cache_miss(block, request, now)
 
 
 def _aggregate_by(
@@ -2015,6 +2453,14 @@ def _aggregate_trials(
         "final_recovery_phase_token_hit_rate",
         "worst_recovery_phase_p95_latency_proxy",
         "memory_occupancy_mean",
+        "prefix_kv_occupancy_mean",
+        "decode_kv_occupancy_mean",
+        "decode_kv_blocks_requested",
+        "decode_kv_blocks_allocated",
+        "decode_kv_allocation_failure_blocks",
+        "decode_kv_allocation_failure_rate",
+        "decode_pressure_eviction_count",
+        "decode_pressure_eviction_rate",
         "arrival_span_steps",
         "max_prefill_cost",
         "scoring_fn_complexity",
@@ -2023,6 +2469,8 @@ def _aggregate_trials(
         field: mean(float(getattr(trial, field)) for trial in trials) for field in numeric_fields
     }
     result["memory_occupancy_peak"] = max(trial.memory_occupancy_peak for trial in trials)
+    result["prefix_kv_occupancy_peak"] = max(trial.prefix_kv_occupancy_peak for trial in trials)
+    result["decode_kv_occupancy_peak"] = max(trial.decode_kv_occupancy_peak for trial in trials)
     result["active_request_count_peak"] = max(trial.active_request_count_peak for trial in trials)
     token_hit_rates = [trial.token_hit_rate for trial in trials]
     result["token_hit_rate_worst_trial"] = min(token_hit_rates)
@@ -2778,6 +3226,71 @@ def _concurrent_long_generation(
                 true_output_length=true_output_length,
                 predicted_output_length=predicted_output_length,
                 arrival_step=request_id // 2,
+            )
+        )
+    return requests
+
+
+def _reasoning_burst(count: int, block_size: int, rng: random.Random) -> list[WorkloadRequest]:
+    return _reasoning_burst_workload(count, block_size, rng, shifted=False)
+
+
+def _reasoning_burst_shifted(
+    count: int, block_size: int, rng: random.Random
+) -> list[WorkloadRequest]:
+    return _reasoning_burst_workload(count, block_size, rng, shifted=True)
+
+
+def _reasoning_burst_workload(
+    count: int,
+    block_size: int,
+    rng: random.Random,
+    *,
+    shifted: bool,
+) -> list[WorkloadRequest]:
+    """Builds microbursts with noisy, heavy-tailed reasoning outputs."""
+
+    root = [
+        _block("reasoning/system", block_size),
+        _block("reasoning/developer", block_size),
+        _block("reasoning/shared-task", block_size),
+    ]
+    branches = [_block(f"reasoning/branch/{index}", block_size) for index in range(10)]
+    tools = [_block(f"reasoning/schema/{index}", block_size) for index in range(4)]
+    long_lengths = (768, 1280, 2048, 3072) if shifted else (384, 640, 1024, 1536)
+    burst_width = 4 if shifted else 3
+    requests = []
+    for request_id in range(count):
+        is_reasoning = request_id % 4 != 3
+        branch_index = (request_id * (3 if shifted else 1)) % len(branches)
+        if is_reasoning:
+            true_output_length = long_lengths[request_id % len(long_lengths)]
+            prediction_scale = rng.choice((0.60, 0.75, 0.90, 1.10, 1.25))
+            request_type = "reasoning_generation_shifted" if shifted else "reasoning_generation"
+        else:
+            true_output_length = 32 + 16 * (request_id % 4)
+            prediction_scale = rng.choice((0.80, 1.00, 1.20))
+            request_type = "reasoning_followup_shifted" if shifted else "reasoning_followup"
+        predicted_output_length = max(1, round(true_output_length * prediction_scale))
+        requests.append(
+            _request(
+                request_id=request_id,
+                tenant_id=request_id % 2,
+                session_id=branch_index,
+                blocks=[
+                    *root,
+                    branches[branch_index],
+                    tools[branch_index % len(tools)],
+                    _partial_tail(
+                        f"reasoning/tail/{branch_index}/{request_id % 3}",
+                        block_size,
+                    ),
+                ],
+                request_type=request_type,
+                priority=int(request_id % 7 == 0),
+                true_output_length=true_output_length,
+                predicted_output_length=predicted_output_length,
+                arrival_step=request_id // burst_width,
             )
         )
     return requests

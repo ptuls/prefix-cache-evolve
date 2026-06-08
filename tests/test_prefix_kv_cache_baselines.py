@@ -42,6 +42,22 @@ def test_baseline_registry_rejects_duplicate_names() -> None:
         )
 
 
+def test_baseline_registry_rejects_deployable_future_knowledge() -> None:
+    with pytest.raises(
+        ValueError, match="deployable baseline 'oracle' cannot require future reuse"
+    ):
+        BaselineRegistry(
+            (
+                BaselineSpec(
+                    "oracle",
+                    baseline_lru_blocks,
+                    deployable=True,
+                    requires_future_reuse=True,
+                ),
+            )
+        )
+
+
 def test_sglang_radix_attention_matches_leaf_lru_contract() -> None:
     radix = baseline_sglang_radix_attention(8, 4)
     lru = baseline_lru_blocks(8, 4)

@@ -69,7 +69,7 @@ class LeviScoreFunction:
         metrics = result.metrics or {}
         success = metrics.get("success")
         if success is not None and not bool(success):
-            return {"error": str(metrics.get("error") or "candidate failed evaluator validation")}
+            return {"error": _failure_message(result)}
         score = metrics.get(self._score_metric, 0.0)
         if not isinstance(score, (int, float)) or not math.isfinite(float(score)):
             score = 0.0
@@ -95,6 +95,20 @@ class LeviScoreFunction:
         return levi_metrics
 
 
+def _failure_message(result: EvaluatorResult) -> str:
+    """Return evaluator failure text with any structured repair guidance."""
+
+    metrics = result.metrics or {}
+    message = str(metrics.get("error") or "candidate failed evaluator validation")
+    artifacts = result.artifacts or {}
+    repairs = artifacts.get("repair_feedback")
+    if isinstance(repairs, list):
+        repair_lines = [repair.strip() for repair in repairs if isinstance(repair, str)]
+        if repair_lines and "Repair before retry:" not in message:
+            message = f"Repair before retry: {' '.join(repair_lines)} Failure: {message}."
+    return message
+
+
 class LeviRunner:
     """Coordinates execution through Levi's evolve_code API."""
 
@@ -116,8 +130,8 @@ class LeviRunner:
         seed_program = program_path.read_text(encoding="utf-8")
         score_fn = LeviScoreFunction(self._evaluate_factory, self._evaluate_source)
         kwargs = config.evolve_kwargs()
-        kwargs["function_signature"] = self._function_signature or getattr(
-            config, "function_signature", ""
+        kwargs["function_signature"] = (
+            getattr(config, "function_signature", "") or self._function_signature
         )
         kwargs["seed_program"] = seed_program
         kwargs["score_fn"] = score_fn
@@ -160,6 +174,8 @@ class LeviRunner:
         )
 
     def _evaluate_best_program(self, source: str) -> EvaluatorResult:
+        if self._evaluate_source is not None:
+            return self._evaluate_source(source)
         try:
             factory = load_candidate_factory_from_source(source)
         except Exception as exc:
@@ -170,8 +186,6 @@ class LeviRunner:
                 },
                 artifacts={"error_type": type(exc).__name__, "error_message": str(exc)},
             )
-        if self._evaluate_source is not None:
-            return self._evaluate_source(source)
         return self._evaluate_factory(factory)
 
     def _load_evaluate_factory(
@@ -248,8 +262,9 @@ def _enable_levi_code_feedback_support() -> None:
     from levi.artifacts.code import CodeAdapter
 
     original = CodeAdapter.build_mutation_prompt
-    if "feedback" in inspect.signature(original).parameters:
+    if getattr(original, "_prefix_cache_evolve_repair_feedback_patch", False):
         return
+    accepts_feedback = "feedback" in inspect.signature(original).parameters
 
     def build_mutation_prompt_with_feedback(
         self,
@@ -258,17 +273,31 @@ def _enable_levi_code_feedback_support() -> None:
         feedback: list[str] | None = None,
         **kwargs,
     ) -> str:
-        prompt = original(self, parents, **kwargs)
+        if accepts_feedback:
+            prompt = original(self, parents, feedback=feedback, **kwargs)
+        else:
+            prompt = original(self, parents, **kwargs)
+        sections = []
         feedback_lines = [line.strip() for line in feedback or [] if line.strip()]
-        if not feedback_lines:
-            return prompt
-
-        section = "## Evaluator Feedback\n" + "\n".join(f"- {line}" for line in feedback_lines)
+        if feedback_lines:
+            sections.append(
+                "## Evaluator Feedback\n" + "\n".join(f"- {line}" for line in feedback_lines)
+            )
+        sections.append(
+            "## Preflight Repair Checks\n"
+            "- Keep the documented entry point and produce complete valid Python.\n"
+            "- Use only documented fields and callbacks; remove guessed fallbacks and broad "
+            "exception handlers.\n"
+            "- Keep imports top-level and delete unused imports.\n"
+            "- When near a complexity cap, make a net deletion before adding behavior."
+        )
+        section = "\n\n".join(sections)
         output_marker = "\n\n## Output\n"
         if output_marker in prompt:
             return prompt.replace(output_marker, f"\n\n{section}{output_marker}", 1)
         return f"{prompt}\n\n{section}"
 
+    build_mutation_prompt_with_feedback._prefix_cache_evolve_repair_feedback_patch = True
     CodeAdapter.build_mutation_prompt = build_mutation_prompt_with_feedback
 
 

@@ -18,6 +18,7 @@ const elements = {
   workloadDescription: document.querySelector("#workload-description"),
   requestCount: document.querySelector("#request-count"),
   capacityBlocks: document.querySelector("#capacity-blocks"),
+  capacityTokens: document.querySelector("#capacity-tokens"),
   blockSizeTokens: document.querySelector("#block-size-tokens"),
   seed: document.querySelector("#seed"),
   sourceLabel: document.querySelector("#source-label"),
@@ -76,6 +77,12 @@ function updatePolicyCount() {
   }
 }
 
+function updateCapacityTokens() {
+  const capacity = Number(elements.capacityBlocks.value);
+  const blockSize = Number(elements.blockSizeTokens.value);
+  elements.capacityTokens.textContent = number(capacity * blockSize);
+}
+
 function populateCatalog(catalog) {
   state.catalog = catalog;
   elements.sourceLabel.textContent = catalog.source.label;
@@ -85,11 +92,15 @@ function populateCatalog(catalog) {
     .join("");
   elements.policyList.innerHTML = catalog.policies
     .map((policy, index) => `
-      <label class="policy-option" title="${escapeHtml(policy.description)}">
+      <label class="policy-option ${policy.promoted ? "promoted" : ""}">
         <input type="checkbox" value="${escapeHtml(policy.id)}" ${policy.default_selected ? "checked" : ""}>
-        <span>
-          <strong>${escapeHtml(policy.label)}</strong>
-          <small>${escapeHtml(policy.group)}</small>
+        <span class="policy-copy">
+          <span class="policy-title-row">
+            <strong>${escapeHtml(policy.label)}</strong>
+            ${policy.promoted ? '<b class="policy-badge">Promoted</b>' : ""}
+          </span>
+          <small class="policy-status">${escapeHtml(policy.status)}</small>
+          <small class="policy-description">${escapeHtml(policy.description)}</small>
         </span>
         <i style="background:${policyColor(index)}"></i>
       </label>
@@ -109,6 +120,7 @@ function populateCatalog(catalog) {
     input.max = range[1];
   }
   updateWorkloadDescription();
+  updateCapacityTokens();
   updatePolicyCount();
 }
 
@@ -227,10 +239,16 @@ function renderSummary() {
     .map((policy, rank) => {
       const index = state.session.policies.findIndex((item) => item.id === policy.id);
       return `
-        <article class="summary-card" style="--policy-color:${policyColor(index)}">
+        <article class="summary-card ${policy.promoted ? "promoted" : ""}" style="--policy-color:${policyColor(index)}">
           <span class="rank">#${rank + 1}</span>
-          <p class="eyebrow">${escapeHtml(policy.group)}</p>
+          <p class="eyebrow">${escapeHtml(policy.status)}</p>
           <h3>${escapeHtml(policy.label)}</h3>
+          ${policy.promoted ? `
+            <p class="benchmark-score">
+              Discovery selection <strong>${number(policy.benchmark_selection_score, 3)}</strong>
+              · ${escapeHtml(policy.benchmark_context)}
+            </p>
+          ` : ""}
           <div class="primary-stat">
             <strong>${percent(policy.summary.token_hit_rate)}</strong>
             <span>token hit rate</span>
@@ -461,7 +479,10 @@ for (const input of [
   elements.blockSizeTokens,
   elements.seed,
 ]) {
-  input.addEventListener("input", markConfigurationPending);
+  input.addEventListener("input", () => {
+    updateCapacityTokens();
+    markConfigurationPending();
+  });
 }
 elements.timeline.addEventListener("click", (event) => {
   const button = event.target.closest("[data-frame]");

@@ -6,6 +6,9 @@
 evaluator:
   timeout: 90
 
+search:
+  seed: 20260605
+
 problem:
   settings:
     capacity_blocks: 48

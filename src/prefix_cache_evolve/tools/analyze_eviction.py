@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
+
+import click
 
 from prefix_cache_evolve.evaluators.complexity import scoring_fn_complexity
 from prefix_cache_evolve.evaluators.contracts import PrefixBlockInfo, RequestInfo
@@ -262,7 +263,6 @@ class CounterfactualTotals:
         changed: bool,
     ) -> None:
         """Record one same-state victim comparison."""
-
         self.decisions += 1
         self.legal_victim_count += legal_victims
         self.max_legal_victims = max(self.max_legal_victims, legal_victims)
@@ -300,7 +300,6 @@ class CounterfactualTotals:
 
     def summary(self) -> dict[str, float | int]:
         """Return rates and counts suitable for JSON and Markdown reporting."""
-
         decisions = max(1, self.decisions)
         changed = max(1, self.changed_decisions)
         return {
@@ -362,7 +361,6 @@ class _CounterfactualObserver:
 
     def on_eviction_decision(self, snapshot: EvictionDecisionSnapshot) -> None:
         """Compare every alternative with the incumbent-selected victim."""
-
         distances = {
             candidate.block.prefix_hash: float(candidate.next_reuse_distance)
             for candidate in snapshot.candidates
@@ -397,7 +395,6 @@ _SCORE_CACHE: dict[str, Callable[[PrefixBlockInfo, int, float, float], float]] =
 
 def _score_from_source(name: str) -> Callable[[PrefixBlockInfo, int, float, float], float]:
     """Load and cache one function-only eviction ranker."""
-
     if name not in _SCORE_CACHE:
         namespace: dict[str, object] = {}
         exec(VARIANT_SOURCES[name], namespace)
@@ -525,7 +522,6 @@ def _run_variant_panels(config: EvaluatorConfig) -> dict[str, object]:
 
 def run_analysis(config_path: Path) -> dict[str, object]:
     """Run same-state eviction analysis and full-panel variant adjudication."""
-
     config = load_evaluator_config(config_path)
     return {
         "schema": "prefix-kv-cache-eviction-analysis-v1",
@@ -655,32 +651,34 @@ def _write_markdown(path: Path, payload: dict[str, object]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=Path("configs/prefix_kv_cache_eviction_specialist.yaml"),
-    )
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=Path("artifacts/prefix_kv_cache_eviction_analysis.json"),
-    )
-    parser.add_argument(
-        "--markdown",
-        type=Path,
-        default=Path("docs/results/eviction_policy_analysis.md"),
-    )
-    args = parser.parse_args()
-
-    payload = run_analysis(args.config)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    args.markdown.parent.mkdir(parents=True, exist_ok=True)
-    _write_markdown(args.markdown, payload)
-    print(args.output)
-    print(args.markdown)
+@click.command()
+@click.option(
+    "--config",
+    type=click.Path(path_type=Path),
+    default=Path("configs/prefix_kv_cache_eviction_specialist.yaml"),
+    show_default=True,
+)
+@click.option(
+    "--output",
+    type=click.Path(path_type=Path),
+    default=Path("artifacts/prefix_kv_cache_eviction_analysis.json"),
+    show_default=True,
+)
+@click.option(
+    "--markdown",
+    type=click.Path(path_type=Path),
+    default=Path("docs/results/eviction_policy_analysis.md"),
+    show_default=True,
+)
+def main(config: Path, output: Path, markdown: Path) -> None:
+    """Analyze eviction choice, regret, and specialist distillations."""
+    payload = run_analysis(config)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    markdown.parent.mkdir(parents=True, exist_ok=True)
+    _write_markdown(markdown, payload)
+    click.echo(output)
+    click.echo(markdown)
 
 
 if __name__ == "__main__":

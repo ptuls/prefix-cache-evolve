@@ -21,12 +21,13 @@ QUICK_REPORT_WARNING = (
 class BaselineMetadata(Protocol):
     """Minimal baseline metadata needed by report rendering."""
 
-    def group(self, name: str) -> str: ...
+    def group(self, name: str) -> str:
+        """Return the reporting group for a policy name."""
+        ...
 
 
 def baseline_group(name: str, metadata: BaselineMetadata = BASELINE_REGISTRY) -> str:
     """Return the report group for a baseline or candidate."""
-
     return metadata.group(name)
 
 
@@ -35,7 +36,6 @@ def baseline_report_headline(
     metadata: BaselineMetadata = BASELINE_REGISTRY,
 ) -> str:
     """Summarize candidate rank without mixing deployable and oracle claims."""
-
     names = [name for name, _ in ranked]
     if "candidate" not in names:
         return "Reporting baselines ranked by combined score."
@@ -82,7 +82,6 @@ def write_baseline_comparison_report(
     metadata: BaselineMetadata = BASELINE_REGISTRY,
 ) -> Path:
     """Write a Markdown comparison of the candidate and reporting baselines."""
-
     ranked = sorted(results.items(), key=lambda item: item[1].combined_score, reverse=True)
     lines = [
         "# Prefix KV-Cache Best Program Baseline Comparison",
@@ -135,7 +134,6 @@ def write_baseline_plot_files(
     results: dict[str, EvaluationResult],
 ) -> tuple[Path, ...]:
     """Render baseline comparison SVG files."""
-
     output_dir.mkdir(parents=True, exist_ok=True)
     paths = (
         output_dir / "baseline_combined_scores.svg",
@@ -155,10 +153,11 @@ def _summary_rows(
 ) -> list[str]:
     rows = []
     for rank, (name, result) in enumerate(ranked, start=1):
-        capacity_cells = "".join(
-            f"{float(result.capacity_metrics.get(f'capacity_{capacity}', {}).get('token_hit_rate', 0.0)):.3f} | "
+        capacity_values = (
+            result.capacity_metrics.get(f"capacity_{capacity}", {}).get("token_hit_rate", 0.0)
             for capacity in capacities
         )
+        capacity_cells = "".join(f"{float(value):.3f} | " for value in capacity_values)
         priority = result.workload_metrics["validation/priority_burst_recovery"]
         priority_noise = result.workload_metrics["validation/priority_one_off_noise"]
         validation = result.split_metrics["validation"]

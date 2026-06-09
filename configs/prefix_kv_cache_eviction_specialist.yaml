@@ -3,6 +3,7 @@ max_iterations: 300
 function_signature: "def score_eviction(block, now, frequency, priority):"
 
 llm:
+  default_provider: "openai"
   primary_model: "gpt-5.4-mini"
   secondary_model: "gpt-5.5"
   temperature: 0.3
@@ -130,6 +131,7 @@ problem:
     reject_unsupported_source_patterns: true
 
 search:
+  seed: 20260609
   notes: >
     Search score excludes the complexity charge. Require a real raw behavioral
     improvement, then simplify only as needed for the composed policy to pass

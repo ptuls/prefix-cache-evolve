@@ -1,3 +1,5 @@
+"""Seed-program source and temporary-file helpers."""
+
 import tempfile
 import textwrap
 from pathlib import Path
@@ -11,6 +13,7 @@ class ProgramSource:
         self._source = textwrap.dedent(source)
 
     def text(self) -> str:
+        """Return the normalized seed-program source."""
         return self._source
 
 

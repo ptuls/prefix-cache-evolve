@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import click
 
 
 @dataclass(frozen=True)
@@ -30,13 +31,11 @@ PARADIGM_EVALUATIONS = (30, 90, 130, 160, 190, 240)
 
 def _load_snapshot(path: Path) -> dict[str, Any]:
     """Load one Levi snapshot."""
-
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _strict_improvements(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return strict best-score improvements in evaluation order."""
-
     improvements = []
     best = float("-inf")
     for entry in history:
@@ -49,7 +48,6 @@ def _strict_improvements(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _validate_snapshot(snapshot: dict[str, Any]) -> None:
     """Validate the score-history accounting used by the figure."""
-
     run_state = snapshot["run_state"]
     history = snapshot["score_history"]
     eval_count = int(run_state["eval_count"])
@@ -64,13 +62,11 @@ def _validate_snapshot(snapshot: dict[str, Any]) -> None:
 
 def _map(value: float, low: float, high: float, start: float, span: float) -> float:
     """Map one value from a data interval to a plot interval."""
-
     return start + (value - low) / (high - low) * span
 
 
 def _point(x: float, y: float) -> str:
     """Format one TikZ coordinate."""
-
     return f"({x:.3f},{y:.3f})"
 
 
@@ -81,7 +77,6 @@ def _draw_step(
     color: str = "navy",
 ) -> str:
     """Draw a best-score-so-far step line."""
-
     path = [f"\\draw[very thick, draw={color}] {_point(*points[0])}"]
     for previous, current in zip(points, points[1:], strict=False):
         path.append(f" -- {_point(current[0], previous[1])} -- {_point(*current)}")
@@ -98,7 +93,6 @@ def _journey_panel(
     height: float,
 ) -> list[str]:
     """Render the cross-run global-best trajectory."""
-
     total_evaluations = sum(int(snapshot["run_state"]["eval_count"]) for snapshot in snapshots)
     y_low = 74.2
     y_high = 77.35
@@ -206,7 +200,6 @@ def _final_run_panel(
     height: float,
 ) -> list[str]:
     """Render the detailed trajectory and evaluation-outcome raster."""
-
     eval_count = int(snapshot["run_state"]["eval_count"])
     history = list(snapshot["score_history"])
     scored_evaluations = {int(entry["eval_number"]) for entry in history}
@@ -339,7 +332,6 @@ def _final_run_panel(
 
 def render_trajectory(repo_root: Path) -> str:
     """Render the retained incumbent trajectory as a TikZ fragment."""
-
     snapshots = [_load_snapshot(repo_root / run.snapshot_path) for run in JOURNEY_RUNS]
     for snapshot in snapshots:
         _validate_snapshot(snapshot)
@@ -355,21 +347,25 @@ def render_trajectory(repo_root: Path) -> str:
     return "\n".join(lines)
 
 
-def main() -> None:
+@click.command()
+@click.option(
+    "--repo-root",
+    type=click.Path(path_type=Path),
+    default=Path.cwd,
+    show_default="current directory",
+)
+@click.option(
+    "--output",
+    type=click.Path(path_type=Path),
+    default=Path("docs/figures/incumbent_eval_trajectory.tex"),
+    show_default=True,
+)
+def main(repo_root: Path, output: Path) -> None:
     """Generate the report figure."""
-
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo-root", type=Path, default=Path.cwd())
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=Path("docs/figures/incumbent_eval_trajectory.tex"),
-    )
-    args = parser.parse_args()
-    output = args.output if args.output.is_absolute() else args.repo_root / args.output
+    output = output if output.is_absolute() else repo_root / output
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(render_trajectory(args.repo_root), encoding="utf-8")
-    print(output)
+    output.write_text(render_trajectory(repo_root), encoding="utf-8")
+    click.echo(output)
 
 
 if __name__ == "__main__":

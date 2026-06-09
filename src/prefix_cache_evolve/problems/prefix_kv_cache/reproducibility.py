@@ -23,7 +23,6 @@ def build_workload_manifest(
     splits: tuple[str, ...] = ("train", "validation", "probe", "hidden"),
 ) -> dict[str, object]:
     """Describe and fingerprint every synthetic request stream in an evaluation panel."""
-
     streams = []
     for workload in config.workload_configs(splits):
         for base_seed in config.seeds:
@@ -91,7 +90,6 @@ def build_workload_manifest(
 
 def request_stream_sha256(requests: Iterable[WorkloadRequest]) -> str:
     """Return a stable hash of all simulator-relevant fields in request order."""
-
     digest = hashlib.sha256()
     for request in requests:
         payload = {
@@ -113,7 +111,6 @@ def request_stream_sha256(requests: Iterable[WorkloadRequest]) -> str:
 
 def file_sha256(path: Path) -> str:
     """Return the SHA-256 hash of one input file."""
-
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):

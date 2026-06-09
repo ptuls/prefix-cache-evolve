@@ -75,7 +75,6 @@ class SimulatorObserver(Protocol):
 
     def on_request_complete(self, snapshot: RequestSnapshot) -> None:
         """Record or stream one completed request."""
-
         ...
 
 
@@ -84,5 +83,4 @@ class EvictionDecisionObserver(Protocol):
 
     def on_eviction_decision(self, snapshot: EvictionDecisionSnapshot) -> None:
         """Record one completed eviction-ranking decision."""
-
         ...

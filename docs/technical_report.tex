@@ -84,7 +84,7 @@
 \title{\textbf{\color{navy}Prefix KV-Cache Policy Evolution}\\
 \large Simulator, Verifier, Workload, and Search Architecture}
 \author{Technical Design Report}
-\date{June 8, 2026}
+\date{June 9, 2026}
 
 \begin{document}
 
@@ -108,16 +108,20 @@ On the historical discovery-run \(8\)-token, \(48/96\)-block, agentic-aware veri
 the promoted incumbent ranks second in the full reporting panel, behind the constrained
 next-use oracle and ahead of all deployable credibility baselines.  It scores
 \(77.230\), compared with \(97.074\) for the reporting-only oracle and \(70.362\) for
-TinyLFU-LRU.  On the operative production-oriented \(16\)-token verifier it instead
-scores \(62.757\), narrowly behind TinyLFU-LRU at \(63.548\), while retaining higher
-validation token hit and substantially lower churn.  Its apparent charged-probe
+TinyLFU-LRU.  A subsequent production-oriented search on the operative \(16\)-token
+verifier promoted a \(572\)-node policy scoring \(65.649\), ahead of TinyLFU-LRU at
+\(63.548\).  It also passes the held-out agentic tripwire, scores \(3.064\) on the
+hidden panel versus \(-2.789\) for TinyLFU-LRU, and retains substantially lower churn.
+However, a post-promotion geometry sweep shows that this result is specific to
+16-token blocks: the previous incumbent remains materially stronger at 8 tokens.
+Its apparent charged-probe
 regression on the discovery verifier is entirely due to source-complexity accounting:
 raw probe behavior improves, agent churn falls, and cyclic behavior is unchanged.  The
 new
 \identifier{agentic_tool_workflows} training family and held-out structure probe expose
-the remaining generalization weakness even when selection improves.  Historical
-structured-search results later in this report predate this verifier revision and are
-retained as search chronology rather than current rankings.
+the remaining generalization weakness even when selection improves.  Detailed
+historical search results are retained separately in
+\filepath{docs/research_log.tex} rather than presented as current rankings.
 
 The report emphasizes implementation details and trust boundaries: what the policy can
 observe, what the simulator owns, what future information is quarantined for verifier
@@ -728,13 +732,12 @@ the full value.
 Production-trace replay remains a separate user-supplied path; trace reports record the
 input-file hash, and replay reports also record the derived request-stream hash.
 
-On that robustness panel, the incumbent scores \(62.757\) at the primary
-16-token size, narrowly behind TinyLFU+LRU at \(63.548\) after the incumbent's
-\(8.232\) complexity charge.  Its raw pre-complexity score is \(70.989\), with
-higher validation token hit (\(0.598\) versus \(0.580\)) and lower churn
-(\(168.1\) versus \(499.0\)).  At 32 tokens the incumbent ranks first among the
-compared policies, but all combined scores are negative; the coarse block size
-substantially damages irregular-prefix reuse.
+The earlier incumbent scored \(62.757\) at the primary 16-token size.  The promoted
+production search result now scores \(65.649\), ahead of TinyLFU+LRU at \(63.548\),
+with validation token hit \(0.596\) and churn \(163.9\) per 1,000 requests.  At the
+24-block capacity its token hit rate is \(0.579\) versus \(0.539\) for TinyLFU+LRU;
+at 48 blocks it is \(0.638\) versus \(0.627\).  The earlier 32-token result remains a
+warning that coarse granularity substantially damages irregular-prefix reuse.
 
 \begin{center}
 \begin{tabular}{lrrrr}
@@ -990,14 +993,15 @@ The penalty \(0.065C^{0.75}\) is:
   without suppressing the cost of custom control flow or state.
 \end{itemize}
 
-The penalty remains smooth and unbounded, but search also uses separate safety and
-promotion limits.  The general lane rejects candidates above 650 effective nodes.
-The eviction-specialist lane exposes only a victim-ranking function and explores up
-to 1000 effective nodes so richer eviction ideas can be measured.  Search ranks raw
-behavior before complexity, preventing deletion alone from appearing as progress.
-Final promotion composes the function into the complete incumbent and retains 650 as
-the deployable-source limit.  Thus the safety limit controls evaluation cost and
-pathological growth, while the promotion limit controls deployability.
+The penalty remains smooth and unbounded, but search also uses separate exploration
+and promotion limits.  The general lane may evaluate proposals modestly above 650
+effective nodes, but marks them exploration-only and directs their next mutation to
+perform dedicated behavior-preserving simplification.  The eviction-specialist lane
+exposes only a victim-ranking function and explores up to 1000 effective nodes so
+richer eviction ideas can be measured.  Search ranks raw behavior before complexity,
+preventing deletion alone from appearing as progress.  Final promotion retains 650 as
+the deployable-source limit.  Thus the evaluation safeguards control pathological
+growth, while the promotion limit controls deployability.
 
 \subsection{Invalid candidates, isolation, and memory}
 
@@ -1419,63 +1423,23 @@ agentic-surrogate hit and underfill, and stochastic-mix hit rate. \\
 mutation feedback & Every retained parent exposes the agentic surrogate,
 stochastic-serving target, and up to three additional weak-workload diagnostics to
 normal mutation workers. \\
-candidate guardrails & The general lane rejects candidates above 650 effective AST
-nodes.  The function-only eviction-specialist lane evaluates ranking functions up to
-1000 nodes and requires the final composed deployable policy to remain at most 650.
-Rejected source patterns still fail before simulation. \\
+candidate guardrails & The general lane evaluates modestly over-cap candidates as
+exploration-only and requests a dedicated simplification mutation; promotion remains
+capped at 650 effective AST nodes.  The function-only eviction-specialist lane
+evaluates ranking functions up to 1000 nodes and applies the same 650-node limit to
+the final composed policy.  Rejected source patterns still fail before simulation. \\
 \bottomrule
 \end{tabularx}
 \end{center}
 
-\subsection{Completed mutation-operator productivity}
-\label{sec:operator-productivity}
+\subsection{Search-operator evidence}
 
-The completed 500-budget function-only eviction-specialist run provides an unusually
-clear diagnostic of Levi's punctuated-equilibrium design.  The final snapshot of run
-\identifier{20260608_150431_280387} records 498 evaluations, four evaluation errors,
-twenty scored seed or initialization entries, and 474 scored post-initialization
-proposals.  Table~\ref{tab:operator-productivity} classifies those proposals by their
-recorded sampler.  Acceptance means that a proposal entered or replaced a behavior-
-archive cell; it does not mean that the proposal became the scalar incumbent.
-
-\begin{table}[H]
-\centering
-\small
-\begin{tabular}{lrrrrr}
-\toprule
-\textbf{Operator} & \textbf{Scored} & \textbf{Accepted} &
-\textbf{Accept rate} & \textbf{New best} & \textbf{New-best rate} \\
-\midrule
-Normal GPT-5.4-mini mutation & 422 & 74 & \(17.5\%\) & 7 & \(1.7\%\) \\
-GPT-5.4-mini PE variant & 39 & 4 & \(10.3\%\) & 3 & \(7.7\%\) \\
-Direct GPT-5.5 paradigm shift & 13 & 5 & \(38.5\%\) & 3 & \(23.1\%\) \\
-\bottomrule
-\end{tabular}
-\caption{Operator productivity in the completed eviction-specialist run.
-``New best'' means a strict improvement in best score so far.}
-\label{tab:operator-productivity}
-\end{table}
-
-Combining direct paradigm shifts and their variants, punctuated-equilibrium proposals
-were about \(6.9\times\) more likely than normal mutations to establish a new global
-best: \(6/52=11.5\%\), versus \(7/422=1.7\%\).  Direct GPT-5.5 paradigm shifts alone
-established a new best in three of thirteen attempts.  The final \(72.091\) winner
-came from a later normal mutation at evaluation 349, so punctuated equilibrium opened
-productive structural neighborhoods without replacing the need for local refinement.
-
-The complementary result is equally important.  From the strongest initialization
-score of \(71.075\) to the final best of \(72.091\), normal mutations contributed
-\(0.900\), or \(88.6\%\), of the \(1.016\)-point cumulative best-score gain.  The
-largest single jump, \(+0.550\), was also a normal mutation.  Most individual normal
-mutations therefore fail, but it would be incorrect to conclude that only paradigm
-shifts matter.  In this run, paradigm shifts are high-yield structural exploration;
-normal mutations provide the dense exploitation and occasional large refinement that
-turns those neighborhoods into cumulative progress.  Archive acceptance also preserves
-behaviorally distinct stepping stones that a global-best-only count does not credit.
-
-These figures are a single-run diagnostic, not a general operator benchmark.
-Independent replicated runs are required to estimate stable operator productivity and
-to separate operator effects from model, prompt, parent, and search-stage effects.
+A completed function-only eviction-specialist run indicates that punctuated-equilibrium
+proposals are high-yield structural exploration, while normal mutations provide most
+cumulative improvement and the final winner.  Because this is a single-run diagnostic,
+the main report treats the result as workflow evidence rather than a stable operator
+benchmark.  The full sampler classification and run-level counts are retained in
+\filepath{docs/research_log.tex}.
 
 \subsection{Prompt engineering as an implementation constraint}
 
@@ -1512,50 +1476,15 @@ to the weakest validation workloads.  Levi samples up to three of those diagnost
 into each normal mutation prompt.  Initialization and paradigm-shift prompts still use
 their separate prompt builders and do not yet receive this parent-specific feedback.
 
-\subsection{Run chronology}
+\subsection{Experimental record}
 
-The following run scores were produced under the verifier version active at the time.
-They are useful for search chronology but are \risk{not directly comparable} to the
-compact seed's \(74.321\) score under the discovery verifier because the capacity sweep,
-workload panel, and score terms were subsequently strengthened.
-
-\begin{center}
-\scriptsize
-\begin{tabularx}{\textwidth}{@{}lrrrrrX@{}}
-\toprule
-\textbf{Run ID} & \textbf{Evals} & \textbf{Score} & \textbf{Runtime} &
-\textbf{Cost} & \textbf{Archive} & \textbf{Interpretation} \\
-\midrule
-20260605T075913Z & 100 & 27.052 & 1454.4 s & \$2.173 & 50 &
-Budget was consumed by broad initialization; little useful iterative evolution. \\
-20260605T081118Z & 98 & 32.128 & 500.7 s & \$0.710 & 1 &
-Corrected iterative run from the compact seed; found a stronger but complex policy. \\
-manual simplification & -- & 35.927 & -- & -- & -- &
-Removed inert/future-reuse/defensive branches while preserving behavior; complexity
-dropped from 808 to 422 AST nodes. \\
-20260605T082345Z & 98 & 35.927 & 535.7 s & \$0.692 & 1 &
-No generated mutation beat the simplified incumbent. \\
-coefficient sweep & 180 samples & 38.703 old-verifier final & -- & -- & -- &
-Fully evaluated the top 12 sampled compact parameter sets; final source complexity
-became 367 nodes. \\
-20260606T000036Z & 98 & 57.788 & 1083.2 s & \$2.898 & 8 &
-Expanded recurrence/regime observables and primitives; no mutation beat the compact
-seed. \\
-\bottomrule
-\end{tabularx}
-\end{center}
-
-The first run exposed a workflow issue: a nominal 100-evaluation budget could be
-exhausted in initialization.  Subsequent compact-family runs used zero diverse seeds
-and eight variants to preserve most of their budget for iterative mutation.  After
-later runs showed collapsed archive diversity and inactive punctuated equilibrium, the
-live configuration deliberately reintroduced four diverse seeds, three variants per
-retained seed, and twelve data-driven archive centroids.  Complexity changed from a
-saturating cap to the current unbounded concave form and later gained the bounded
-canonical-primitive subsidy.  The expansion run had that subsidy enabled, but its
-strongest valid generated mutation did not use a canonical primitive and therefore
-received no discount; Section~\ref{sec:post-expansion} separates that search-adoption
-caveat from the policy-quality result.
+Historical searches used several verifier revisions, so their scalar scores are not
+directly comparable.  The durable workflow findings are that broad initialization can
+consume the useful mutation budget, archive collapse prevents specialist retention,
+and exact source plus non-seed decompositions are required to understand failed search.
+The full run chronology, costs, turning points, and early coefficient-tuning record are
+preserved in \filepath{docs/research_log.tex}; this report retains only current methods
+and evidence-backed conclusions.
 
 \subsection{Coefficient sweep}
 
@@ -1862,531 +1791,59 @@ them with worse admission/churn behavior.  The recommended compact seed therefor
 retains both decays.  This inversion demonstrates why the structure probe must be
 reviewed alongside the validation scalar.
 
-\section{Retained Discovery Results and Current Robustness}
+\section{Results and Robustness}
 
-\subsection{Historical discovery selection and reporting panel}
+\subsection{Current production-oriented result}
 
-The table in this subsection uses the retained \(8\)-token discovery verifier.  It
-documents the environment that produced the promoted policy; it is not the operative
-production-oriented ranking.  Under the current \(16\)-token default, TinyLFU-LRU leads
-the incumbent by \(0.791\) combined-score points, as summarized in the workload-model
-section and \filepath{docs/results/block_size_robustness.md}.
+On the operative 16-token verifier, the promoted 572-node policy scores \(65.649\),
+ahead of TinyLFU-LRU at \(63.548\).  It passes the held-out agentic tripwire with a
+\(0.0918\) surrogate-to-probe gap, scores \(3.064\) on the hidden panel versus
+\(-2.789\) for TinyLFU-LRU, and retains substantially lower churn.  The result supports
+two-stage search: measured over-cap exploration can expose useful structure, but a
+separate simplification phase and fail-closed adjudication are required before
+promotion.
 
-\begin{center}
-\scriptsize
-\resizebox{\textwidth}{!}{%
-\begin{tabular}{@{}lrrrrrrrrr@{}}
-\toprule
-\textbf{Policy} & \textbf{Score} & \textbf{Cap. 48} & \textbf{Cap. 96} &
-\textbf{Worst qtr.} & \textbf{Tok. waste} & \textbf{Utility} &
-\textbf{Avoid.} & \textbf{Underfill} & \textbf{Churn/1k} \\
-\midrule
-Oracle future reuse & 97.074 & 0.683 & 0.745 & 0.548 & 0.017 & 13.164 & 0.000 & 0.141 & 43.9 \\
-Promoted priority-aware pressure incumbent & 77.230 & 0.674 & 0.687 & 0.521 & 0.407 & 8.143 & 0.074 & 0.070 & 92.7 \\
-Prior composed incumbent & 76.630 & 0.674 & 0.687 & 0.521 & 0.421 & 7.944 & 0.065 & 0.067 & 148.7 \\
-TinyLFU-LRU & 70.362 & 0.618 & 0.690 & 0.457 & 0.357 & 8.062 & 0.108 & 0.112 & 161.1 \\
-Future-reuse heuristic & 69.857 & 0.669 & 0.740 & 0.542 & 0.706 & 2.440 & 0.005 & 0.000 & 1197.3 \\
-vLLM APC & 60.178 & 0.621 & 0.696 & 0.496 & 0.486 & 7.973 & 0.128 & 0.056 & 807.9 \\
-LRU & 51.186 & 0.627 & 0.721 & 0.503 & 0.718 & 2.268 & 0.119 & 0.000 & 1385.0 \\
-Depth-prefer-shallow & 50.409 & 0.628 & 0.715 & 0.497 & 0.724 & 2.214 & 0.167 & 0.000 & 1471.5 \\
-No cache & -61.304 & 0.000 & 0.000 & 0.000 & 0.000 & 0.000 & 0.000 & 1.000 & 0.0 \\
-\bottomrule
-\end{tabular}
-}
-\end{center}
+\subsection{Discovery result and mechanism}
 
-On the discovery verifier, the promoted incumbent is the strongest deployable policy
-by \(6.868\) combined-score points over TinyLFU-LRU. Its recurrence-gated depth relief
-closes most of the prior agentic gap while its new low-priority pressure term reduces
-churn:
+On the historical 8-token discovery verifier, the pressure-aware incumbent scores
+\(77.230\), compared with \(70.362\) for TinyLFU-LRU and \(97.074\) for the
+reporting-only future-reuse oracle.  Its main discovered mechanism is selective
+admission under sustained pressure: low-evidence and low-priority suffixes are
+throttled before they create churn, while recurrence-backed deep branches can still be
+retained.  Exact ablation shows that the final priority-aware pressure term is
+load-bearing; its apparent charged-probe regression is entirely complexity accounting,
+while raw probe behavior improves.
 
-\begin{itemize}
-  \item \identifier{agentic_tool_workflows} training token hit: \(0.479\) candidate
-  versus \(0.478\) vLLM APC and \(0.537\) oracle;
-  \item held-out \identifier{agent_trace_branching} token hit: \(0.376\) candidate
-  versus \(0.393\) vLLM APC and \(0.402\) oracle;
-  \item request p10 hit: \(0.324\) candidate;
-  \item worst-quarter hit: \(0.520\) candidate versus \(0.548\) oracle.
-\end{itemize}
+\subsection{Transfer and specialist evidence}
 
-The incumbent's ranking benefits primarily from stronger pressure-aware churn control.
-Recurrence evidence relaxes depth rejection only after observed repeated access, so
-first-time deep suffixes still pay the full penalty.  Its new term begins rejecting
-low-priority blocks at moderate pressure while allowing priority evidence to suppress
-that extra penalty. Its score breakdown is:
+The result does not transfer uniformly across cache geometry.  The production policy
+improves the 16-token setting but over-rejects useful fine-grained blocks at 8 tokens;
+at 32 tokens and above, even the future-reuse oracle is negative on the tested grid,
+showing that lost prefix boundaries dominate policy choice.  Shared prefix/decode
+capacity experiments likewise show that prefix eviction alone cannot repair active
+decode pressure.
 
-\begin{center}
-\begin{tabular}{lr}
-\toprule
-\textbf{Component} & \textbf{Value} \\
-\midrule
-Mean workload score & \(+75.009\) \\
-Minimum-workload contribution & \(+20.341\) \\
-Churn cost & \(-1.391\) \\
-Underfill cost & \(-0.835\) \\
-Fairness cost & \(-7.663\) \\
-Complexity cost & \(-8.232\) \\
-\midrule
-Combined score & \(\mathbf{77.230}\) \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-\subsection{Reasoning decode-KV robustness}
-\label{sec:reasoning-kv-robustness}
-
-The shared-capacity robustness panel evaluates all existing policies on
-\identifier{concurrent_long_generation}, \identifier{reasoning_burst},
-\identifier{reasoning_burst_shifted}, and \identifier{stochastic_serving_mix}.  It
-uses the operative 16-token blocks, capacities \((24,48)\), 96 requests per family,
-and seeds \((11,23,37)\).  The prefix-only replay is the control; shared mode charges
-generated decode KV against the same capacity.  Decode allocation failure is reported
-but is not yet a score term, so raw ranking measures prefix-policy quality under
-pressure rather than complete serving feasibility.
-
-\begin{center}
-\small
-\begin{tabular}{lrrrrr}
-\toprule
-\textbf{Policy} & \textbf{Prefix rank} & \textbf{Shared rank} &
-\textbf{Shared raw} & \textbf{Shared hit} & \textbf{Decode failure} \\
-\midrule
-Oracle future reuse & 1 & 1 & 61.103 & 0.4749 & 77.3\% \\
-Pressure-aware incumbent & 3 & 2 & 57.496 & 0.4716 & 77.5\% \\
-vLLM APC & 9 & 3 & 57.438 & 0.4668 & 77.5\% \\
-Future-reuse heuristic & 2 & 4 & 56.380 & 0.4724 & 78.3\% \\
-Prefix fanout & 5 & 5 & 55.862 & 0.4719 & 78.3\% \\
-LRU & 10 & 12 & 54.855 & 0.4697 & 78.3\% \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-The incumbent becomes the strongest deployable policy by raw behavior, but only by
-\(0.058\) points over vLLM APC.  Its charged score is \(49.264\), below vLLM APC's
-\(57.438\), because the framework charges candidate complexity but does not charge
-baseline implementations; raw behavior is therefore the meaningful policy comparison
-in this panel.  That near-tie is less important than the systems result: average
-incumbent decode allocation failure is \(77.5\%\), including \(91.1\%\) on
-\identifier{reasoning_burst} and \(98.1\%\) on its shifted variant.  Shared pressure
-reduces incumbent token hit from \(0.7145\) to \(0.4716\).  No prefix eviction policy
-can reclaim capacity occupied by active decode KV, so the next useful policy surface
-must include scheduler actions such as admission control, preemption, swapping, or
-separate prefix/decode budgets.  The complete panel is retained in
-\filepath{docs/results/reasoning_kv_robustness.md}.
-
-\subsection{Held-out structure-generalization probe}
-
-The recurrence-heavy probe is reported but excluded from selection.  The promoted
-priority-aware pressure incumbent's token hit rates are \(0.376\) on
-\identifier{agent_trace_branching} and \(0.881\) on
-\identifier{cyclic_working_set_pressure}. Recurrence-gated depth relief raises the
-first value while the new term lowers agent-trace churn from \(57.3\) to \(55.6\) per
-thousand requests.  Aggregate probe score nevertheless slips from \(75.002\) to
-\(74.785\) after complexity charging.  Decomposition shows that no behavioral probe
-sub-metric causes the decline: raw probe score improves by \(0.047\), mean and
-minimum-workload contribution improve, agent churn falls by \(1.7\) per thousand, and
-cyclic hit and churn are unchanged.  The entire charged decline is explained by the
-\(0.264\) larger complexity cost.  The automatic agentic surrogate-to-probe tripwire
-also passes: the token-hit gap is \(0.1025\), below the \(0.12\) threshold.
-Stochastic serving mixes remain the clearest weakness.
-
-\subsection{Pressure-aware evolution chronology}
-\label{sec:pressure-aware-promotion}
-
-A nominal 300-evaluation search from the compact seed completed 298 recorded
-evaluations, cost \$2.781, and filled three archive cells.  The strongest GPT-5.5
-paradigm scored \(74.670\); a subsequent compact mutation refined its pressure-aware
-admission mechanism and reached \(76.069\). A focused follow-up separated agent-trace
-underfill from stochastic-mix noise and added recurrence-gated depth relief, reaching
-\(76.480\). A later diversified 300-budget run completed 298 recorded evaluations,
-cost \$3.608, and remained in one archive cell. Its best mutation refined the
-persistent-pressure coefficient to \(0.22\); composing that term with recurrence-gated
-depth relief reached \(76.630\).
-
-\begin{center}
-\scriptsize
-\resizebox{\textwidth}{!}{%
-\begin{tabular}{lrrrrrrrrrrr}
-\toprule
-\textbf{Policy} & \textbf{Selection} & \textbf{Raw} & \textbf{Mean} &
-\textbf{Min} & \textbf{Churn} & \textbf{Underfill} & \textbf{Cx} &
-\textbf{Probe} & \textbf{Agent} & \textbf{Cyclic} & \textbf{Hidden} \\
-\midrule
-Compact seed & 74.321 & 80.914 & 73.991 & 21.293 & 5.925 & 0.781 & 473 &
-47.425 & 0.2295 & 0.8272 & -1.951 \\
-Original pressure-aware policy & 76.069 & 84.185 & 74.870 & 20.251 & 2.464 & 0.810 & 624 &
-54.543 & 0.2476 & 0.8812 & 6.527 \\
-Recurrence-aware refinement & 76.480 & 84.241 & 75.066 & 20.244 & 2.615 & 0.791 & 588 &
-74.602 & 0.3756 & 0.8812 & 7.266 \\
-Prior composed incumbent & 76.630 & 84.598 & 75.044 & 20.251 & 2.230 & 0.804 & 609 &
-75.002 & 0.3760 & 0.8812 & 9.691 \\
-Promoted priority-aware pressure incumbent & 77.230 & 85.462 & 75.009 & 20.341 & 1.391 & 0.835 & 636 &
-74.785 & 0.3761 & 0.8812 & 11.158 \\
-\bottomrule
-\end{tabular}
-}
-\end{center}
-
-Unlike prior generated candidates, the composed \(76.630\) incumbent clears final
-adjudication: selection, aggregate probe, both recurrence-heavy probe families, and
-hidden score all improve. The original policy's main operational gain was a churn-cost
-reduction from \(5.925\) to \(2.464\). The recurrence-gated refinement sharply improves
-agent traces, and the composed persistent-pressure throttle then lowers churn cost
-further to \(2.230\) without giving back that gain.
-
-Run \filepath{artifacts/prefix_kv_cache_runs/20260608T001616Z} then tested the targeted
-agentic and stochastic guidance.  Its 298 recorded evaluations cost \$4.558, filled
-ten archive cells, accepted 18 candidates, and recorded 237 generation or static-check
-errors.  The winning mutation appeared at evaluation 81 and remained best through the
-end of the run.  It makes exactly one semantic change to admission:
-
-\begin{equation}
-  -0.18 \max(0, 1-\text{priority}_b)\max(0, q_t-0.25).
-\end{equation}
-
-This term begins throttling low-priority admissions under moderate persistent pressure,
-earlier than the existing all-block threshold at \(q_t=0.8\).  Relative to its
-\(76.630\) seed, it raises charged selection by \(0.600\), raises raw-before-complexity
-score by \(0.863\), lowers validation churn by \(37.6\%\), lowers token-weighted
-admission waste from \(0.421\) to \(0.407\), and raises hidden score by \(1.467\).
-Validation token hit changes only from \(0.6697\) to \(0.6691\), agent and cyclic probe
-hit are effectively unchanged, and agent-probe churn falls slightly.  The cost is 27
-effective complexity nodes.  The resulting \(0.217\) charged aggregate-probe decline
-is entirely explained by the \(0.264\) complexity-cost increase: raw probe behavior
-improves by \(0.047\).  The fourth-term ablation therefore establishes that the term is
-load-bearing, while probe decomposition and the passed tripwire establish that it does
-not introduce a quiet held-out behavioral regression.  The exact ablation is retained
-in \filepath{docs/results/priority_aware_pressure_ablation.md}; the policy is
-promoted as the stable incumbent.
-
-The retained discovery-search configuration makes the two remaining weaknesses visible
-to mutation
-and archive selection without directly optimizing the held-out probe.  Every
-mutation receives a reserved diagnostic for the non-quarantined
-\identifier{agentic_tool_workflows} surrogate and for
-\identifier{stochastic_serving_mix}.  Agentic hit and underfill plus stochastic-mix hit
-are also behavior-archive dimensions, so a specialist can survive as a stepping-stone
-parent even before it beats the incumbent's combined score.  This intervention changes
-mutation guidance and parent diversity, not the combined selection scalar;
-\identifier{agent_trace_branching} remains reporting-only.  The new low-priority
-pressure term is evidence that this guidance can produce a compact operational
-improvement rather than only a workload-specific hit-rate mutation. Every completed
-run also persists a fail-closed tripwire that flags an absolute token-hit-rate gap
-greater than \(0.12\) between the surrogate and held-out agentic probe.  This detects
-surrogate drift without feeding probe performance back into selection.
-
-The methodological finding is more important than the \(0.600\)-point charged gain.
-Earlier seed-locked searches optimized the combined scalar from one archive region and
-could not structurally preserve specialist steps for both remaining weaknesses.  The
-new search instead supplied held-out-faithful, non-quarantined agentic and stochastic
-diagnostics to mutation, and made those specialist behaviors archive dimensions.  It
-then discovered one compact pressure term that reduces agentic-tool-workflow churn
-from \(142.4\) to \(74.7\) and waste from \(0.104\) to \(0.044\), while also reducing
-stochastic-mix churn from \(191.0\) to \(164.9\) and waste from \(0.573\) to \(0.556\).
-The held-out probe remained excluded from selection; the tripwire pass is what makes
-the result credible as improved search structure rather than probe leakage.
-
-\subsection{Eviction-specialist follow-up}
-\label{sec:eviction-specialist}
-
-The promoted incumbent has effective complexity 636, leaving only fourteen nodes below
-the original 650-node rejection threshold.  A diagnostic of six retained paradigm
-candidates found that all six were rejected solely for effective complexity between
-669 and 739; four proposed richer eviction rankings.  Rescoring those four with the
-hard limit disabled showed that the cap was suppressing measurable alternatives, but
-not hiding a clear winner.  Their raw selection scores ranged from \(85.431\) to
-\(85.496\), versus \(85.462\) for the incumbent, and none beat the incumbent after the
-smooth complexity charge.  One reduced avoidable eviction from \(0.0736\) to
-\(0.0637\), demonstrating useful specialist behavior that the scalar winner alone
-would discard.
-
-The follow-up therefore separates exploration from promotion rather than removing
-complexity pressure.  Configuration
-\filepath{configs/prefix_kv_cache_eviction_specialist.yaml} exposes only
-\code{score_eviction(block, now, frequency, priority)}.  The evaluator composes that
-function with frozen admission and lifecycle callbacks from the stable pressure-aware
-incumbent.  The behavior archive includes validation avoidable eviction and
-short-reuse-after-eviction missed-token rate.  The evaluator reports those metrics per
-selected workload and ranks candidates by raw behavior before the complexity charge.
-
-Every saved specialist winner is composed back into the complete incumbent and
-evaluated as deployable source.  Promotion fails closed unless the composed candidate
-is at most 650 effective nodes, strictly improves raw selection behavior, and does not
-regress charged selection, validation eviction-regret metrics, aggregate probe, either
-probe-family token-hit rate, hidden score, or the agentic surrogate-to-probe tripwire.
-This prevents either admission regressions or deletion-only gains from winning the
-specialist lane.
-
-The completed 500-budget function-only run validates the exploration side of this
-design but not promotion.  It improved raw specialist score from the incumbent
-equivalent's \(70.989\) to \(72.091\), filled all sixteen archive cells, and found its
-best candidate at evaluation 349.  That function alone has 441 effective nodes and
-composes to a \(1{,}011\)-node complete policy, so it already fails the 650-node
-deployability gate; broader cross-panel checks cannot make it promotable.
-
-A decision-level follow-up confirms that this gain is real victim-ranking behavior
-rather than tie-breaking noise.  Across \(5{,}402\) incumbent eviction decisions,
-\(77.5\%\) had multiple legal victims, with 10.64 legal victims on average.  The full
-specialist changed the selected victim on \(21.5\%\) of decisions.  It corrected 281
-avoidable choices while introducing 150, a net reduction of 131; end-to-end replay
-raised raw selection by \(1.101\), reduced validation avoidable-eviction rate from
-\(0.1530\) to \(0.1350\), and reduced churn from \(168.1\) to \(164.8\) per thousand
-requests.
-
-The decomposition also identifies the main useful design.  Guarded age combined with
-descendant protection captures \(98.0\%\) of the full specialist's raw selection gain,
-but still composes to 775 nodes.  A single deployable coefficient change---increasing
-the incumbent descendant-protection weight from \(0.2\) to \(0.6\)---keeps composed
-complexity at 636 and gains \(0.168\) raw selection, but loses \(0.006\) hidden score.
-It therefore remains a useful distillation result rather than a promotion candidate.
-Full counts, split-level regret, and compact variants are retained in
-\filepath{docs/results/eviction_policy_analysis.md}.
-
-\subsection{Post-expansion evolution result}
-\label{sec:post-expansion}
-
-Run \filepath{artifacts/prefix_kv_cache_runs/20260606T000036Z} used the expanded
-observable surface, canonical multi-timescale primitive, form-aware complexity, and
-the quarantined probe under the previous \(24/48\)-block verifier.  A nominal
-100-evaluation budget produced 98 recorded evaluations, cost \$2.898, filled eight
-archive cells, and retained the compact seed at
-\(57.788\).  The strongest generated mutation scored \(50.655\).
-
-That headline alone hides the important decomposition.  The table below compares the
-incumbent with the highest-scoring \emph{generated} mutation.  ``Raw before
-complexity'' retains the operational churn and fairness charges but adds the
-complexity charge back to the selection score.
-
-\begin{center}
-\scriptsize
-\resizebox{\textwidth}{!}{%
-\begin{tabular}{lrrrrrrrr}
-\toprule
-\textbf{Policy} & \textbf{Mean} & \textbf{Min contribution} &
-\textbf{Churn cost} & \textbf{Fairness cost} & \textbf{Raw before cx} &
-\textbf{Effective cx} & \textbf{Cx cost} & \textbf{Combined} \\
-\midrule
-Compact incumbent & 68.642 & 13.685 & 10.283 & 7.663 & 64.381 & 473 & 6.593 & 57.788 \\
-Best expanded mutation & 65.346 & 14.300 & 7.754 & 7.663 & 64.229 & 1239 & 13.574 & 50.655 \\
-\midrule
-Mutation minus incumbent & -3.296 & +0.616 & -2.529 & 0.000 & -0.152 & +766 & +6.982 & -7.134 \\
-\bottomrule
-\end{tabular}%
-}
-\end{center}
-
-The ``Min contribution'' column is the same signed
-\(0.5\min_{G\in\mathcal{G}}S_G\) floor-guard term used throughout the report.  It is
-positive here because each policy's weakest validation workload-capacity group still
-has a positive score; the same column becomes negative whenever that weakest group
-falls below zero.
-
-The best expanded form was therefore raw-competitive rather than plainly worse on
-merit: before complexity it trailed by only \(0.152\) points.  Its lower mean workload
-score was almost offset by a better minimum-workload contribution and \(2.529\) points
-less churn cost.  Complexity then widened the gap by another \(6.982\) points.  The
-correct interpretation is primarily case (a)---a nearly tied raw policy sunk by its
-larger implementation---with a small case-(b) raw deficit, not a decisive rejection of
-the expanded functional form.
-
-The probe decomposition is more mixed:
-
-\begin{center}
-\small
-\begin{tabular}{lrrrrr}
-\toprule
-\textbf{Policy} & \textbf{Raw probe} & \textbf{Charged probe} &
-\textbf{Agent-branch hit} & \textbf{Cyclic hit} & \textbf{Churn/1k} \\
-\midrule
-Compact incumbent & 46.896 & 40.303 & 0.2268 & 0.7817 & 170.1 \\
-Best expanded mutation & 38.006 & 24.432 & 0.2574 & 0.7434 & 513.9 \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-The mutation improved the specifically weak
-\identifier{agent_trace_branching} family by \(0.0307\) token-hit-rate points, but it
-regressed \identifier{cyclic_working_set_pressure} by \(0.0384\), increased probe
-churn from \(170.1\) to \(513.9\) per 1000 requests, and lost on both raw and charged
-aggregate probe score.  This is not case (c) at the aggregate-probe level, so the
-result does not support moving the entire probe into selection.  It does show that the
-expanded signals can change the intended behavior; the next useful ablation is to
-isolate the agent-branching gain without the cyclic and complexity regressions.
-
-Form-aware complexity was enabled, but the best mutation hand-rolled fast, slow,
-priority, and miss-decay state instead of importing the canonical
-\code{MultiTimescaleDecay} primitive.  Its raw and effective complexities are both
-\(1239\), so it received zero primitive subsidy.  No viable archived elite exercised
-the canonical primitive; the only archived primitive user was invalid.  Consequently,
-this run does \emph{not} establish that a subsidized structured policy lost on merit.
-It establishes that the search found a promising but verbose hand-rolled structure and
-failed to adopt the cheaper provided representation.
-
-The saved winner is byte-identical to \code{compact_seed.py}; validation, probe, and
-hidden metrics for the recommended seed were therefore exactly unchanged.  At that
-stage, the adjudication rule retained the prior seed because no candidate improved
-validation while preserving both quarantined panels.  The full decomposition is
-persisted in
-\filepath{artifacts/prefix_kv_cache_runs/20260606T000036Z/best_generated_mutation_decomposition.json}.
-
-\subsection{Structured ablation and repeated-search adjudication}
-\label{sec:structured-search}
-
-The next iteration converted the first expansion run's hand-rolled fast, slow,
-priority, and miss-decay dictionaries into a bounded canonical
-\code{MultiTimescaleDecay.observe_vector} representation.  Before another evolution
-run, a behavior-only full-panel ablation isolated which structural terms were carrying
-value.  Complexity is set to zero in this table so the rows compare behavior rather
-than source size.
-
-\begin{center}
-\scriptsize
-\resizebox{\textwidth}{!}{%
-\begin{tabular}{lrrrrrrrr}
-\toprule
-\textbf{Variant} & \textbf{Raw selection} & \textbf{Mean} &
-\textbf{Min contribution} & \textbf{Churn cost} & \textbf{Raw probe} &
-\textbf{Agent hit} & \textbf{Cyclic hit} & \textbf{Probe churn/1k} \\
-\midrule
-All structured terms & 62.178 & 65.543 & 13.554 & 9.256 & 35.654 & 0.2626 & 0.7408 & 634.5 \\
-Without recurrence & 63.762 & 65.436 & 12.826 & 7.198 & 41.373 & 0.2533 & 0.7445 & 306.4 \\
-Without subtree & 59.029 & 63.127 & 11.228 & 6.227 & 37.906 & 0.2558 & 0.7362 & 430.6 \\
-Without regime & 61.264 & 67.734 & 14.290 & 13.096 & 27.756 & 0.2662 & 0.7267 & 986.1 \\
-Without miss state & 62.287 & 65.668 & 13.546 & 9.265 & 32.501 & 0.2626 & 0.7182 & 678.8 \\
-Without priority state & 62.298 & 65.674 & 13.554 & 9.266 & 35.654 & 0.2626 & 0.7408 & 634.5 \\
-Without recurrence and priority & 63.819 & 65.380 & 12.815 & 7.073 & 41.373 & 0.2533 & 0.7445 & 306.4 \\
-Also without miss state & 63.718 & 65.280 & 12.815 & 7.075 & 41.038 & 0.2534 & 0.7411 & 313.4 \\
-\bottomrule
-\end{tabular}%
-}
-\end{center}
-
-The ablation gives a sharper result than the undifferentiated expansion-run loss.
-The explicit recurrence terms were harmful, increasing churn without improving either
-selection or the aggregate probe.  Priority-decay state was behaviorally inert.
-Subtree and regime context carried real value: removing either reduced raw selection,
-and removing regime conditioning caused severe probe churn.  Miss-decay state was
-near-neutral for validation selection but protected cyclic behavior, so it remained
-in the selected structured seed.
-
-Deleting recurrence and priority state produced
-\filepath{src/prefix_cache_evolve/problems/prefix_kv_cache/seeds/structured_seed.py}.
-It is smaller than the compact incumbent after the canonical subsidy, but it trades
-validation and aggregate probe score for better hidden and agent-branching behavior:
-
-\begin{center}
-\small
-\resizebox{\textwidth}{!}{%
-\begin{tabular}{lrrrrrrrr}
-\toprule
-\textbf{Policy} & \textbf{Combined} & \textbf{Raw before cx} &
-\textbf{Effective cx} & \textbf{Subsidy} & \textbf{Probe} &
-\textbf{Agent hit} & \textbf{Cyclic hit} & \textbf{Hidden} \\
-\midrule
-Compact incumbent & 57.788 & 64.381 & 473 & 0 & 40.303 & 0.2268 & 0.7817 & -18.616 \\
-Structured seed & 57.426 & 63.819 & 454 & 15 & 34.980 & 0.2533 & 0.7445 & -10.815 \\
-\bottomrule
-\end{tabular}%
-}
-\end{center}
-
-The structured seed was then used as the parent for three independent nominal
-100-evaluation Levi searches.  Each completed 98 recorded evaluations.  The runner now
-persists the strongest generated non-seed mutation and automatically evaluates its
-validation, probe, hidden, raw-complexity, effective-complexity, and subsidy
-decomposition.  This prevents a retained seed from hiding whether evolution discovered
-an interesting but unselected functional form.
-
-\begin{center}
-\scriptsize
-\resizebox{\textwidth}{!}{%
-\begin{tabular}{lrrrrrrrrrr}
-\toprule
-\textbf{Run ID} & \textbf{Evals} & \textbf{Cost} & \textbf{Generated combined} &
-\textbf{Raw before cx} & \textbf{Cx} & \textbf{Subsidy} & \textbf{Probe} &
-\textbf{Agent hit} & \textbf{Cyclic hit} & \textbf{Hidden} \\
-\midrule
-20260606T123835Z & 98 & \$2.474 & 49.326 & 64.433 & 1429 & 15 & 22.871 & 0.1648 & 0.7605 & -16.542 \\
-20260606T125829Z & 98 & \$2.722 & 51.219 & 65.470 & 1322 & 15 & 20.854 & 0.2727 & 0.8054 & -16.501 \\
-20260606T132003Z & 98 & \$2.486 & 49.702 & 62.938 & 1198 & 0 & 35.312 & 0.2142 & 0.7736 & -15.486 \\
-\bottomrule
-\end{tabular}%
-}
-\end{center}
-
-All three searches retained the structured seed as the charged winner, and none
-improved charged validation while preserving both quarantined panels.  Run
-\filepath{artifacts/prefix_kv_cache_structured_runs/20260606T125829Z} is nevertheless
-the strongest functional-form finding.  Its generated mutation improved raw selection
-from \(63.819\) to \(65.470\), agent-branching hit from \(0.2533\) to \(0.2727\), and
-cyclic hit from \(0.7445\) to \(0.8054\).  It then lost \(14.251\) points to complexity,
-regressed aggregate probe score to \(20.854\), and regressed hidden score to
-\(-16.501\).  Thus the richer form can improve the recurrence behaviors it targets,
-but its current operational behavior and implementation size do not generalize.
-
-The primitive-adoption intervention did work.  All 24 archived elites across the
-three searches referenced \code{MultiTimescaleDecay.observe_vector}, whereas no viable
-elite in the prior expansion run used the canonical primitive.  The remaining failure
-is not discoverability of the supplied representation: generated policies still
-expanded to \(1198\)--\(1429\) effective nodes.  The bounded subsidy made canonical
-state cheaper but correctly did not make surrounding bespoke control flow free.
-
-The full structure probe remains quarantined from selection.  The per-family hit rates
-are useful diagnostics, but Run 2 demonstrates why they should not be promoted without
-an operational non-regression constraint: both hit rates improved while aggregate
-probe score deteriorated sharply.  At that stage, adjudication kept
-\code{compact_seed.py} unchanged and treated the structured seed as a useful alternate
-parent.  The ablation and repeated-run verdicts are persisted in
-\filepath{artifacts/prefix_kv_cache_structured_ablation.json} and
-\filepath{artifacts/prefix_kv_cache_structured_runs/adjudication.json}.
-
-\subsection{Hidden-panel diagnostic}
-
-A post-verifier-revision hidden diagnostic produced:
-
-\begin{center}
-\small
-\scriptsize
-\begin{tabular}{lrrrrrrr}
-\toprule
-\textbf{Policy} & \textbf{Hidden score} & \textbf{Token hit} &
-\textbf{Worst-quarter} & \textbf{Tok. waste} & \textbf{Utility} &
-\textbf{Avoidable} & \textbf{Churn/1k} \\
-\midrule
-Oracle future reuse & 21.517 & 0.4863 & 0.3385 & 0.1151 & 6.566 & 0.0000 & 460.8 \\
-TinyLFU-LRU & -7.869 & 0.4176 & 0.2653 & 0.5473 & 3.668 & 0.2768 & 1032.7 \\
-Compact candidate & -18.616 & 0.4345 & 0.3044 & 0.6519 & 3.348 & 0.1698 & 1537.4 \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-The candidate retains better hidden hit rate and worst-quarter service than TinyLFU,
-but its combined score is worse because it admits too much dead content and churns much
-more.  This is precisely the kind of distinction the expanded verifier was intended to
-surface.
+Focused eviction search found measurable victim-ranking improvements, but the strongest
+specialist composed to a \(1{,}011\)-node policy and failed deployability.  Structured
+search found richer policies that improved targeted recurrence behavior, but deletion
+ablation showed broad recurrence state was harmful, priority-decay state was inert, and
+complexity plus cross-panel regressions prevented promotion.  These results motivate
+the retained principles below; detailed tables, per-run narratives, and negative
+results are preserved in \filepath{docs/research_log.tex} and
+\filepath{docs/results/}.
 
 \section{Evolution-Discovered Principles}
 \label{sec:evolution-principles}
 
-The detailed chronology and result tables above contain more information than the
-retained winner alone.  This section consolidates that information into a principle
-ledger so future search does not repeatedly rediscover the same failures.  A
+The supplementary research log and generated result summaries contain more information
+than the retained winner alone.  This section consolidates that evidence into a
+principle ledger so future search does not repeatedly rediscover the same failures.  A
 \important{retained principle} is supported by a baseline comparison, controlled
 ablation, repeated search adjudication, or a combination of those sources.  The lists
 below are retained within the current synthetic benchmark; statements explicitly
 qualified with ``currently'' are \important{working principles} whose broader
 generality remains unproven.  An \risk{open hypothesis} remains a proposed experiment
 rather than a conclusion.
-
-Incomplete run snapshots may corroborate an existing pattern, but they do not establish
-new retained principles.  In particular, the June 7 discovery-verifier 30-evaluation
-snapshot at \filepath{runs/20260607_151718_996826/snapshot.json} contains generated
-elites with \(0.674\)--\(0.683\) validation token hit versus the incumbent's \(0.665\),
-but only \(48.1\)--\(53.9\) combined score versus \(74.321\).  Those elites have
-\(0.655\)--\(0.729\) token-weighted admission waste, \(746.7\)--\(1256.5\) churn per
-1000 requests, and \(1544\)--\(1972\) effective complexity.  This supports the
-already-retained cache-economics principle below, but the incomplete run is not treated
-as a new ranking result.
 
 \subsection{Policy-design principles}
 
@@ -2528,9 +1985,12 @@ as a new ranking result.
 
   \item \textbf{Deletion is a productive search operator.}  Manual simplification
   preserved behavior while reducing an evolved policy from 808 to 422 AST nodes.
-  Structured ablation then improved behavior by deleting recurrence and inert priority
-  state.  New state tables and branches should remain provisional until deletion
-  demonstrates that they are necessary.
+  More importantly, the production search demonstrated the automated version: a
+  656-node exploration winner triggered a dedicated simplification lineage, which
+  produced deployable 539--572-node alternatives with higher charged scores.
+  Structured ablation likewise improved behavior by deleting recurrence and inert
+  priority state.  New state tables and branches should remain provisional until
+  deletion demonstrates that they are necessary.
 
   \item \textbf{Complexity must be charged from exact candidate source, while safety
   and promotion caps remain separate.}  Opaque callable evaluation cannot distinguish
@@ -2572,10 +2032,10 @@ as a new ranking result.
   whether failure came from behavior, complexity, or generalization.
 
   \item \textbf{Treat paradigm shifts and normal mutations as complementary operators.}
-  The completed eviction-specialist diagnostic in
-  Section~\ref{sec:operator-productivity} finds that punctuated-equilibrium proposals
-  are about seven times more likely to establish a new global best, while normal
-  mutations still contribute most cumulative best-score gain.  This supports
+  The completed eviction-specialist diagnostic retained in
+  \filepath{docs/research_log.tex} suggests that punctuated-equilibrium proposals
+  are high-yield structural exploration, while normal mutations still contribute most
+  cumulative best-score gain.  This supports
   alternating sparse structural exploration with dense local exploitation rather than
   replacing either operator from a single-run success-rate comparison.
 \end{enumerate}
@@ -2909,801 +2369,620 @@ run-type-specific artifacts:
 
 \section{Conclusion}
 
-The implemented system deliberately separates three concerns:
+The repository combines a deterministic prefix-tree simulator, a robust verifier, and
+an LLM-guided source-evolution workflow.  Its central systems result is that admission,
+eviction, and implementation complexity must be evaluated together: higher hit rate
+alone frequently purchases excessive churn, dead admissions, or poor transfer.
 
-\begin{enumerate}
-  \item the \textbf{simulator} enforces realistic prefix-tree and active-reference
-  constraints while producing deterministic service and cost metrics;
-  \item the \textbf{verifier} converts a broad multi-seed workload panel into an
-  interpretable robust score without exposing future information to deployable
-  candidates;
-  \item the \textbf{evolution workflow} searches executable policy source, charges its
-  complexity, and persists reproducible artifacts.
-\end{enumerate}
+The strongest evolved policies use compact pressure-aware admission with bounded
+structural and recurrence evidence.  The successful search process also depends on
+fine-grained evaluator feedback, specialist archive dimensions, explicit
+simplification, exact-source complexity, and quarantined probe and hidden panels.
+Current evidence supports these design principles, but production-trace transfer,
+shared decode-capacity control, and geometry-robust promotion remain open.
 
-The pressure-aware incumbent demonstrates that a compact deployable policy can remain
-competitive after the verifier is tightened.  On the operative 16-token default it
-narrowly trails TinyLFU-LRU after complexity charging, while retaining higher
-validation token hit and substantially lower churn.
-Section~\ref{sec:evolution-principles} consolidates the broader lessons: selective
-admission, structural and regime context, robust cross-panel adjudication, realized
-cache economics, source-based complexity, deletion-oriented search, and precise
-generator-facing contracts all matter. Targeted ablation showed that broad explicit
-recurrence terms were harmful and priority-decay state was inert. A later focused
-refinement showed that recurrence is useful when it only relaxes an otherwise
-categorical depth penalty. Updating the
-primitive contract and prompt fixed search adoption: all 24 archived elites from three
-new searches used canonical vector-decay state.  One generated mutation improved raw
-validation and both recurrence-family hit rates, proving that richer functional form
-can address the intended behavior, but complexity and aggregate operational
-regressions correctly prevented its selection.  A later compact-family search
-discovered a pressure-aware policy that reduced churn and improved selection, probe,
-and hidden adjudication. Recurrence-gated depth relief then raised agent-trace hit
-rate to near the replacement baselines while retaining low churn. The retained
-discovery search
-then found a one-line priority-aware pressure term that raises selection and hidden
-score while cutting validation churn by \(37.6\%\).  Exact ablation shows the term is
-load-bearing, while probe decomposition shows its apparent aggregate regression is
-entirely complexity accounting: raw probe behavior improves and the agentic tripwire
-passes.  It is now the promoted incumbent.
-
-More broadly, the successful run demonstrates that held-out-faithful surrogate
-diagnostics in mutation feedback and specialist archive dimensions can expose and
-retain a both-weaknesses fix that seed-locked scalar search could not reach.  The
-tripwire preserves the probe discipline that makes this methodological result
-credible. Stochastic serving mixes remain the clearest weakness, while the compact and
-structured seeds remain useful alternate parents for deletion-oriented search.
+Detailed chronology and rejected solutions are intentionally separated into
+\filepath{docs/research_log.tex}; generated measurements remain under
+\filepath{docs/results/}.  This keeps the main report focused on the current method,
+claims, limitations, and reproducibility contract.
 
 \appendix
 
-\section{Engineering Journey: From Prototype to Productive Evolution}
-\label{app:engineering-journey}
+\section{Supplementary Experimental Record}
 
-The final architecture can make the project look more direct than it was.  In
-practice, obtaining a useful evolution run required much more than connecting an LLM
-to a scalar objective.  The simulator had to become credible enough that improvements
-meant something; the evaluator had to be deterministic, isolated, source-aware, and
-interpretable; the Levi integration had to preserve enough information to diagnose
-failed search; and the generator-facing contract had to be narrowed until most
-proposals were executable.  Only after those layers were working did longer evolution
-runs begin to produce compact mechanisms that survived cross-panel adjudication.
+The detailed engineering journey, run diary, historical verifier results, structured
+search detours, and rejected evolutionary solutions are retained in the separately
+compilable \filepath{docs/research_log.tex}.  Generated result summaries remain under
+\filepath{docs/results/}, and exact run artifacts remain under \filepath{artifacts/}.
+Separating that evidence record keeps this report focused while preserving the
+provenance needed to audit or reinterpret its conclusions.
 
-This appendix records that engineering progression.  It is not a claim that every
-intermediate implementation was optimal.  Rather, it documents why each layer was
-added, what failure exposed its absence, and how the project moved from ``a run can be
-launched'' to ``a run can produce evidence worth trusting.''
-
-\subsection{What ``up and running'' actually required}
-
-There were four distinct thresholds of readiness:
-
-\begin{enumerate}
-  \item \textbf{The repository could run locally.}  Baseline, simulator, reporting, and
-  test development needed a normal editable development installation.  Evolution was
-  deliberately kept separate because Levi is installed from Git rather than as a
-  normal project dependency.  This prevented baseline-only and offline work from
-  acquiring an unnecessary network dependency, but it also meant an evolution
-  environment required an additional explicit installation step.
-
-  \item \textbf{An LLM-backed search could execute.}  The evolution process required a
-  configured model provider in addition to Levi.  For the recorded OpenAI-backed run,
-  explicit approval was obtained before sending the problem prompt, seed and candidate
-  source, and evaluator feedback to OpenAI.  The benchmark itself remained synthetic;
-  no hidden production prompt content was required.
-
-  \item \textbf{Candidate scores were technically valid.}  Generated Python had to be
-  loaded from source, executed in an isolated worker, checked for time and memory
-  limits, and evaluated under a stable candidate-visible schema.  A score from an
-  opaque callable was insufficient because the complexity of the exact proposed source
-  is part of the objective.
-
-  \item \textbf{Search results were scientifically useful.}  A retained best score was
-  not enough.  The system needed exact seed and candidate source, configuration
-  snapshots, split and workload metrics, the strongest generated non-seed candidate,
-  probe and hidden decompositions, and a final promotion decision.  Without those
-  artifacts, an unchanged seed could conceal what evolution had actually discovered.
-\end{enumerate}
-
-The practical bootstrap path therefore became:
-
-\begin{lstlisting}[style=shell]
-.venv/bin/python -m pip install -e '.[dev]'
-uv pip install 'levi @ git+https://github.com/ttanv/levi.git'
-.venv/bin/pytest -q
-.venv/bin/prefix-cache-evolve --iterations 20
-\end{lstlisting}
-
-The short run was useful as an integration smoke test, but never treated as evidence
-that a policy improved.  Full ranking decisions required the complete deterministic
-panel and retained run artifacts.
-
-\subsection{Building a benchmark before optimizing it}
-
-The first major body of work was not evolution.  It was defining a benchmark whose
-score could not be improved by exploiting an unrealistic cache model.  Several
-details proved consequential:
-
-\begin{itemize}
-  \item Prefix hits had to be root-contiguous, and only inactive resident leaves could
-  be eviction victims.  Active decode references, interior nodes, admission rollback,
-  and repeated logical arrival steps all affected whether a proposed policy was
-  meaningful.
-  \item The candidate-visible contract had to separate online-computable fields from
-  reporting-only future reuse.  Future knowledge was retained for oracle baselines and
-  avoidable-eviction audits, but hidden from deployable candidates.
-  \item Hit rate alone produced misleading winners.  The verifier grew to include
-  token-weighted admission waste, realized admission utility, policy-caused underfill,
-  avoidable eviction, churn, latency, request tails, worst temporal windows, priority
-  service, and fairness.
-  \item A single capacity and one workload mix were not enough.  The final selection
-  panel uses multiple capacities, seeds, and shifted workload families, while probe and
-  hidden panels remain quarantined for adjudication.
-  \item Credibility baselines and a constrained next-use oracle were needed before an
-  evolved result could be interpreted.  They distinguish a genuinely strong compact
-  policy from a benchmark that is merely easy to game.
-\end{itemize}
-
-This work changed the objective repeatedly.  Historical scores are consequently useful
-as a record of search progression, but not all are numerically comparable.  The report
-keeps those historical results because the verifier changes are themselves part of
-the journey: every new metric or workload was introduced in response to a concrete
-shortcut or blind spot.
-
-\subsection{Making Levi a reliable experimental component}
-
-The Levi integration also required several iterations.  The repository eventually
-wrapped Levi behind a small adapter rather than allowing it to own the experimental
-contract directly.
-
-\begin{center}
-\footnotesize
-\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{0.21\textwidth}
-  >{\raggedright\arraybackslash}X
-  >{\raggedright\arraybackslash}X@{}}
-\toprule
-\textbf{Integration problem} & \textbf{Why it mattered} &
-\textbf{Repository-level response} \\
-\midrule
-Opaque callable evaluation &
-The policy could be simulated, but exact source complexity was unavailable and a large
-implementation could appear free. &
-Recover candidate source in the Levi score adapter and require source-aware evaluation
-for evolution. \\
-\addlinespace
-Generated code could hang, fail, or grow state without bound &
-One bad proposal could consume a worker or make results incomparable. &
-Run candidate evaluation in an isolated worker with timeout, memory monitoring,
-structured invalid results, and a score below representative valid policies. \\
-\addlinespace
-Levi's scalar result hid diagnostic evidence &
-A seed-retaining run revealed little about the strongest generated idea or why it
-lost. &
-Persist metrics, artifacts, metadata, configuration, exact seed, strongest generated
-non-seed source, and selection/probe/hidden decomposition. \\
-\addlinespace
-Configuration could drift between search and reports &
-A candidate could be evolved under one panel and described under another. &
-Load the operative YAML in evaluator workers, snapshot it with the run, and use it for
-post-run reports. \\
-\addlinespace
-Generator failures were undifferentiated &
-Syntax errors, unsupported callbacks, guessed fields, and excessive complexity all
-looked like generic low scores, so later generations could repeat them. &
-Emit structured static and runtime repair feedback and forward it through Levi's
-per-example feedback channel. \\
-\addlinespace
-Learned archive centroids could collapse &
-Identical centroids left one archive cell and prevented punctuated equilibrium from
-activating. &
-Add a degenerate-centroid fallback and make archive behavior dimensions reflect
-meaningful specialist tradeoffs. \\
-\bottomrule
-\end{tabularx}
-\end{center}
-
-The most persistent interface problem was that the generator did not initially share
-the simulator's exact mental model.  Candidates repeatedly invented
-\code{on_request_end} and \code{on_block_evicted}, keyed state by \code{id(block)},
-probed guessed fields with \code{getattr}, referenced future-reuse metadata, or added
-defensive fallback branches.  None of those proposals improved the deployable policy,
-but each consumed generation and evaluation budget.  The response was not only a
-stricter prompt.  The evaluator added deterministic source checks, violation-specific
-repair instructions, and a compact preflight contract covering imports, callbacks,
-stable keys, source size, and candidate-visible fields.
-
-Fine-grained behavioral feedback was a later repair.  Initially, the generator mostly
-received a scalar score, so it could not tell whether a candidate lost through
-underfill, churn, wasted admissions, a weak workload, or complexity.  The evaluator
-now returns score components and focused workload diagnostics, including avoidable
-eviction and short reuse after eviction.  Levi forwards those diagnostics to normal
-mutation workers.  This remains incomplete: initialization and paradigm-shift prompts
-do not receive parent-specific feedback, and there is not yet a bounded global failure
-store shared across the whole run.
-
-\subsection{Run diary and turning points}
-
-Table~\ref{tab:journey-runs} records the retained discovery-verifier runs that most
-directly changed the system.  The earlier June 6 structured experiments used a prior
-verifier and are discussed separately below.
-
-\begin{table}[H]
-\centering
-\footnotesize
-\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{0.18\textwidth}
-  >{\raggedright\arraybackslash}p{0.17\textwidth}
-  >{\raggedright\arraybackslash}p{0.15\textwidth}
-  >{\raggedright\arraybackslash}X@{}}
-\toprule
-\textbf{Date, run, and purpose} & \textbf{Execution} & \textbf{Best result} &
-\textbf{What it taught us} \\
-\midrule
-Jun. 7\\\identifier{20260607T054053Z}\\First discovery-verifier 100-run &
-98 evaluations; \$4.851; 23.3 minutes; 8 cells &
-\(74.321\), seed retained &
-Generated policy reached 1675 nodes; preserving generated non-seed decomposition
-became essential. \\
-\addlinespace
-Jun. 7\\\identifier{20260607T110029Z}\\Twenty-iteration smoke run &
-18 evaluations; \$0.086; 2.4 minutes; 1 cell &
-\(74.321\), seed retained &
-End-to-end execution worked, but a short run and one archive cell gave no evidence of
-improvement. \\
-\addlinespace
-Jun. 7\\\identifier{20260607T113545Z}\\Repaired 100-run &
-98 evaluations; \$1.027; 14.8 minutes; 5 cells &
-\(74.321\), seed retained &
-The strongest edit was behaviorally inert; exact complexity and diagnostic feedback
-were necessary. \\
-\addlinespace
-Jun. 7\\\identifier{20260607T123644Z}\\Long compact-family search &
-298 evaluations; \$2.781; 39.7 minutes; 3 cells &
-\(76.069\), new winner &
-First clear full-panel gain: pressure-aware admission sharply reduced churn. \\
-\addlinespace
-Jun. 7\\\identifier{20260607T135914Z}\\Follow-up from new incumbent &
-298 evaluations; \$3.608; 39.0 minutes; 1 cell &
-\(76.121\), narrow gain &
-Found a useful persistent-pressure term, but archive collapse and narrow behavior
-limited the standalone result. \\
-\addlinespace
-Jun. 8\\\identifier{20260608T001616Z}\\Targeted feedback and archive repair &
-298 evaluations; \$4.558; 37.5 minutes; 10 cells &
-\(77.230\), promoted &
-The winner appeared at evaluation 81; targeted surrogate diagnostics and specialist
-dimensions produced the promoted policy. \\
-\bottomrule
-\end{tabularx}
-\caption{Retained discovery-verifier evolution journey.}
-\label{tab:journey-runs}
-\end{table}
-
-\begin{figure}[H]
-\centering
-\input{figures/incumbent_eval_trajectory.tex}
-\caption{Evaluation trajectory leading to the promoted incumbent.  Panel A concatenates
-the six retained discovery-verifier runs in Table~\ref{tab:journey-runs} and plots the
-global best score, so a flat segment means that additional evaluations did not improve
-the retained policy.  Panel B expands the final targeted run: gray and green points are
-successfully scored candidates, green points entered or replaced an archive cell,
-orange points are strict global-best jumps, red triangles are scored candidates below
-the displayed score range, and the outcome raster distinguishes scored, accepted, and
-failed generation or static-verification attempts.  Dashed orange lines mark
-GPT-5.5 paradigm-shift triggers.}
-\label{fig:incumbent-eval-trajectory}
-\end{figure}
-
-Figure~\ref{fig:incumbent-eval-trajectory} makes the search path more explicit than the
-final-score table alone.  The first three retained runs consumed 214 evaluations
-without improving the \(74.321\) compact seed.  In the first long compact-family run,
-a normal mutation reached \(74.610\), a punctuated-equilibrium paradigm shift reached
-\(74.670\), and a later normal mutation made the largest jump in the retained journey,
-\(+1.399\) to the \(76.069\) pressure-aware policy.  The follow-up run added only
-\(0.051\).  Manual composition of its useful persistent-pressure term with
-recurrence-gated depth relief produced the \(76.630\) seed used by the final targeted
-run.
-
-Within that final run, evaluation 23 found a frequency-and-priority scan-penalty
-alternative at \(77.080\).  Evaluation 81 found the promoted priority-aware pressure
-hinge at \(77.230\).  The latter was not merely the end of a smooth climb: it was the
-last strict improvement, and the remaining 217 evaluations did not move the global
-best.  Only 61 of 298 attempted evaluations produced a score, 18 entered or replaced
-an archive cell, and 237 failed generation or static verification.  All six direct
-GPT-5.5 paradigm-shift candidates in this run were rejected for effective complexity
-between 669 and 739, above the 650-node limit.  The figure is generated directly from
-the retained Levi snapshots by
-\filepath{scripts/plot_prefix_kv_eval_trajectory.py}.
-
-The run diary shows why simply increasing the evaluation budget was not the answer.
-The first 100-run generated a more complicated but worse policy.  The twenty-iteration
-run confirmed plumbing, not search quality.  Another 100-run produced a plausible but
-behaviorally inert edit.  The first 300-run finally found a useful pressure-aware
-mechanism, but later runs exposed archive collapse and long periods with no
-improvement.  The successful June 8 run did not merely spend more budget: it changed
-what feedback the generator received and what specialist behavior the archive could
-retain.
-
-The successful run still documents substantial remaining friction.  It accepted 18
-candidates but recorded 237 generation or static-check errors.  Its winner appeared at
-evaluation 81, and the remaining 217 evaluations did not improve it.  This means the
-system had become capable of finding useful compact changes, but generator compliance
-and late-run marginal value were still weak.
-
-\subsection{The structured-policy detour}
-
-The project also took a deliberate detour through richer state representations.  The
-observable surface was expanded with recurrence, subtree, and regime context, and a
-bounded \code{MultiTimescaleDecay} primitive was added to make multi-timescale state
-available without unbounded dictionaries.
-
-The first expansion run showed that supplying a primitive was not enough.  The
-strongest generated policy used hand-written fast and slow state, reached 1239
-effective nodes, and the only archived primitive user was invalid.  The prompt and seed
-were then changed to demonstrate \code{observe_vector}, and form-aware complexity gave
-canonical calls a bounded credit.  All 24 archived elites across three subsequent
-98-evaluation searches adopted the primitive, proving the adoption intervention
-worked.
-
-Those runs still did not produce a deployable winner.  Their strongest generated
-programs had 1198--1429 effective nodes.  Manual behavior-only ablation then provided
-the useful result that evolution alone had not isolated:
-
-\begin{itemize}
-  \item broad recurrence state was harmful and increased churn;
-  \item priority-decay state was inert;
-  \item subtree and regime context carried value;
-  \item miss state was nearly neutral on validation but protected cyclic behavior.
-\end{itemize}
-
-This detour established the current division of labor.  LLM evolution is useful for
-proposing structure; controlled deletion ablation identifies which pieces carry
-behavior; deterministic tuning handles compact coefficients; and final adjudication
-decides whether the complete source is deployable.  Expecting one search loop to do
-all four jobs was inefficient.
-
-\subsection{From the first gain to the promoted incumbent}
-
-The first clear discovery-verifier improvement was the \(76.069\) pressure-aware policy.
-It reduced churn by conditioning admission on sustained pressure rather than admitting
-every plausible suffix.  A subsequent run discovered a narrow persistent-pressure
-threshold term.  That term was not sufficient alone, but it was retained and composed
-with recurrence-gated depth relief, producing the \(76.630\) parent used by the
-retained discovery search.
-
-The final step depended on search-process changes motivated by the earlier failures.
-Every normal mutation received diagnostics for the non-quarantined
-\identifier{agentic_tool_workflows} surrogate and selectable
-\identifier{stochastic_serving_mix}; the archive could retain specialists for those
-behaviors; and the held-out agent probe remained excluded from selection behind an
-automatic divergence tripwire.  The resulting winner added one priority-aware
-pressure term, raised charged selection from \(76.630\) to \(77.230\), cut validation
-churn by \(37.6\%\), and improved hidden score.
-
-Promotion still required manual-style scientific checks encoded in artifacts: exact
-seed-versus-winner ablation, raw-before-complexity decomposition, aggregate probe
-inspection, hidden evaluation, and the agentic tripwire.  The apparent charged probe
-regression was entirely complexity accounting; raw probe behavior improved.  Without
-that decomposition, the same candidate could have been rejected for the wrong reason
-or promoted without adequate evidence.
-
-\subsection{Where the journey stands}
-
-The current specialist lesson is that the original full-policy specialist surface
-allowed search to gain score through simplification while silently rewriting
-admission.  The revised lane therefore freezes admission and lifecycle callbacks by
-construction, exposes only a function-level eviction ranking, ranks raw behavior
-before complexity, and uses a broader initialization archive.  Final promotion
-composes the ranking function into the complete incumbent and remains fail-closed at
-650 nodes across raw and charged selection, eviction regret, probe, hidden, and
-tripwire checks.
-The first completed function-only run improved its raw specialist objective and filled
-all sixteen archive cells, but its winner composed to \(1{,}011\) nodes and therefore
-remained exploration-only.  Follow-up decision analysis showed that descendant-aware
-guarded age explains nearly all of the gain; a one-coefficient descendant reweight
-preserved a smaller gain within the cap but narrowly regressed hidden score.  The
-narrowing worked; compact promotion remains unresolved.
-
-This is representative of the overall journey.  Each useful search result exposed the
-next bottleneck in the search system itself:
-
-\begin{enumerate}
-  \item first make the simulation and trust boundary credible;
-  \item then make generated source executable and diagnosable;
-  \item then preserve enough artifacts to understand failure;
-  \item then improve generator feedback and archive diversity;
-  \item finally separate specialist exploration from strict deployable promotion.
-\end{enumerate}
-
-The project is therefore best understood not as one successful evolution run, but as a
-co-evolution of policy, verifier, generator contract, and experimental workflow.  The
-promoted policy is the visible result; the larger engineering contribution is the
-machinery required to make that result interpretable and reproducible.
-
-\section{A Mathematical Model of Admission-Dominated Prefix Caching}
+\section{A Mathematical Model of Regime-Conditional Admission--Eviction Control}
 \label{app:admission-mathematical-model}
 
-\subsection{Status and motivating evidence}
+\subsection{Status}
 
 The experiments suggest the following hypothesis:
 
 \begin{quote}
-\emph{For exact prefix caching under the modeled workloads, admission quality is a
-first-order determinant of cache value, while eviction quality is usually a
-second-order refinement once admission is selective.}
+\emph{For the current \identifier{pressure\_aware\_incumbent}, admission mistakes are
+larger in aggregate under the future-occurrence surrogate audit, but eviction mistakes
+are the binding error mode in identifiable workload regimes.  The useful mathematical
+object is not an admission-only theory; it is a regime-conditional model of admission
+classification, eviction ranking, and their interaction under prefix-tree legality and
+complexity constraints.}
 \end{quote}
 
-This is not yet a theorem or a causal result.  The strongest evidence is that
-pressure-aware admission materially reduces churn and wasted residency, while a
-function-only search over richer eviction rankings produces much smaller deployable
-gains.  The full eviction specialist improves raw selection by \(1.101\), but its
-compact deployable descendant reweight improves raw selection by only \(0.168\) and
-does not pass hidden adjudication.  Under shared prefix/decode pressure, the incumbent
-and vLLM APC differ by only \(0.058\) raw points, while the incumbent still encounters
-a \(77.5\%\) decode allocation-failure rate.  The latter result also shows the limit of
-the hypothesis: no admission or eviction rule can recover capacity occupied by active,
-non-evictable decode state.
-
-\subsection{Online tree-constrained knapsack formulation}
-
-Let \(\mathcal{T}\) be the rooted prefix tree induced by the request trace.  Each block
-\(b\in\mathcal{T}\) has capacity cost \(s_b\), which is one unit in the current
-simulator but may represent bytes in a future model.  At logical time \(t\), let:
-
-\begin{itemize}
-  \item \(S_t\subseteq\mathcal{T}\) be the resident prefix blocks;
-  \item \(P_t\subseteq S_t\) be blocks pinned by active requests;
-  \item \(D_t\) be active decode-KV capacity;
-  \item \(C\) be total KV capacity; and
-  \item \(C_t^{\text{prefix}}=C-D_t\) be capacity currently available to prefixes.
-\end{itemize}
-
-A legal prefix-cache state is ancestor-closed and capacity-feasible:
-
-\begin{align}
-  b\in S_t &\Longrightarrow \operatorname{ancestors}(b)\subseteq S_t,\\
-  \sum_{b\in S_t}s_b &\le C_t^{\text{prefix}}.
-\end{align}
-
-Admission can add a newly computed block only when its parent is resident.  Eviction
-can remove only a block in the legal victim set
-
-\begin{equation}
-  \mathcal{L}_t =
-  \left\{b\in S_t\setminus P_t:
-  b\text{ is a resident leaf}\right\}.
-\end{equation}
-
-The problem is therefore an online, dynamically capacitated, tree-constrained
-knapsack.  It differs from ordinary object caching because values are unknown, prefix
-ancestry couples admission decisions, and pinned/interior blocks restrict replacement.
-
-\subsection{Marginal value and a capacity shadow price}
-
-Let \(G_t(b)\) denote the conditional expected gross benefit of retaining block \(b\):
-future recomputation, lookup, or transfer cost saved before the block leaves the
-cache.  A block-level approximation treats capacity pressure through a shadow price
-\(\lambda_t\) per capacity unit:
-
-\begin{equation}
-  V_t(b) = G_t(b) - \lambda_t s_b.
-\end{equation}
-
-Ignoring tree interactions for one decision, the corresponding threshold rules are:
-
-\begin{align}
-  \text{admit }b
-  &\quad\Longleftrightarrow\quad
-  G_t(b) > \lambda_t s_b
-  \quad\text{and the parent is resident},\\
-  \text{evict }b^\star
-  &\quad\in\quad
-  \arg\min_{b\in\mathcal{L}_t}\frac{G_t(b)}{s_b}.
-\end{align}
-
-The approximation explains several observed policy terms.  Frequency, recent
-recurrence, subtree support, priority, and recomputation cost estimate \(G_t(b)\).
-Admission pressure and miss pressure estimate \(\lambda_t\).  Depth penalties account
-for the larger opportunity cost and weaker evidence associated with extending deep
-paths.  Shared decode pressure reduces \(C_t^{\text{prefix}}\), so the implied
-\(\lambda_t\) should rise as active decode KV grows.
-
-The exact tree problem is more coupled than these equations imply.  Admitting an
-ancestor creates the option to admit descendants, while evicting a leaf may expose its
-parent as a later victim.  A more exact formulation would assign marginal value to
-reachable subtrees or solve a trace-level dynamic program.  The block-level model is
-valuable because it produces testable policy and verifier predictions without
-claiming that block values are independent.
-
-\subsection{Why admission can dominate eviction}
-
-The model predicts admission-dominated behavior for four related reasons:
+This statement separates four facts that should not be collapsed:
 
 \begin{enumerate}
-  \item \textbf{Admission controls pollution before it enters.}  A low-value admitted
-  block consumes capacity throughout its residency, can force multiple later
-  evictions, and may make deeper low-value admissions reachable.
-  \item \textbf{Selective admission compresses victim values.}  If admission already
-  rejects blocks below approximately \(\lambda_t\), most resident legal leaves have
-  similar positive estimated value.  Choosing the wrong victim then has limited
-  marginal regret.
-  \item \textbf{Eviction acts on a constrained set.}  Pinned blocks and resident
-  interior nodes cannot be selected.  Under heavy pressure, there may be few legal
-  leaves, leaving sophisticated rankers little room to differ.
-  \item \textbf{Capacity shocks raise the admission threshold.}  When decode KV or a
-  burst reduces available prefix capacity, preventing new pollution is more effective
-  than repeatedly repairing it through replacement.
+  \item \textbf{Local surrogate regret.}  The audit assigns future-occurrence value to
+  blocks and compares the incumbent decision with a same-state local alternative.
+  Under this surrogate, aggregate admission-side regret is much larger than aggregate
+  eviction-side regret.
+  \item \textbf{Groupwise heterogeneity.}  The universal dominance claim is false:
+  eviction-dominant counterexamples occur in heavy-tailed, shared-root, RAG-template,
+  priority-noise, and multi-tenant regimes.
+  \item \textbf{Eviction opportunity.}  In the incumbent replay, \(77.5\%\) of
+  \(5{,}402\) eviction decisions have multiple legal victims, with 10.64 legal victims
+  on average.  A full specialist changes the selected victim on \(21.5\%\) of eviction
+  decisions.
+  \item \textbf{Deployability and complexity.}  The best completed function-only
+  specialist improves raw specialist score from \(70.989\) to \(72.091\), but composes
+  to a \(1{,}011\)-node complete policy.  The model must therefore distinguish
+  behavioral headroom from complexity-constrained promotability.
 \end{enumerate}
 
-This argument does not imply that eviction never matters.  The decision-level analysis
-shows thousands of states with multiple legal victims and measurable avoidable
-evictions.  It predicts only that, after a competent admission filter, the remaining
-deployable headroom from eviction ranking is often smaller.
+The main modeling correction is to replace a uniform admission-dominance claim with a
+conditional one.  Admission dominates when threshold mistakes are frequent or when
+low-value admitted blocks pollute the future state.  Eviction dominates when the legal
+victim set has high value spread and the ranker chooses an expensive leaf.
 
-\subsection{A verifier-oriented regret decomposition}
+\begin{figure}[H]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  state/.style={draw=navy, very thick, rounded corners, fill=lightblue,
+                align=center, text width=3.55cm, minimum height=1.35cm},
+  quantity/.style={draw=orange, rounded corners, fill=lightorange,
+                   align=center, text width=4.05cm, minimum height=1.45cm},
+  control/.style={draw=green, rounded corners, fill=lightgreen,
+                  align=center, text width=4.15cm, minimum height=1.45cm},
+  decision/.style={draw=orange, diamond, fill=graybg, align=center,
+                   aspect=2.15, text width=2.5cm},
+  outcome/.style={draw=navy, rounded corners, fill=graybg,
+                  align=center, text width=3.7cm, minimum height=1.25cm},
+  audit/.style={draw=darkgray, dashed, rounded corners, fill=white,
+                align=center, text width=4.0cm, minimum height=1.15cm},
+  arrow/.style={-{Latex[length=2.4mm]}, thick, draw=darkgray},
+  audit-arrow/.style={-{Latex[length=2.2mm]}, thick, dashed, draw=darkgray}
+]
+  \node[state] (state) at (0,0) {\textbf{Feasible cache state}\\
+    \(X_t=(S_t,q_t,D_t,Z_t)\)\\
+    ancestor closed; capacity bounded\\
+    legal victims \(\mathcal L(X_t)\) are inactive leaves};
 
-Suppose a future-aware audit estimates the realized marginal value
-\(\Delta_t(b)\) of one block relative to a capacity shadow price \(\lambda_t\).  Let
-\(\mathcal{A}_t\) be admitted blocks, \(\mathcal{J}_t\) rejected reachable blocks, and
-\(e_t\in\mathcal{L}_t\) the selected eviction victim.  Three useful diagnostic regret
-terms are:
+  \node[quantity] (admission) at (4.8,2.15) {
+    \textbf{Admission classification}\\
+    incoming value \(F_t(b)\) versus displacement \(\mu_t\)\\
+    margin \(\gamma^A_t(b)=|F_t(b)-\mu_t|\)\\
+    large wrong-side margin \(\Rightarrow\) large \(R^A_t(b)\)};
 
+  \node[quantity] (eviction) at (4.8,-2.15) {
+    \textbf{Eviction opportunity}\\
+    victim count \(n^E_t=|\mathcal L(X_t)|\)\\
+    value spread \(\delta^E_t=\max_{u,v}|F_t(u)-F_t(v)|\)\\
+    chosen-victim excess \(\Rightarrow\) \(R^E_t\)};
+
+  \node[control] (admit-control) at (10.0,2.15) {
+    \textbf{Selective admission control}\\
+    estimate \(\widehat G_t(b)-\lambda_t w_b\)\\
+    admit iff score \(>0\); rejection blocks deeper suffix\\
+    pressure raises the effective threshold};
+
+  \node[decision] (gate) at (10.0,-2.15) {
+    \(n^E_t\ge2\) and\\
+    estimated victim\\
+    spread is large?};
+
+  \node[control] (evict-control) at (15.5,-2.15) {
+    \textbf{Regime-gated eviction control}\\
+    \(h_t=0\): compact frequency-aware ranker\\
+    \(h_t=1\): richer victim-value ranker\\
+    hybrid score in Equation~\eqref{eq:regime-gated-eviction}};
+
+  \node[outcome] (transition) at (20.3,1.1) {
+    \textbf{Legal simulator transition}\\
+    \(X_{t+1}=\Phi(X_t,r_t,\pi)\)\\
+    pinning, leaf eviction, rollback, capacity};
+
+  \node[audit] (evaluation) at (13.5,-5.45) {
+    \textbf{Two evidence levels}\\
+    local audit: \(A_g,E_g,\bar A_g,\bar E_g\)\\
+    crossed replay: realized hit, churn, tails, and score};
+
+  \node[audit] (deployability) at (19.5,-5.45) {
+    \textbf{Promotion constraint}\\
+    \(\pi\in\Pi_\kappa,\ \operatorname{cx}(\pi)\le650\)\\
+    behavioral headroom \(\neq\) deployable winner};
+
+  \draw[arrow] (state) -- (admission);
+  \draw[arrow] (state) -- (eviction);
+  \draw[arrow] (admission) -- (admit-control);
+  \draw[arrow] (eviction) -- (gate);
+  \draw[arrow] (gate) -- (evict-control);
+  \draw[arrow] (admit-control) -- (transition);
+  \draw[arrow] (evict-control.east) -- (transition.south west);
+  \draw[audit-arrow] (transition.south) |- (evaluation.east);
+  \draw[audit-arrow] (evaluation) -- (deployability);
+\end{tikzpicture}
+}
+\caption{Regime-conditional admission--eviction model.  The same feasible prefix-tree
+state induces two distinct error opportunities: threshold classification for an
+incoming block and ranking among legal victims.  Selective admission is always active;
+additional eviction sophistication is gated by victim multiplicity and estimated value
+spread.  Local future-occurrence regret diagnoses the error class, crossed replay
+measures realized trajectory effects, and the complexity gate determines whether a
+behavioral improvement is deployable.}
+\label{fig:regime-conditional-mathematical-model}
+\end{figure}
+
+\subsection{Trace, prefix tree, and feasible states}
+
+Fix a finite request trace \(\omega=(r_1,\ldots,r_T)\).  Request \(r_t\) has tenant
+identifier \(\tau_t\), prompt token sequence
+\(x_t=(x_{t,1},\ldots,x_{t,L_t})\), priority \(\rho_t\), arrival metadata, and true
+output length.  For block size \(B\), define the tenant-qualified cumulative-prefix
+chain
+\begin{equation}
+  \mathbf b_t=(b_{t,1},\ldots,b_{t,n_t}),
+  \qquad
+  n_t=\left\lceil \frac{L_t}{B}\right\rceil,
+\end{equation}
+where \(b_{t,d}\) is the block representing the first \(\min(dB,L_t)\) prompt tokens.
+Let \(\operatorname{pa}(b)\) be the parent block, \(\operatorname{Anc}(b)\) the strict
+ancestors, \(d(b)\) the depth, \(s_b\) the token count, and \(w_b>0\) the capacity
+weight.  The current simulator uses \(w_b=1\) for prefix blocks, while token-weighted
+metrics use \(s_b\); a byte-accurate extension can replace \(w_b\) by KV bytes.
+
+At logical time \(t\), before processing request \(r_t\), write the simulator state as
+\begin{equation}
+  X_t=(S_t,q_t,D_t,Z_t),
+\end{equation}
+where \(S_t\) is the resident prefix-block set, \(q_t(b)\in\mathbb N\) is the active
+pin count for block \(b\), \(D_t\ge 0\) is active decode-KV occupancy in shared-capacity
+experiments, and \(Z_t\) is policy-owned online state.  A physical state is feasible
+when
 \begin{align}
-  R_{\text{pollution}}
-  &= \sum_t\sum_{b\in\mathcal{A}_t}
-     \left[\lambda_t s_b-\Delta_t(b)\right]_+,\\
-  R_{\text{rejection}}
-  &= \sum_t\sum_{b\in\mathcal{J}_t}
-     \left[\Delta_t(b)-\lambda_t s_b\right]_+,\\
-  R_{\text{eviction}}
-  &= \sum_{t:e_t\text{ exists}}
-     \left[
-       \Delta_t(e_t)-\min_{b\in\mathcal{L}_t}\Delta_t(b)
-     \right]_+,
+  b\in S_t &\Longrightarrow \operatorname{Anc}(b)\subseteq S_t,
+  \label{eq:prefix-closure-regime}\\
+  q_t(b)>0 &\Longrightarrow b\in S_t,
+  \label{eq:pins-resident-regime}\\
+  \sum_{b\in S_t} w_b + D_t &\le C.
+  \label{eq:capacity-regime}
 \end{align}
+Thus the prefix cache is an ancestor-closed, dynamically capacitated tree subset.
 
-where \([x]_+=\max(0,x)\).  The current verifier already approximates parts of
-\(R_{\text{pollution}}\) through wasted-admission metrics and
-\(R_{\text{eviction}}\) through avoidable-eviction and short-reuse audits.  It does
-not yet measure an analogous avoidable-rejection term.
+The legal victim set is
+\begin{equation}
+  \mathcal L(X_t)=
+  \left\{b\in S_t:
+  q_t(b)=0\;\land\;
+  \{c\in S_t:\operatorname{pa}(c)=b\}=\varnothing
+  \right\}.
+  \label{eq:legal-victims-regime}
+\end{equation}
+Only inactive resident leaves are evictable.  Interior nodes preserve reachability of
+resident descendants, and pinned nodes are referenced by active requests.
 
-These terms are diagnostics rather than an exact additive identity for total
-trace-level regret.  One action changes later legal states, subtree reachability, and
-future pressure, so counterfactual effects overlap.  Their purpose is to localize the
-dominant error class before running end-to-end counterfactual policies.
+\subsection{Online policies, frozen components, and complexity-constrained classes}
 
-\subsection{Proposed causal experiment}
+Let \(\mathcal F_t\) be the candidate-visible history through time \(t\): scrubbed
+request metadata, candidate-visible block metadata, lifecycle callbacks, previous
+candidate decisions, and candidate-owned state.  It excludes future requests, raw
+prompt tokens, hidden workload labels, true future reuse, and simulator-only output
+lengths.
 
-The decisive experiment is a crossed component study with incumbent and future-aware
-oracle choices:
+A deployable policy is an \(\mathcal F_t\)-adapted tuple
+\begin{equation}
+  \pi=(\pi_{\mathrm{start}},\pi_{\mathrm{hit}},\pi_{\mathrm{miss}},
+       \alpha,\varepsilon),
+\end{equation}
+where \(\alpha_t(b)\) is the admission score and \(\varepsilon_t(b)\) is the eviction
+score.  The simulator converts scores into actions by
+\begin{align}
+  \text{admit } b &\Longleftrightarrow \alpha_t(b)>0,\\
+  e_t &\in \arg\max_{b\in\mathcal L(X_t)}\varepsilon_t(b),
+\end{align}
+with deterministic tie-breaking and legality enforcement owned by the simulator.
 
+The eviction-specialist lane is naturally represented as a restricted component class.
+Let
+\begin{equation}
+  \pi_0=(\pi_{0,\mathrm{start}},\pi_{0,\mathrm{hit}},\pi_{0,\mathrm{miss}},
+       \alpha_0,\varepsilon_0)
+\end{equation}
+be the pressure-aware incumbent.  The specialist search freezes
+\((\pi_{0,\mathrm{start}},\pi_{0,\mathrm{hit}},\pi_{0,\mathrm{miss}},\alpha_0)\) and
+searches only an eviction scorer \(\varepsilon_\phi\), producing composed policies
+\begin{equation}
+  \pi(\phi)=
+  (\pi_{0,\mathrm{start}},\pi_{0,\mathrm{hit}},\pi_{0,\mathrm{miss}},
+   \alpha_0,\varepsilon_\phi).
+\end{equation}
+
+Let \(\operatorname{cx}(\pi)\) be the effective AST complexity after canonical-primitive
+subsidies.  The deployable class is not merely behavioral; it is complexity constrained:
+\begin{equation}
+  \Pi_\kappa=\{\pi:\pi\text{ is deployable and }\operatorname{cx}(\pi)\le \kappa\},
+  \qquad \kappa=650
+\end{equation}
+for the hard promotion gate.  The verifier also uses a smooth charged objective with a
+complexity penalty.  Consequently, an eviction scorer can reveal real behavioral
+headroom while still failing promotion because its composed policy lies outside
+\(\Pi_\kappa\) or loses on hidden generalization.
+
+\subsection{Simulator transition and root-contiguous admission}
+
+For resident set \(S_t\), the root-contiguous hit length of request \(r_t\) is
+\begin{equation}
+  m_t(S_t)=\max\{k\le n_t:b_{t,1},\ldots,b_{t,k}\in S_t\}.
+\end{equation}
+Blocks \(b_{t,1},\ldots,b_{t,m_t}\) are prompt-prefix hits and are pinned for the
+request.  Blocks \(b_{t,m_t+1},\ldots,b_{t,n_t}\) are recomputed misses.  Admission is
+attempted sequentially along this missed suffix.  A block can be admitted only if its
+parent remains resident; a rejection prevents deeper admission from being scored;
+a tentative admission is pinned before capacity enforcement; capacity enforcement
+repeatedly removes the legal victim with maximum \(\varepsilon_t\); and if no legal
+victim exists while the state remains over capacity, the tentative block is rolled back
+and the remaining suffix is forced to bypass.
+
+With fixed trace, tie-breaking, and policy source, this defines a deterministic
+transition
+\begin{equation}
+  X_{t+1}=\Phi(X_t,r_t,\pi).
+\end{equation}
+All reported quantities--token hit, block hit, recompute cost, latency proxy,
+underfill, churn, admission waste, avoidable eviction, and fairness--are functionals of
+the realized trajectory
+\((X_1,r_1,X_2,r_2,\ldots,X_{T+1})\).
+
+\subsection{Objective, offline comparator, and local value relaxation}
+
+For workload distribution \(\mathcal P\) and deployable class \(\Pi_\kappa\), the ideal
+policy problem is
+\begin{equation}
+  \pi^*\in\arg\max_{\pi\in\Pi_\kappa}
+  \mathbb E_{\omega\sim\mathcal P}[J_\theta(\pi;\omega)],
+  \label{eq:ideal-regime-objective}
+\end{equation}
+where \(J_\theta\) is the verifier-induced serving-quality functional.  The implemented
+verifier replaces \(\mathcal P\) with a deterministic panel of workload families,
+capacities, and seeds:
+\begin{equation}
+  \widehat J_\theta(\pi)=
+  \Psi_\theta\left(\{M(\pi;\omega_{f,c,s})
+  : f\in\mathcal F_{\mathrm{val}}, c\in\mathcal C, s\in\mathcal S\}\right)
+  -0.065\operatorname{cx}(\pi)^{0.75}.
+  \label{eq:empirical-regime-objective}
+\end{equation}
+Here \(M\) is the metric vector from the deterministic simulator and \(\Psi_\theta\) is
+the aggregation formula that blends mean performance, weak-workload performance,
+worst-seed behavior, cache-economics charges, and service-quality penalties.
+
+A clairvoyant but still legal offline comparator can be defined by dynamic programming
+on an additive surrogate reward \(g_\theta\):
+\begin{align}
+  V_{T+1}(X)&=0,\\
+  V_t(X)&=\max_{u\in\mathcal U(X,r_t)}
+  \{g_\theta(X,u,r_t)+V_{t+1}(\Phi(X,r_t,u))\},
+  \label{eq:offline-regime-dp}
+\end{align}
+where \(\mathcal U(X,r_t)\) contains only action sequences obeying prefix-contiguous
+admission, inactive-leaf eviction, pinning, rollback, and capacity.  This DP is
+infeasible at report scale, but it defines the rigorous object approximated by
+future-aware oracles and rollout audits.
+
+A practical online policy instead estimates marginal block value.  Let \(G_t(b)\) be
+the conditional gross benefit of retaining block \(b\) under future requests, and let
+\(\lambda_t\) be a capacity shadow price.  The local relaxation is
+\begin{equation}
+  \widehat\Delta_t(b)=\widehat G_t(b)-\lambda_t w_b.
+  \label{eq:local-shadow-regime}
+\end{equation}
+The relaxed first-order rules are
+\begin{align}
+  \text{admit } b
+  &\Longleftrightarrow
+  \widehat G_t(b)>\lambda_t w_b
+  \quad\text{and}\quad \operatorname{pa}(b)\in S_t,
+  \label{eq:relaxed-admission-regime}\\
+  \text{evict } e_t
+  &\in\arg\min_{b\in\mathcal L(X_t)}
+  \frac{\widehat G_t(b)}{w_b}.
+  \label{eq:relaxed-eviction-regime}
+\end{align}
+Frequency, recent recurrence, subtree support, priority-backed reuse, and recomputation
+cost estimate \(\widehat G_t\).  Admission pressure, miss pressure, occupancy, and
+shared decode demand estimate \(\lambda_t\).  The current pressure-aware policy mainly
+changes the admission threshold, while the specialist lane asks whether a richer
+estimator of \(\widehat G_t\) improves the eviction argmin.
+
+\subsection{Future-occurrence audit as a local same-state decomposition}
+
+The decision audit uses a stable future-value surrogate rather than a full causal
+counterfactual.  Let
+\begin{equation}
+  F_t(b)=s_b\,N_t^{\mathrm{future}}(b)
+\end{equation}
+be block token count times the number of remaining request occurrences after the
+current request.  For a reachable incoming block \(b\), define the local displacement
+threshold
+\begin{equation}
+  \mu_t=
+  \begin{cases}
+    0, & \text{if enough free prefix capacity exists},\\
+    \min_{v\in\mathcal L(X_t)} F_t(v), & \text{otherwise},
+  \end{cases}
+  \label{eq:local-displacement-threshold}
+\end{equation}
+with the convention that admission is infeasible if capacity is required and
+\(\mathcal L(X_t)=\varnothing\).
+
+The one-step admission-side surrogate regret for scored reachable block \(b\) is
+\begin{equation}
+  R^A_t(b)=
+  \mathbf 1\{\text{accepted }b\}\,[\mu_t-F_t(b)]_+
+  +
+  \mathbf 1\{\text{rejected }b\}\,[F_t(b)-\mu_t]_+.
+  \label{eq:audit-admission-regret}
+\end{equation}
+The first term measures avoidable pollution: accepting an incoming block that is worth
+less than the cheapest legal displacement.  The second measures avoidable rejection:
+rejecting a reachable block that is worth more than free space or the cheapest legal
+displacement.  Descendants bypassed after a parent rejection are consequences of that
+scored rejection and are not counted as additional admission decisions.
+
+For an eviction event with selected victim \(e_t\), the local eviction-side surrogate
+regret is
+\begin{equation}
+  R^E_t=
+  F_t(e_t)-\min_{v\in\mathcal L(X_t)}F_t(v).
+  \label{eq:audit-eviction-regret}
+\end{equation}
+This is value-weighted avoidable eviction.  It asks how much more future surrogate
+value the chosen victim had than the cheapest legal victim in the same state.
+
+Equations~\eqref{eq:audit-admission-regret}--\eqref{eq:audit-eviction-regret} decompose
+a local same-state comparison.  They are not realized causal regret: changing one
+admission or victim can change later reachability, pressure, legal victims, and even
+which future requests become hits.
+
+For group \(g\), define
+\begin{align}
+  A_g &= \sum_{t\in g}\sum_{b\in\mathcal R_t}R^A_t(b),\\
+  E_g &= \sum_{t\in g}R^E_t,\\
+  \bar A_g &= \frac{A_g}{\max(1,N^A_g)},
+  \qquad
+  \bar E_g = \frac{E_g}{\max(1,N^E_g)},
+\end{align}
+where \(\mathcal R_t\) is the set of explicitly scored reachable admission decisions,
+\(N^A_g\) is the number of admission decisions, and \(N^E_g\) is the number of eviction
+decisions.
+
+The four dominance hypotheses are mathematically distinct:
+\begin{align}
+  H_{\mathrm{univ}} &: A_g>E_g\quad\forall g\in\mathcal G_+,\\
+  H_{\mathrm{maj}} &: \frac{1}{|\mathcal G_+|}
+    \sum_{g\in\mathcal G_+}\mathbf 1\{A_g>E_g\}>\frac12,\\
+  H_{\mathrm{agg}} &: \sum_{g\in\mathcal G_+}A_g>
+    \sum_{g\in\mathcal G_+}E_g,\\
+  H_{\mathrm{rate}} &: \frac{1}{|\mathcal G_+|}
+    \sum_{g\in\mathcal G_+}\mathbf 1\{\bar A_g>\bar E_g\}>\frac12,
+\end{align}
+where \(\mathcal G_+=\{g:A_g+E_g>0\}\).  The earlier universal wording corresponds to
+\(H_{\mathrm{univ}}\), which the audit falsifies.
+
+For \identifier{pressure\_aware\_incumbent}, the audit reports
+\begin{align}
+  |\mathcal G_+| &= 123,\\
+  \sum_g A_g &= 181{,}327,\\
+  \sum_g E_g &= 31{,}565,\\
+  \frac{\sum_g A_g}{\sum_g(A_g+E_g)} &= 85.2\%,\\
+  \sum_g\mathbf 1\{A_g>E_g\} &= 81,\\
+  \sum_g\mathbf 1\{\bar A_g>\bar E_g\} &= 61.
+\end{align}
+Thus \(H_{\mathrm{agg}}\) is supported under this surrogate and \(H_{\mathrm{maj}}\) is
+supported at \(81/123=65.9\%\).  But \(H_{\mathrm{univ}}\) is false because there are
+\(42\) eviction-dominant regretful groups, and \(H_{\mathrm{rate}}\) is not supported
+because \(61/123=49.6\%\).  The aggregate per-decision rate still favors admission,
+\(8.56\) versus \(5.84\) future tokens per decision, which shows why totals and
+per-decision dominance answer different questions.
+
+The split-level summary is:
 \begin{center}
-\begin{tabular}{lll}
+\small
+\begin{tabular}{lrrrrr}
 \toprule
-\textbf{Cell} & \textbf{Admission component} & \textbf{Eviction component} \\
+\textbf{Split} & \textbf{Groups} & \textbf{Adm.-dom.} & \textbf{Rate} &
+\textbf{Admission} & \textbf{Eviction} \\
 \midrule
-\(S_{II}\) & Incumbent & Incumbent \\
-\(S_{OI}\) & Oracle & Incumbent \\
-\(S_{IO}\) & Incumbent & Oracle \\
-\(S_{OO}\) & Oracle & Oracle \\
+hidden & 45 & 31 & 68.9\% & 30{,}182 & 18{,}255 \\
+probe & 9 & 6 & 66.7\% & 49{,}490 & 822 \\
+train & 24 & 12 & 50.0\% & 83{,}380 & 5{,}746 \\
+validation & 45 & 32 & 71.1\% & 18{,}275 & 6{,}742 \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-The component oracles must obey the same action-legality constraints:
-prefix-contiguous admission, leaf-only inactive eviction, and the same capacity path.
-Future trace knowledge is permitted only inside the verifier and is never candidate
-visible.  A practical first implementation can use bounded counterfactual rollout from
-each decision; a stronger but more expensive version can solve the remaining
-deterministic trace exactly or approximately as a mixed-integer or dynamic program.
+Eviction-dominant workload families include
+\identifier{hidden/heavy\_tailed\_prefix\_lengths\_shifted},
+\identifier{train/shared\_system\_prompt},
+\identifier{validation/priority\_one\_off\_noise},
+\identifier{train/rag\_template\_reuse}, and
+\identifier{validation/multi\_tenant\_skew}.  These families should be treated as
+positive evidence for eviction-specific follow-up, not as noise around an otherwise
+uniform admission-first rule.
 
-For a score \(S\) where larger is better, report:
+\subsection{Eviction opportunity, victim-spread, and why sophistication can matter}
 
+The local eviction regret in Equation~\eqref{eq:audit-eviction-regret} is bounded by
+the value spread of the legal victim set.  Define
+\begin{equation}
+  \delta^E_t=
+  \max_{u,v\in\mathcal L(X_t)} |F_t(u)-F_t(v)|,
+  \qquad
+  n^E_t=|\mathcal L(X_t)|.
+\end{equation}
+Then \(R^E_t\le \delta^E_t\), and \(R^E_t=0\) whenever \(n^E_t\le 1\).  Eviction
+sophistication can matter only on the opportunity set
+\begin{equation}
+  \mathcal O_E=\{t:n^E_t\ge 2\text{ and }\delta^E_t>0\}.
+\end{equation}
+The updated decision-level analysis shows that this opportunity set is large in the
+current simulator: \(77.5\%\) of eviction decisions have multiple legal victims.
+
+Let \(e^0_t\) be the incumbent victim and \(e^\phi_t\) the specialist victim in the
+same state.  A same-state specialist correction occurs when
+\begin{equation}
+  F_t(e^\phi_t)<F_t(e^0_t),
+\end{equation}
+while an introduced mistake occurs when the inequality reverses.  The completed
+specialist corrects 281 avoidable choices and introduces 150, for a net correction of
+131.  In end-to-end replay it raises raw selection by \(1.101\), reduces validation
+avoidable-eviction rate from \(0.1530\) to \(0.1350\), and reduces churn from
+\(168.1\) to \(164.8\) per thousand requests.
+
+This evidence changes the interpretation of eviction.  The correct statement is not
+that eviction has no room to improve.  The correct statement is that the currently
+found richer eviction improvements sit on an unfavorable complexity-generalization
+frontier.  The full function-only specialist has real victim-ranking signal but
+composes to \(1{,}011\) nodes.  Guarded age plus descendant protection captures
+\(98.0\%\) of the full specialist's raw gain, but still composes to 775 nodes.  A
+single deployable distillation--raising descendant protection from \(0.2\) to
+\(0.6\)--keeps complexity at 636 and gains \(0.168\) raw selection, but loses
+\(0.006\) hidden score.  Hence eviction is behaviorally meaningful, while promotable
+eviction sophistication remains unproven.
+
+\subsection{When admission dominates and when eviction dominates}
+
+The model predicts different dominant error modes from two local quantities:
 \begin{align}
-  \Delta_{\text{admission}} &= S_{OI}-S_{II},\\
-  \Delta_{\text{eviction}} &= S_{IO}-S_{II},\\
-  \Delta_{\text{interaction}}
-  &= S_{OO}-S_{OI}-S_{IO}+S_{II}.
+  \gamma^A_t(b)&=|F_t(b)-\mu_t|,
+  \label{eq:admission-margin-regime}\\
+  \delta^E_t&=\max_{u,v\in\mathcal L(X_t)}|F_t(u)-F_t(v)|.
+  \label{eq:eviction-spread-regime}
 \end{align}
+The admission margin \(\gamma^A_t(b)\) measures how costly it is to classify an
+incoming block on the wrong side of the displacement threshold.  The eviction spread
+\(\delta^E_t\) measures how costly it is to choose the wrong victim among legal leaves.
 
-The admission-dominance hypothesis predicts
-\(\Delta_{\text{admission}}>\Delta_{\text{eviction}}\) across most
-workload-capacity groups.  A large interaction would show that independently ranking
-the components is misleading.  Results should therefore be reported per workload,
-capacity, and seed, with raw behavior separated from complexity and with shared-KV
-allocation failure reported outside the prefix-policy score.
-
-Before building the full crossed oracle, the lower-cost next step is to add
-decision-level avoidable-admission and avoidable-rejection audits.  If their measured
-regret substantially exceeds avoidable-eviction regret, that would strengthen the
-hypothesis and identify where an admission oracle should focus.  If it does not, the
-current conclusion should be revised before making a stronger claim.
-
-\section{Negative Results and Rejected Evolutionary Solutions}
-\label{app:negative-results}
-
-Reporting only the promoted incumbent would give a survivor-biased account of the
-search.  This appendix consolidates policies, ablations, and search configurations that
-were tried but were not acceptable as deployable winners.  A negative result is
-included when an exact candidate artifact or controlled ablation survives and the
-rejection reason can be stated in measured terms.  ``Rejected'' means that the complete
-policy was not promoted; useful fragments may still be retained and composed into a
-later incumbent.
-
-\subsection{Representative generated policy families}
-
-\begin{center}
-\footnotesize
-\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{0.19\textwidth}
-  >{\raggedright\arraybackslash}X
-  >{\raggedright\arraybackslash}X
-  >{\raggedright\arraybackslash}X@{}}
-\toprule
-\textbf{Generated solution} & \textbf{What evolution proposed} &
-\textbf{Useful evidence} & \textbf{Why it was not promoted} \\
-\midrule
-Overgrown adaptive hit-rate maximizer
-(\identifier{20260607T054053Z}) &
-Replaced the compact policy with tenant state, several hand-written decay channels,
-pressure and miss state, structural branches, and a much larger admission and eviction
-formula. &
-Agent-trace hit rose from \(0.2295\) to \(0.4333\), cyclic hit rose from \(0.8272\) to
-\(0.8697\), and mean validation score rose from \(73.991\) to \(74.825\). &
-Churn cost nearly doubled from \(5.925\) to \(11.859\), raw-before-complexity score
-fell from \(80.914\) to \(75.656\), effective complexity reached \(1675\), hidden score
-fell from \(-1.951\) to \(-20.883\), and charged selection fell from \(74.321\) to
-\(58.638\). \\
-\addlinespace
-Behaviorally inert active-reference bonus
-(\identifier{20260607T113545Z}) &
-Added \(0.35\) to admission score whenever \code{active_ref_count > 0}. &
-The edit was concise and encoded a plausible preference for blocks already involved in
-active work. &
-Every reported behavioral metric was identical to the seed.  The only measured change
-was effective complexity increasing from \(473\) to \(486\), which reduced selection
-from \(74.321\) to \(74.186\).  The condition added no useful decision boundary under
-the evaluated lifecycle. \\
-\addlinespace
-Structured recurrence and regime controller
-(\identifier{20260606T125829Z}) &
-Used canonical multi-timescale state but surrounded it with a large bespoke controller
-to target agent branching and cyclic reuse. &
-Raw validation rose from \(63.819\) to \(65.470\), agent-branching hit rose from
-\(0.2533\) to \(0.2727\), and cyclic hit rose from \(0.7445\) to \(0.8054\). &
-The policy expanded to \(1322\) effective nodes, scored only \(51.219\) after charges,
-and regressed aggregate probe to \(20.854\) and hidden score to \(-16.501\).  It is an
-alternate simplification parent, not a deployable winner. \\
-\addlinespace
-Persistent-pressure threshold only
-(\identifier{20260607T135914Z}) &
-Added a one-line \(0.22\) penalty once admission pressure exceeded \(0.8\). &
-Selection rose from \(76.069\) to \(76.121\), churn cost fell from \(2.464\) to
-\(2.182\), and hidden score rose from \(6.527\) to \(8.948\). &
-It did not change agent or cyclic hit rates and slightly reduced aggregate probe from
-\(54.543\) to \(54.388\).  The mutation was insufficient as a standalone replacement,
-but its pressure term was retained and composed with recurrence-gated depth relief in
-the \(76.630\) incumbent. \\
-\bottomrule
-\end{tabularx}
-\end{center}
-
-The first family is the clearest example of a solution that looks attractive when
-inspecting a weak workload or mean score in isolation.  It did find additional reuse,
-but paid for it with excessive turnover, poor hidden behavior, and a large
-implementation.  The second family shows the opposite failure: generated source can
-look semantically reasonable while being behaviorally redundant.  The final two
-families demonstrate why retained mutations should be decomposed rather than simply
-deleted: one remains a promising simplification parent, and one contributed a useful
-term only after composition.
-
-The exact sources and decompositions for the discovery-verifier examples are retained
-in the corresponding run directories under
-\filepath{artifacts/prefix_kv_cache_runs}.  Each includes
-\filepath{best_generated_mutation.py} and
-\filepath{best_generated_mutation_decomposition.json}.  Historical structured-run
-adjudication is retained in \filepath{docs/results/three_run_adjudication.md}.
-
-\subsection{Controlled attempts that failed adjudication}
-
+Admission-side control should dominate when:
 \begin{itemize}
-  \item \textbf{Broad explicit recurrence state was harmful.}  Removing recurrence
-  terms from the structured seed improved raw selection from \(62.178\) to \(63.762\),
-  reduced churn cost from \(9.256\) to \(7.198\), and improved aggregate probe from
-  \(35.654\) to \(41.373\).  Recurrence was useful only after it was narrowed to a
-  gate that relaxes the compact policy's categorical deep-block penalty.
-  \item \textbf{Priority-only decay overfit validation.}  It improved charged
-  validation selection from \(57.788\) to \(58.247\), but probe fell from \(40.303\) to
-  \(31.787\) and hidden score fell from \(-18.616\) to \(-19.128\).  Both-decay state
-  was retained because it generalized better and had better cache economics.
-  \item \textbf{Primitive adoption did not solve policy bloat.}  After the prompt and
-  seed made \code{MultiTimescaleDecay.observe_vector} discoverable, all 24 archived
-  elites across three structured searches used it.  Generated policies still expanded
-  to \(1198\)--\(1429\) effective nodes and none cleared charged validation plus
-  probe/hidden adjudication.
-  \item \textbf{Direct target-family gains were not sufficient.}  Both the
-  post-expansion mutation and the strongest structured mutation improved
-  agent-branching hit.  Their aggregate probe behavior deteriorated because cyclic
-  performance, churn, waste, or complexity moved in the wrong direction.  Individual
-  family hit rates therefore remain diagnostics rather than promotion criteria.
-  \item \textbf{The compact eviction-weight graft was a complexity mirage.}  The
-  apparent charged winner from run \identifier{20260608T040632Z} increased eviction
-  age, recurrence-protection, and priority-protection coefficients.  Grafting only
-  those weights into the unchanged incumbent improved aggregate probe from \(55.336\)
-  to \(55.383\), but reduced raw selection from \(70.989\) to \(70.955\), worsened
-  validation avoidable-eviction rate from \(0.1530\) to \(0.1542\), and reduced hidden
-  score from \(2.224\) to \(2.012\).  Its historical charged advantage came from
-  simplifying other full-policy code, not from better eviction behavior.  Full
-  adjudication is retained in
-  \filepath{docs/results/eviction_weight_graft.md}.
+  \item many reachable blocks have large threshold margins and are misclassified;
+  \item low-value admitted blocks persist long enough to cause later evictions or
+  underfill;
+  \item pressure shocks raise \(\mu_t\) or \(\lambda_t\), making old thresholds too
+  permissive;
+  \item parent admission opens a deep suffix of low-value descendants.
 \end{itemize}
 
-\subsection{Recurring shapes of inadequate evolved solutions}
+Eviction-side control should dominate when:
+\begin{itemize}
+  \item \(n^E_t\) is large and \(\delta^E_t\) is large;
+  \item legal leaves have sharply different remaining reuse despite similar recency;
+  \item a valuable shared-root or template branch appears as an inactive leaf;
+  \item priority or one-off traffic pollutes frequency and age signals;
+  \item heavy-tailed prefix lengths create high-value deep leaves beside disposable
+  shallow leaves.
+\end{itemize}
 
-Across the retained failures, evolution repeatedly produced the following solution
-shapes:
+This explains the audit.  Aggregate admission regret can be large because every missed
+reachable block creates a threshold decision.  Eviction can still dominate specific
+families because a smaller number of wrong victim choices can destroy high-value
+future reuse.
+
+\subsection{A regime-gated hybrid policy model}
+
+The corrected model suggests a hybrid policy family rather than a larger unconditional
+ranker.  Let \(h_t\in\{0,1\}\) be an online regime gate estimated from candidate-visible
+features such as legal-victim count, age dispersion, descendant distribution, observed
+frequency dispersion, pressure, miss rate, and priority-backed reuse.  A composable
+eviction score can be written as
+\begin{equation}
+  \varepsilon_t(b)=
+  (1-h_t)\varepsilon^{\mathrm{compact}}_t(b)
+  +h_t\varepsilon^{\mathrm{specialist}}_t(b).
+  \label{eq:regime-gated-eviction}
+\end{equation}
+The gate should activate only when the state resembles the eviction-opportunity set:
+multiple legal victims, large estimated value spread, and a workload signature known to
+produce eviction-dominant regret.  Otherwise the compact frequency-aware ranker remains
+preferred because it is cheaper, more stable, and already close to the best deployable
+baseline.
+
+The same idea applies to admission.  The pressure-aware incumbent estimates a shadow
+price \(\lambda_t\) from recent admission pressure and miss rate, then raises the
+threshold for deep low-evidence blocks.  A stronger policy should estimate not only a
+single pressure scalar but also the uncertainty around the incoming block value.  In
+states with high admission uncertainty and low victim spread, selective bypass is the
+right conservative action; in states with high victim spread, the policy should spend
+more complexity on victim ranking.
+
+\subsection{Causal component experiments}
+
+The local audit is not enough to establish causal component value.  The decisive study
+is a crossed replay using incumbent and oracle components.  Let
+\(Y_{AE}(g)\) be the group score when admission component \(A\in\{I,O\}\) and eviction
+component \(E\in\{I,O\}\) are selected from the incumbent \(I\) or a legal future-aware
+oracle \(O\).  The paired effects are
+\begin{align}
+  \tau_A(g)&=Y_{OI}(g)-Y_{II}(g),\\
+  \tau_E(g)&=Y_{IO}(g)-Y_{II}(g),\\
+  \tau_{AE}(g)&=Y_{OO}(g)-Y_{OI}(g)-Y_{IO}(g)+Y_{II}(g).
+\end{align}
+The corrected hypothesis is not \(\tau_A(g)>\tau_E(g)\) for every group.  It is that
+\(\sum_g\tau_A(g)>\sum_g\tau_E(g)\) may hold in aggregate, while the audit-identified
+counterexample families should satisfy \(\tau_E(g)>\tau_A(g)\).  A large interaction
+term \(\tau_{AE}\) would show that admission and eviction cannot be optimized
+independently because admission changes the future legal-victim distribution.
+
+A second, cheaper experiment is a factorial matrix of deployable components: several
+admission rules crossed with several eviction rules, all replayed on the same traces.
+The current result already points in this direction: pure LRU eviction leaves measurable
+mean token-hit rate unused across tested non-oracle admission rules, while LFU and the
+incumbent compact value-aware eviction ranker are close.  This supports an asymmetric
+engineering default--selective, regime-aware admission with simple frequency-aware
+eviction--but not a proof that eviction is solved.
+
+\subsection{Predictions and next audits}
+
+The regime-conditional model makes testable predictions:
 
 \begin{enumerate}
-  \item \textbf{Feature accretion.}  Candidates add tenant dictionaries, multiple
-  decay tables, pressure channels, and defensive branches faster than ablation can
-  establish their value.  These policies often contain one useful idea inside a large
-  implementation that cannot survive the complexity charge.
-  \item \textbf{Hit-rate maximization through admission and churn.}  These policies
-  cache deeper and more often, improve a difficult hit-rate diagnostic, and then lose
-  on wasted admission, avoidable eviction, or turnover.  They are the main reason the
-  verifier reports realized cache economics rather than hit rate alone.
-  \item \textbf{Plausible but inert edits.}  Some mutations add a condition whose
-  predicate is unavailable or irrelevant at the admission decision where it is used.
-  They preserve all behavior and lose only on complexity.
-  \item \textbf{Narrow coefficient and threshold refinements.}  These are less
-  ambitious but more likely to survive.  They may solve only one pressure regime and
-  require composition with a separately discovered mechanism before promotion.
-  \item \textbf{Probe-family overfit.}  Rich recurrence controllers can improve the
-  named agent and cyclic hit-rate diagnostics while degrading aggregate operational
-  probe score.  The full quarantined panel is necessary to distinguish a useful
-  mechanism from a workload-specific shortcut.
+  \item \textbf{Victim-spread prediction.}  Eviction-dominant groups should have larger
+  \(\delta^E_t\), larger legal-victim counts, and worse chosen-victim value ranks than
+  admission-dominant groups.
+  \item \textbf{Complexity-frontier prediction.}  Specialist variants should improve
+  same-state victim rank before they improve charged complete-policy score.  Promotion
+  requires distilling that ranking signal below the 650-node gate without hidden loss.
+  \item \textbf{Admission-threshold prediction.}  Admission-dominant groups should show
+  many large-margin threshold mistakes \(\gamma^A_t\), especially under pressure shifts,
+  agent traces, session continuations, phase shifts, and rolling-template workloads.
+  \item \textbf{Interaction prediction.}  Oracle admission should reduce the number and
+  spread of later eviction opportunities by preventing pollution; oracle eviction may
+  matter most when incumbent admission has already created a mixed-value legal-victim
+  set.
+  \item \textbf{Decode-pressure prediction.}  When active decode KV consumes shared
+  capacity, prefix-only admission thresholds should be too permissive unless they treat
+  decode occupancy as part of the shadow price.
 \end{enumerate}
 
-\subsection{Search-process failures}
-
-Some unsuccessful runs diagnose the search process rather than a policy idea:
-
-\begin{itemize}
-  \item Two 98-evaluation searches retained the seed from evaluation 1 and then stayed
-  flat for 97 evaluations.  A 298-evaluation one-cluster run last improved at
-  evaluation 189 and stayed flat for its final 109 evaluations.  The convergence
-  evidence did not justify a same-configuration 3000-evaluation continuation.
-  \item The preceding 298-evaluation diversified run occupied one archive cell, reported
-  254 generation errors, and initialized four identical centroids.  Punctuated
-  equilibrium therefore never activated.  This is evidence of collapsed initialization
-  diversity, not evidence that the policy family was exhausted; the workflow now
-  falls back when learned centroids are degenerate.
-  \item The retained June 8 298-evaluation run repaired archive coverage to ten cells and
-  discovered the \(77.230\) priority-aware pressure incumbent at evaluation 81.  It
-  still recorded 237 generation or static-check errors, and the final 217 evaluations
-  did not improve the winner.  Search validity and diversity improved, but generator
-  compliance and late-run marginal value remain weak.
-  \item The completed 500-budget function-only eviction run filled all sixteen archive
-  cells and improved raw specialist score from \(70.989\) to \(72.091\), but its best
-  ranking function composed to a \(1{,}011\)-node policy.  Narrowing the candidate
-  surface exposed measurable eviction progress without making the result deployable.
-  A one-coefficient descendant reweight retained \(0.168\) raw selection points at the
-  incumbent's 636-node complexity, but its \(0.006\) hidden-score loss still failed the
-  fail-closed promotion rule.
-  \item Adding shared prefix/decode capacity initially revealed a verifier bug: total
-  occupancy allowed decode KV to mask prefix-policy underfill.  Restricting underfill
-  to prefix occupancy restored the intended score semantics.  The corrected full panel
-  then showed that the incumbent narrowly leads deployable eviction policies under
-  shared pressure, while a \(77.5\%\) decode allocation-failure rate makes scheduler
-  control the dominant missing capability.
-  \item Earlier generations invented unsupported lifecycle callbacks, object-identity
-  state, guessed schemas, and defensive fallback branches.  Tightening the candidate
-  contract and preserving structured invalid results reduced this unproductive search
-  space, but invalid generation remains a material budget cost.
-\end{itemize}
-
-The negative-result ledger changes how later experiments are interpreted.  A generated
-policy is not considered promising merely because it raises a weak-family hit rate, and
-a failed full policy is not discarded when a compact, independently testable fragment
-can be isolated.  This is the basis for the current separation between structure
-search, deletion ablation, coefficient tuning, and final cross-panel adjudication.
+The immediate logging additions should be: chosen-victim value rank, legal-victim value
+spread, legal-victim count, whether the chosen victim lies on a high-reuse branch,
+admission displacement threshold \(\mu_t\), and scored-block margin \(F_t(b)-\mu_t\).
+Those fields would let the report state not just that admission or eviction dominated a
+group, but why the corresponding local decisions were hard.
 
 \begin{thebibliography}{99}
 \addcontentsline{toc}{section}{References}

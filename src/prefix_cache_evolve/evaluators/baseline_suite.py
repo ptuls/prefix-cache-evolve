@@ -20,7 +20,9 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import (
 class BaselineCapabilities(Protocol):
     """Capabilities needed to configure one baseline evaluation."""
 
-    def requires_future_reuse(self, name: str) -> bool: ...
+    def requires_future_reuse(self, name: str) -> bool:
+        """Return whether the named baseline requires future-reuse metadata."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -38,7 +40,6 @@ class BaselineSuiteEvaluator:
         splits: tuple[str, ...],
     ) -> dict[str, EvaluationResult]:
         """Evaluate each baseline on generated workloads."""
-
         return {
             name: self._evaluator(config, name, splits=splits)(factory)
             for name, factory in baselines.items()
@@ -55,7 +56,6 @@ class BaselineSuiteEvaluator:
         seed: int = 0,
     ) -> dict[str, EvaluationResult]:
         """Evaluate each baseline on a fixed request sequence."""
-
         return {
             name: self._evaluator(config, name, splits=(split,)).evaluate_requests(
                 factory,

@@ -26,6 +26,7 @@ class BaselineSpec:
 
     @property
     def group(self) -> str:
+        """Return the reporting group for this baseline."""
         if self.deployable:
             return "deployable"
         return "reporting-only/future-knowledge"
@@ -52,7 +53,6 @@ class BaselineRegistry:
         comparison_only: bool = False,
     ) -> dict[str, PolicyFactory]:
         """Return baseline factories eligible for the requested evaluation."""
-
         return {
             name: specification.factory
             for name, specification in self._specifications.items()
@@ -62,13 +62,11 @@ class BaselineRegistry:
 
     def group(self, name: str) -> str:
         """Return the reporting group for a baseline or deployable candidate."""
-
         specification = self._specifications.get(name)
         return specification.group if specification is not None else "deployable"
 
     def requires_future_reuse(self, name: str) -> bool:
         """Return whether a baseline needs simulator-provided future knowledge."""
-
         specification = self._specifications.get(name)
         return bool(specification and specification.requires_future_reuse)
 
@@ -129,7 +127,6 @@ class _VLLMAPCPolicy(_BasePolicy):
 
 def _recency_tiebreak(block: PrefixBlockInfo, now: int) -> float:
     """Returns an LRU tie-break score that cannot cross an integer priority."""
-
     age = max(0, now - block.last_accessed_at)
     return float(age) / (float(age) + 1.0)
 
@@ -283,12 +280,14 @@ class _OracleFutureReusePolicy(_BasePolicy):
 def baseline_no_cache(
     capacity_blocks: int, block_size_tokens: int, seed: int | None = None
 ) -> PrefixKVPolicy:
+    """Return a policy that rejects every cache admission."""
     return _NoCachePolicy()
 
 
 def baseline_lru_blocks(
     capacity_blocks: int, block_size_tokens: int, seed: int | None = None
 ) -> PrefixKVPolicy:
+    """Return a block-level least-recently-used policy."""
     return _LRUPolicy()
 
 
@@ -296,73 +295,83 @@ def baseline_sglang_radix_attention(
     capacity_blocks: int, block_size_tokens: int, seed: int | None = None
 ) -> PrefixKVPolicy:
     """Return SGLang's admit-all, zero-reference leaf-LRU radix-cache policy."""
-
     return _SGLangRadixAttentionPolicy()
 
 
 def baseline_vllm_apc(
     capacity_blocks: int, block_size_tokens: int, seed: int | None = None
 ) -> PrefixKVPolicy:
+    """Return a vLLM automatic-prefix-caching approximation."""
     return _VLLMAPCPolicy(block_size_tokens)
 
 
 def baseline_lfu_blocks(
     capacity_blocks: int, block_size_tokens: int, seed: int | None = None
 ) -> PrefixKVPolicy:
+    """Return a block-level least-frequently-used policy."""
     return _LFUPolicy()
 
 
 def baseline_depth_prefer_shallow(
     capacity_blocks: int, block_size_tokens: int, seed: int | None = None
 ) -> PrefixKVPolicy:
+    """Return a policy that prefers retaining shallow prefixes."""
     return _DepthPreferShallowPolicy()
 
 
 def baseline_recompute_cost_greedy(
     capacity_blocks: int, block_size_tokens: int, seed: int | None = None
 ) -> PrefixKVPolicy:
+    """Return a greedy recomputation-cost policy."""
     return _RecomputeGreedyPolicy()
 
 
 def baseline_cost_aware_lru(
     capacity_blocks: int, block_size_tokens: int, seed: int | None = None
 ) -> PrefixKVPolicy:
+    """Return a recency policy weighted by recomputation cost."""
     return _CostAwareLRUPolicy()
 
 
 def baseline_prefix_fanout(
     capacity_blocks: int, block_size_tokens: int, seed: int | None = None
 ) -> PrefixKVPolicy:
+    """Return a policy that protects prefixes with greater fanout."""
     return _PrefixFanoutPolicy()
 
 
 def baseline_prefix_anchor(
     capacity_blocks: int, block_size_tokens: int, seed: int | None = None
 ) -> PrefixKVPolicy:
+    """Return a policy that protects reusable prefix anchors."""
     return _PrefixAnchorPolicy()
 
 
 def baseline_tinylfu_lru(
     capacity_blocks: int, block_size_tokens: int, seed: int | None = None
 ) -> PrefixKVPolicy:
+    """Return a TinyLFU admission policy with LRU eviction."""
     return _TinyLFULRUPolicy()
 
 
 def baseline_tenant_fair_lru(
     capacity_blocks: int, block_size_tokens: int, seed: int | None = None
 ) -> PrefixKVPolicy:
+    """Return a tenant-fair LRU policy."""
     return _TenantFairLRUPolicy()
 
 
 def baseline_future_reuse_heuristic(
     capacity_blocks: int, block_size_tokens: int, seed: int | None = None
 ) -> PrefixKVPolicy:
+    """Return a reporting-only future-reuse heuristic."""
     return _FutureReuseHeuristicPolicy()
 
 
 def baseline_oracle_future_reuse(
     capacity_blocks: int, block_size_tokens: int, seed: int | None = None
 ) -> PrefixKVPolicy:
+    """Return the reporting-only future-reuse oracle policy."""
     return _OracleFutureReusePolicy()
 
 

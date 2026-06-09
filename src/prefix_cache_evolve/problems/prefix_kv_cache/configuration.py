@@ -23,7 +23,6 @@ DEFAULT_CONFIG_PATH = (
 
 def load_evaluator_config(path: Path = DEFAULT_CONFIG_PATH) -> EvaluatorConfig:
     """Load the evaluator settings that are operative for reports and evolution."""
-
     with path.open("r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle) or {}
     document = WorkflowFileConfig.model_validate(data)
@@ -39,13 +38,11 @@ def evaluator_config_from_settings(
     base: EvaluatorConfig | None = None,
 ) -> EvaluatorConfig:
     """Overlay YAML problem settings onto an evaluator configuration."""
-
     return (base or EvaluatorConfig()).with_updates(**dict(settings))
 
 
 def active_evaluator_config(default: EvaluatorConfig) -> EvaluatorConfig:
     """Return an environment-selected config or the supplied test/default config."""
-
     path = os.environ.get(PREFIX_KV_CONFIG_ENV)
     config = load_evaluator_config(Path(path)) if path else default
     if os.environ.get(PREFIX_KV_QUICK_ENV) == "1":
@@ -60,7 +57,6 @@ def active_evaluator_config(default: EvaluatorConfig) -> EvaluatorConfig:
 @contextmanager
 def prefix_kv_config_environment(path: Path, *, quick: bool = False) -> Iterator[None]:
     """Expose the operative config path to Levi evaluator worker processes."""
-
     previous = os.environ.get(PREFIX_KV_CONFIG_ENV)
     previous_quick = os.environ.get(PREFIX_KV_QUICK_ENV)
     os.environ[PREFIX_KV_CONFIG_ENV] = str(path.resolve())

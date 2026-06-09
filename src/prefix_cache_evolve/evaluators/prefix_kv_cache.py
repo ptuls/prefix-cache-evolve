@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import inspect
 import math
-import random
 import tracemalloc
 from collections import deque
 from dataclasses import dataclass, field, replace
-from statistics import mean, median, pstdev
+from statistics import mean, pstdev
 from typing import Callable, Iterable, Literal, Mapping
 
 from pydantic import (
@@ -22,6 +20,7 @@ from pydantic import (
     model_validator,
 )
 
+from prefix_cache_evolve.evaluators import scoring as _scoring
 from prefix_cache_evolve.evaluators.baselines import (
     BASELINE_REGISTRY as BASELINE_REGISTRY,
 )
@@ -88,6 +87,12 @@ from prefix_cache_evolve.evaluators.contracts import (
 from prefix_cache_evolve.evaluators.contracts import (
     RequestInfo as RequestInfo,
 )
+from prefix_cache_evolve.evaluators.scoring import (
+    aggregate_by as _aggregate_by,
+)
+from prefix_cache_evolve.evaluators.scoring import (
+    workload_base_score as _workload_base_score,
+)
 from prefix_cache_evolve.evaluators.telemetry import (
     CacheBlockSnapshot,
     EvictionCandidateSnapshot,
@@ -96,37 +101,44 @@ from prefix_cache_evolve.evaluators.telemetry import (
     RequestSnapshot,
     SimulatorObserver,
 )
-
-_DEPTH_BANDS: tuple[tuple[str, int, int | None], ...] = (
-    ("depth_1_2", 1, 2),
-    ("depth_3_4", 3, 4),
-    ("depth_5_8", 5, 8),
-    ("depth_9_plus", 9, None),
+from prefix_cache_evolve.evaluators.utilities import (
+    depth_band as _depth_band,
 )
+from prefix_cache_evolve.evaluators.utilities import (
+    jain_fairness as _jain_fairness,
+)
+from prefix_cache_evolve.evaluators.utilities import (
+    percentile as _percentile,
+)
+from prefix_cache_evolve.evaluators.utilities import (
+    prefix_role as _prefix_role,
+)
+from prefix_cache_evolve.evaluators.utilities import (
+    request_prefix_hashes as _request_prefix_hashes,
+)
+from prefix_cache_evolve.evaluators.utilities import (
+    stable_hash as _stable_hash,
+)
+from prefix_cache_evolve.evaluators.utilities import (
+    structural_metrics as _structural_metrics,
+)
+from prefix_cache_evolve.evaluators.utilities import (
+    window_token_hit_rates as _window_token_hit_rates,
+)
+from prefix_cache_evolve.evaluators.workloads import WorkloadRequest, build_workload
+
 _HIGH_DESCENDANT_MIN_COUNT = 2
 _COLD_DEEP_MIN_DEPTH = 5
 _SHORT_REUSE_DISTANCE_STEPS = 8
 _TEMPORAL_WINDOWS = 4
 _ACCESS_GAP_EW_ALPHA = 0.25
 _REGIME_WINDOW_REQUESTS = 32
-_PREFIX_ROLES = ("system", "developer", "user")
-_TOKEN_PREFIX_ROLES: dict[int, str] = {}
 _KV_CAPACITY_MODES = ("prefix_only", "shared")
-
-
-@dataclass(frozen=True)
-class WorkloadRequest:
-    """Simulator-internal request, including true output length."""
-
-    info: RequestInfo
-    true_output_length: int
-    prompt_tokens: tuple[int, ...] = ()
-    arrival_step: int | None = None
+_aggregate_trials = _scoring.aggregate_trials
 
 
 def _request_arrival_steps(requests: tuple[WorkloadRequest, ...]) -> tuple[int, ...]:
     """Returns monotonic logical arrival times, preserving sequential defaults."""
-
     arrival_steps = []
     previous_step = -1
     for request_index, request in enumerate(requests):
@@ -140,7 +152,6 @@ def _request_arrival_steps(requests: tuple[WorkloadRequest, ...]) -> tuple[int, 
 
 def _window_mean(values: Iterable[float]) -> float:
     """Return the mean of a bounded online window, or zero before observations."""
-
     values = tuple(values)
     return sum(values) / len(values) if values else 0.0
 
@@ -250,7 +261,6 @@ class EvaluatorConfig(BaseModel):
     @classmethod
     def _flatten_scoring_settings(cls, value: object) -> object:
         """Accept the YAML scoring subsection while retaining a flat runtime API."""
-
         if not isinstance(value, Mapping):
             return value
         values = dict(value)
@@ -269,7 +279,6 @@ class EvaluatorConfig(BaseModel):
 
     def with_updates(self, **updates: object) -> EvaluatorConfig:
         """Return a validated copy with the supplied settings overlaid."""
-
         normalized = type(self)._flatten_scoring_settings(updates)
         if not isinstance(normalized, Mapping):
             raise TypeError("evaluator config updates must be a mapping")
@@ -277,7 +286,6 @@ class EvaluatorConfig(BaseModel):
 
     def effective_capacity_blocks(self) -> tuple[int, ...]:
         """Returns the capacities evaluated for each workload and seed."""
-
         values = self.capacity_sweep_blocks or (self.capacity_blocks,)
         capacities: list[int] = []
         for value in values:
@@ -290,7 +298,6 @@ class EvaluatorConfig(BaseModel):
 
     def effective_capacity_tokens(self) -> tuple[int, ...]:
         """Returns evaluated cache capacities expressed in tokens."""
-
         if self.block_size_tokens <= 0:
             raise ValueError("block size tokens must be positive")
         return tuple(
@@ -299,13 +306,13 @@ class EvaluatorConfig(BaseModel):
 
     def effective_workload_token_granularity(self) -> int:
         """Returns the canonical token granularity used to build synthetic traffic."""
-
         granularity = int(self.workload_token_granularity)
         if granularity <= 0:
             raise ValueError("workload token granularity must be positive")
         return granularity
 
     def workload_configs(self, splits: Iterable[str]) -> tuple[WorkloadConfig, ...]:
+        """Return expanded workload configurations for the requested splits."""
         configs: list[WorkloadConfig] = []
         for split in splits:
             families = {
@@ -359,6 +366,14 @@ class TrialMetrics:
     admission_score_count: int = 0
     admission_rejection_count: int = 0
     admission_rate: float = 0.0
+    avoidable_admission_count: int = 0
+    avoidable_admission_rate: float = 0.0
+    avoidable_admission_regret_tokens: float = 0.0
+    avoidable_admission_regret_token_rate: float = 0.0
+    avoidable_rejection_count: int = 0
+    avoidable_rejection_rate: float = 0.0
+    avoidable_rejection_regret_tokens: float = 0.0
+    avoidable_rejection_regret_token_rate: float = 0.0
     useful_admission_count: int = 0
     useful_admission_rate: float = 0.0
     wasted_admission_count: int = 0
@@ -388,6 +403,10 @@ class TrialMetrics:
     avoidable_eviction_rate: float = 0.0
     avoidable_short_reuse_eviction_count: int = 0
     avoidable_short_reuse_eviction_rate: float = 0.0
+    value_weighted_avoidable_eviction_count: int = 0
+    value_weighted_avoidable_eviction_rate: float = 0.0
+    value_weighted_avoidable_eviction_regret_tokens: float = 0.0
+    value_weighted_avoidable_eviction_regret_token_rate: float = 0.0
     tenant_count: int = 0
     tenant_fairness_penalty: float = 0.0
     tenant_token_hit_rate_p10: float = 0.0
@@ -427,6 +446,7 @@ class TrialMetrics:
     structural_metrics: dict[str, float] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, float | int | bool | str]:
+        """Return scalar trial metrics as a serializable mapping."""
         metrics: dict[str, float | int | bool | str] = {
             "block_hit_rate": self.block_hit_rate,
             "capacity_blocks": self.capacity_blocks,
@@ -453,6 +473,14 @@ class TrialMetrics:
             "admission_score_count": self.admission_score_count,
             "admission_rejection_count": self.admission_rejection_count,
             "admission_rate": self.admission_rate,
+            "avoidable_admission_count": self.avoidable_admission_count,
+            "avoidable_admission_rate": self.avoidable_admission_rate,
+            "avoidable_admission_regret_tokens": self.avoidable_admission_regret_tokens,
+            "avoidable_admission_regret_token_rate": (self.avoidable_admission_regret_token_rate),
+            "avoidable_rejection_count": self.avoidable_rejection_count,
+            "avoidable_rejection_rate": self.avoidable_rejection_rate,
+            "avoidable_rejection_regret_tokens": self.avoidable_rejection_regret_tokens,
+            "avoidable_rejection_regret_token_rate": (self.avoidable_rejection_regret_token_rate),
             "useful_admission_count": self.useful_admission_count,
             "useful_admission_rate": self.useful_admission_rate,
             "wasted_admission_count": self.wasted_admission_count,
@@ -486,6 +514,16 @@ class TrialMetrics:
             "avoidable_eviction_rate": self.avoidable_eviction_rate,
             "avoidable_short_reuse_eviction_count": (self.avoidable_short_reuse_eviction_count),
             "avoidable_short_reuse_eviction_rate": (self.avoidable_short_reuse_eviction_rate),
+            "value_weighted_avoidable_eviction_count": (
+                self.value_weighted_avoidable_eviction_count
+            ),
+            "value_weighted_avoidable_eviction_rate": (self.value_weighted_avoidable_eviction_rate),
+            "value_weighted_avoidable_eviction_regret_tokens": (
+                self.value_weighted_avoidable_eviction_regret_tokens
+            ),
+            "value_weighted_avoidable_eviction_regret_token_rate": (
+                self.value_weighted_avoidable_eviction_regret_token_rate
+            ),
             "tenant_count": self.tenant_count,
             "tenant_fairness_penalty": self.tenant_fairness_penalty,
             "tenant_token_hit_rate_p10": self.tenant_token_hit_rate_p10,
@@ -586,7 +624,6 @@ class _AdmissionAccounting:
 
     def record(self, block: _BlockState, *, evicted: bool) -> None:
         """Record one tracked interval before its state is reset."""
-
         if not block.admission_tracked:
             return
         self.admitted_tokens += block.token_count
@@ -602,6 +639,45 @@ class _AdmissionAccounting:
 
 
 @dataclass
+class _AdmissionAudit:
+    """Same-state admission regret measured in future reusable tokens."""
+
+    accepted_count: int = 0
+    rejected_count: int = 0
+    avoidable_admission_count: int = 0
+    avoidable_admission_regret_tokens: float = 0.0
+    avoidable_rejection_count: int = 0
+    avoidable_rejection_regret_tokens: float = 0.0
+
+    def record(
+        self,
+        *,
+        accepted: bool,
+        feasible: bool,
+        incoming_value_tokens: float,
+        displaced_value_tokens: float,
+    ) -> None:
+        """Record one explicit policy admission score against a local oracle."""
+        if accepted:
+            self.accepted_count += 1
+            if not feasible:
+                return
+            regret = max(0.0, displaced_value_tokens - incoming_value_tokens)
+            if regret > 0.0:
+                self.avoidable_admission_count += 1
+                self.avoidable_admission_regret_tokens += regret
+            return
+
+        self.rejected_count += 1
+        if not feasible:
+            return
+        regret = max(0.0, incoming_value_tokens - displaced_value_tokens)
+        if regret > 0.0:
+            self.avoidable_rejection_count += 1
+            self.avoidable_rejection_regret_tokens += regret
+
+
+@dataclass
 class _CapacityOutcome:
     """Capacity effects produced outside one prompt admission."""
 
@@ -609,6 +685,8 @@ class _CapacityOutcome:
     high_descendant_evictions: int = 0
     avoidable_evictions: int = 0
     avoidable_short_reuse_evictions: int = 0
+    value_weighted_avoidable_evictions: int = 0
+    value_weighted_avoidable_eviction_regret_tokens: float = 0.0
     decode_blocks_requested: int = 0
     decode_blocks_allocated: int = 0
     decode_allocation_failure_blocks: int = 0
@@ -616,15 +694,26 @@ class _CapacityOutcome:
 
     def merge(self, other: _CapacityOutcome) -> None:
         """Accumulate another capacity outcome."""
-
         self.evictions += other.evictions
         self.high_descendant_evictions += other.high_descendant_evictions
         self.avoidable_evictions += other.avoidable_evictions
         self.avoidable_short_reuse_evictions += other.avoidable_short_reuse_evictions
+        self.value_weighted_avoidable_evictions += other.value_weighted_avoidable_evictions
+        self.value_weighted_avoidable_eviction_regret_tokens += (
+            other.value_weighted_avoidable_eviction_regret_tokens
+        )
         self.decode_blocks_requested += other.decode_blocks_requested
         self.decode_blocks_allocated += other.decode_blocks_allocated
         self.decode_allocation_failure_blocks += other.decode_allocation_failure_blocks
         self.decode_pressure_evictions += other.decode_pressure_evictions
+
+
+@dataclass
+class _AdmissionOutcome:
+    """Result of one accepted admission attempt."""
+
+    admitted: bool = False
+    capacity: _CapacityOutcome = field(default_factory=_CapacityOutcome)
 
 
 @dataclass
@@ -747,6 +836,7 @@ class PrefixKVCacheSimulator:
         seed: int,
         scoring_fn_complexity: int = 0,
     ) -> TrialMetrics:
+        """Simulate a policy over a fixed request sequence."""
         total_blocks = 0
         total_tokens = 0
         hit_blocks = 0
@@ -807,8 +897,11 @@ class PrefixKVCacheSimulator:
         short_reuse_after_eviction_missed_tokens = 0
         eviction_reuse_distances: list[float] = []
         admission_accounting = _AdmissionAccounting()
+        admission_audit = _AdmissionAudit()
         avoidable_eviction_count = 0
         avoidable_short_reuse_eviction_count = 0
+        value_weighted_avoidable_eviction_count = 0
+        value_weighted_avoidable_eviction_regret_tokens = 0.0
         decode_capacity_outcome = _CapacityOutcome()
 
         try:
@@ -968,18 +1061,23 @@ class PrefixKVCacheSimulator:
                         self._info(block, now, future_reuse),
                         now,
                     )
+                    (
+                        incoming_value_tokens,
+                        displaced_value_tokens,
+                        admission_feasible,
+                    ) = self._admission_decision_values(block, audit_future_reuse)
+                    admission_audit.record(
+                        accepted=score > 0.0,
+                        feasible=admission_feasible,
+                        incoming_value_tokens=incoming_value_tokens,
+                        displaced_value_tokens=displaced_value_tokens,
+                    )
                     if score <= 0.0:
                         admission_rejection_count += 1
                         policy_bypass_tokens += block.token_count
                         admission_blocked = True
                         continue
-                    (
-                        admitted,
-                        evictions,
-                        high_descendant_victims,
-                        avoidable_evictions,
-                        avoidable_short_reuse_evictions,
-                    ) = self._admit_block(
+                    admission_outcome = self._admit_block(
                         policy,
                         block,
                         now,
@@ -988,17 +1086,26 @@ class PrefixKVCacheSimulator:
                         audit_future_reuse,
                         admission_accounting,
                     )
-                    per_request_evictions += evictions
+                    capacity_outcome = admission_outcome.capacity
+                    per_request_evictions += capacity_outcome.evictions
                     request_hit_capacity = (
                         request_hit_capacity
-                        or evictions > 0
+                        or capacity_outcome.evictions > 0
                         or self.total_resident_count >= self.capacity_blocks
                     )
-                    eviction_count += evictions
-                    high_descendant_evictions += high_descendant_victims
-                    avoidable_eviction_count += avoidable_evictions
-                    avoidable_short_reuse_eviction_count += avoidable_short_reuse_evictions
-                    if admitted:
+                    eviction_count += capacity_outcome.evictions
+                    high_descendant_evictions += capacity_outcome.high_descendant_evictions
+                    avoidable_eviction_count += capacity_outcome.avoidable_evictions
+                    avoidable_short_reuse_eviction_count += (
+                        capacity_outcome.avoidable_short_reuse_evictions
+                    )
+                    value_weighted_avoidable_eviction_count += (
+                        capacity_outcome.value_weighted_avoidable_evictions
+                    )
+                    value_weighted_avoidable_eviction_regret_tokens += (
+                        capacity_outcome.value_weighted_avoidable_eviction_regret_tokens
+                    )
+                    if admission_outcome.admitted:
                         admission_count += 1
                         if is_cold_deep:
                             cold_deep_admissions += 1
@@ -1112,6 +1219,14 @@ class PrefixKVCacheSimulator:
             avoidable_short_reuse_eviction_count
             + decode_capacity_outcome.avoidable_short_reuse_evictions
         )
+        total_value_weighted_avoidable_eviction_count = (
+            value_weighted_avoidable_eviction_count
+            + decode_capacity_outcome.value_weighted_avoidable_evictions
+        )
+        total_value_weighted_avoidable_eviction_regret_tokens = (
+            value_weighted_avoidable_eviction_regret_tokens
+            + decode_capacity_outcome.value_weighted_avoidable_eviction_regret_tokens
+        )
         memory_occupancy_mean = mean(occupancies) if occupancies else 0.0
         prefix_kv_occupancy_mean = mean(prefix_occupancies) if prefix_occupancies else 0.0
         decode_kv_occupancy_mean = mean(decode_occupancies) if decode_occupancies else 0.0
@@ -1175,6 +1290,22 @@ class PrefixKVCacheSimulator:
             admission_score_count=admission_score_count,
             admission_rejection_count=admission_rejection_count,
             admission_rate=admission_count / max(1, admission_score_count),
+            avoidable_admission_count=admission_audit.avoidable_admission_count,
+            avoidable_admission_rate=(
+                admission_audit.avoidable_admission_count / max(1, admission_audit.accepted_count)
+            ),
+            avoidable_admission_regret_tokens=(admission_audit.avoidable_admission_regret_tokens),
+            avoidable_admission_regret_token_rate=(
+                admission_audit.avoidable_admission_regret_tokens / max(1, total_tokens)
+            ),
+            avoidable_rejection_count=admission_audit.avoidable_rejection_count,
+            avoidable_rejection_rate=(
+                admission_audit.avoidable_rejection_count / max(1, admission_audit.rejected_count)
+            ),
+            avoidable_rejection_regret_tokens=(admission_audit.avoidable_rejection_regret_tokens),
+            avoidable_rejection_regret_token_rate=(
+                admission_audit.avoidable_rejection_regret_tokens / max(1, total_tokens)
+            ),
             useful_admission_count=admission_accounting.useful_count,
             useful_admission_rate=(admission_accounting.useful_count / max(1, admission_count)),
             wasted_admission_count=admission_accounting.wasted_count,
@@ -1217,6 +1348,16 @@ class PrefixKVCacheSimulator:
             avoidable_short_reuse_eviction_count=(total_avoidable_short_reuse_eviction_count),
             avoidable_short_reuse_eviction_rate=(
                 total_avoidable_short_reuse_eviction_count / max(1, total_eviction_count)
+            ),
+            value_weighted_avoidable_eviction_count=(total_value_weighted_avoidable_eviction_count),
+            value_weighted_avoidable_eviction_rate=(
+                total_value_weighted_avoidable_eviction_count / max(1, total_eviction_count)
+            ),
+            value_weighted_avoidable_eviction_regret_tokens=(
+                total_value_weighted_avoidable_eviction_regret_tokens
+            ),
+            value_weighted_avoidable_eviction_regret_token_rate=(
+                total_value_weighted_avoidable_eviction_regret_tokens / max(1, total_tokens)
             ),
             tenant_count=len(tenant_rates),
             tenant_fairness_penalty=fairness_penalty,
@@ -1272,19 +1413,21 @@ class PrefixKVCacheSimulator:
 
     @property
     def resident_count(self) -> int:
+        """Return the number of resident prefix blocks."""
         return len(self._resident_hashes)
 
     @property
     def decode_resident_count(self) -> int:
+        """Return the number of resident decode blocks."""
         return self._decode_resident_blocks
 
     @property
     def total_resident_count(self) -> int:
+        """Return total resident prefix and decode blocks."""
         return self.resident_count + self.decode_resident_count
 
     def match_resident_prefix(self, blocks: list[_BlockState]) -> int:
         """Return the largest root-contiguous resident prefix length."""
-
         matched = 0
         for block in blocks:
             if not block.resident:
@@ -1310,7 +1453,6 @@ class PrefixKVCacheSimulator:
         cumulative_evictions: int,
     ) -> None:
         """Emit a request-complete snapshot when observability is enabled."""
-
         if self.observer is None:
             return
         request_hashes = {block.prefix_hash for block in request_blocks}
@@ -1362,7 +1504,6 @@ class PrefixKVCacheSimulator:
 
     def evict_block(self, prefix_hash: int) -> None:
         """Evict a resident leaf block; useful for direct simulator tests."""
-
         block = self.blocks[prefix_hash]
         if block.active_ref_count or block.resident_children:
             raise ValueError("only inactive resident leaves can be evicted")
@@ -1377,24 +1518,21 @@ class PrefixKVCacheSimulator:
         future_reuse: _FutureReuseTracker,
         audit_future_reuse: _FutureReuseTracker,
         admission_accounting: _AdmissionAccounting,
-    ) -> tuple[bool, int, int, int, int]:
+    ) -> _AdmissionOutcome:
         if block.resident:
             self._pin(block, now + duration)
-            return True, 0, 0, 0, 0
+            return _AdmissionOutcome(admitted=True)
 
         if block.parent_hash is not None:
             parent = self.blocks.get(block.parent_hash)
             if parent is None or not parent.resident:
-                return False, 0, 0, 0, 0
+                return _AdmissionOutcome()
 
         self._make_resident(block)
         block.last_accessed_at = now
         release_at = now + duration
         self._pin(block, release_at)
-        evictions = 0
-        high_descendant_evictions = 0
-        avoidable_evictions = 0
-        avoidable_short_reuse_evictions = 0
+        capacity_outcome = _CapacityOutcome()
         while self.total_resident_count > self.capacity_blocks:
             outcome = self._evict_one(
                 policy,
@@ -1407,25 +1545,10 @@ class PrefixKVCacheSimulator:
                 self._unpin(block)
                 self._cancel_release(block, release_at)
                 self._remove_resident(block)
-                return (
-                    False,
-                    evictions,
-                    high_descendant_evictions,
-                    avoidable_evictions,
-                    avoidable_short_reuse_evictions,
-                )
-            evictions += outcome.evictions
-            high_descendant_evictions += outcome.high_descendant_evictions
-            avoidable_evictions += outcome.avoidable_evictions
-            avoidable_short_reuse_evictions += outcome.avoidable_short_reuse_evictions
+                return _AdmissionOutcome(capacity=capacity_outcome)
+            capacity_outcome.merge(outcome)
         block.admission_tracked = True
-        return (
-            True,
-            evictions,
-            high_descendant_evictions,
-            avoidable_evictions,
-            avoidable_short_reuse_evictions,
-        )
+        return _AdmissionOutcome(admitted=True, capacity=capacity_outcome)
 
     def _evict_one(
         self,
@@ -1436,7 +1559,6 @@ class PrefixKVCacheSimulator:
         admission_accounting: _AdmissionAccounting,
     ) -> _CapacityOutcome | None:
         """Evict one legal prefix leaf using the candidate policy."""
-
         evictable = self._evictable_blocks()
         if not evictable:
             return None
@@ -1453,6 +1575,10 @@ class PrefixKVCacheSimulator:
             )
         _, _, victim, _ = max(scored, key=lambda item: (item[0], item[1]))
         victim_next_reuse = audit_future_reuse.next_distance(victim.prefix_hash, now)
+        future_values = {
+            candidate.prefix_hash: self._future_value_tokens(candidate, audit_future_reuse)
+            for candidate in evictable
+        }
         if self.eviction_decision_observer is not None:
             self.eviction_decision_observer.on_eviction_decision(
                 EvictionDecisionSnapshot(
@@ -1481,6 +1607,11 @@ class PrefixKVCacheSimulator:
             default=None,
         )
         outcome = _CapacityOutcome(evictions=1)
+        minimum_future_value = min(future_values.values())
+        value_regret = future_values[victim.prefix_hash] - minimum_future_value
+        if value_regret > 0.0:
+            outcome.value_weighted_avoidable_evictions = 1
+            outcome.value_weighted_avoidable_eviction_regret_tokens = value_regret
         if (
             victim_next_reuse is not None
             and furthest_alternative_reuse is not None
@@ -1500,6 +1631,41 @@ class PrefixKVCacheSimulator:
         self._remove_resident(victim)
         return outcome
 
+    def _admission_decision_values(
+        self,
+        block: _BlockState,
+        audit_future_reuse: _FutureReuseTracker,
+    ) -> tuple[float, float, bool]:
+        """Return incoming value, cheapest displacement, and admission feasibility."""
+        incoming_value = self._future_value_tokens(block, audit_future_reuse)
+        required_evictions = max(0, self.total_resident_count + 1 - self.capacity_blocks)
+        if required_evictions == 0:
+            return incoming_value, 0.0, True
+        candidate_values = sorted(
+            self._future_value_tokens(candidate, audit_future_reuse)
+            for candidate in self._admission_victim_candidates(block)
+        )
+        if len(candidate_values) < required_evictions:
+            return incoming_value, 0.0, False
+        return incoming_value, sum(candidate_values[:required_evictions]), True
+
+    def _admission_victim_candidates(self, incoming: _BlockState) -> list[_BlockState]:
+        """Return blocks that would remain legal victims after admitting `incoming`."""
+        return [
+            candidate
+            for candidate in self._evictable_blocks()
+            if candidate.prefix_hash != incoming.parent_hash
+        ]
+
+    @staticmethod
+    def _future_value_tokens(
+        block: _BlockState,
+        audit_future_reuse: _FutureReuseTracker,
+    ) -> float:
+        """Return the oracle upper bound on future token hits for one block."""
+        remaining_reuse = audit_future_reuse.remaining_count(block.prefix_hash)
+        return block.token_count * max(0.0, remaining_reuse or 0.0)
+
     def _advance_decodes(
         self,
         policy: PrefixKVPolicy,
@@ -1509,7 +1675,6 @@ class PrefixKVCacheSimulator:
         admission_accounting: _AdmissionAccounting,
     ) -> _CapacityOutcome:
         """Advance in-flight decode KV through the current logical step."""
-
         outcome = _CapacityOutcome()
         if self.kv_capacity_mode != "shared":
             return outcome
@@ -1547,7 +1712,6 @@ class PrefixKVCacheSimulator:
         admission_accounting: _AdmissionAccounting,
     ) -> _CapacityOutcome:
         """Start one decode and allocate its first generated KV blocks."""
-
         if self.kv_capacity_mode != "shared":
             return _CapacityOutcome()
         self._active_decodes.append(
@@ -1574,7 +1738,6 @@ class PrefixKVCacheSimulator:
         admission_accounting: _AdmissionAccounting,
     ) -> _CapacityOutcome:
         """Allocate newly generated decode blocks at one logical step."""
-
         outcome = _CapacityOutcome()
         for decode in self._active_decodes:
             generated_tokens = min(
@@ -1606,7 +1769,6 @@ class PrefixKVCacheSimulator:
         admission_accounting: _AdmissionAccounting,
     ) -> _CapacityOutcome:
         """Allocate non-evictable decode blocks, evicting prefix leaves as needed."""
-
         outcome = _CapacityOutcome(decode_blocks_requested=requested_blocks)
         if requested_blocks <= 0:
             return outcome
@@ -1678,7 +1840,6 @@ class PrefixKVCacheSimulator:
 
     def _record_access(self, block: _BlockState, now: int) -> None:
         """Record online recurrence timing before candidate callbacks fire."""
-
         self._adjust_subtree_counter(self._subtree_access_counts, block, 1)
         previous = block.observed_accessed_at
         block.prev_last_accessed_at = previous
@@ -1698,7 +1859,6 @@ class PrefixKVCacheSimulator:
 
     def _record_hit(self, block: _BlockState) -> None:
         """Record one hit in the online subtree aggregate."""
-
         self._adjust_subtree_counter(self._subtree_hit_counts, block, 1)
 
     def _adjust_subtree_counter(
@@ -1708,7 +1868,6 @@ class PrefixKVCacheSimulator:
         delta: int,
     ) -> None:
         """Apply a block contribution to itself and each known ancestor."""
-
         prefix_hash: int | None = block.prefix_hash
         while prefix_hash is not None:
             counts[prefix_hash] = max(0, counts.get(prefix_hash, 0) + delta)
@@ -1853,7 +2012,6 @@ class PrefixKVCacheSimulator:
     @staticmethod
     def _validate_policy(policy: PrefixKVPolicy) -> None:
         """Ensures missing hooks become structured invalid-candidate results."""
-
         required_methods = (
             "on_request_start",
             "score_admission",
@@ -1903,6 +2061,7 @@ class PrefixKVCacheEvaluator:
         *,
         scoring_fn_complexity: int = 0,
     ) -> EvaluationResult:
+        """Evaluate a policy factory across configured workloads."""
         factory = factory or baseline_lru_blocks
         trials: list[TrialMetrics] = []
         capacity_blocks_values = self.config.effective_capacity_blocks()
@@ -1941,7 +2100,6 @@ class PrefixKVCacheEvaluator:
         scoring_fn_complexity: int = 0,
     ) -> EvaluationResult:
         """Evaluate a fixed metadata-derived request sequence."""
-
         factory = factory or baseline_lru_blocks
         request_tuple = tuple(requests)
         trials = [
@@ -1965,7 +2123,6 @@ class PrefixKVCacheEvaluator:
         scoring_fn_complexity: int = 0,
     ) -> EvaluationResult:
         """Reaggregate existing trials under this evaluator's score weights."""
-
         return self._result_from_trials(list(trials), scoring_fn_complexity)
 
     def _run_trial(
@@ -2148,7 +2305,6 @@ class PrefixKVCacheEvaluator:
         complexity: int,
     ) -> dict[str, float]:
         """Returns the combined score and its top-level weighted components."""
-
         if invalid_fraction > 0.0:
             combined_score = (
                 self.config.v_min - 1.0 - self.config.invalid_surcharge * invalid_fraction
@@ -2253,50 +2409,6 @@ class PrefixKVCacheEvaluator:
         }
 
 
-def build_workload(
-    family: str,
-    *,
-    request_count: int,
-    block_size_tokens: int,
-    seed: int,
-) -> tuple[WorkloadRequest, ...]:
-    rng = random.Random(seed)
-    builder = {
-        "shared_system_prompt": _shared_system_prompt,
-        "rag_template_reuse": _rag_template_reuse,
-        "agentic_tool_workflows": _agentic_tool_workflows,
-        "agent_trace_branching": _agent_trace_branching,
-        "multi_tenant_skew": _multi_tenant_skew,
-        "phase_shift_prompts": _phase_shift_prompts,
-        "long_context_mixed": _long_context_mixed,
-        "session_continuation_growth": _session_continuation_growth,
-        "hotset_cold_scan": _hotset_cold_scan,
-        "cyclic_working_set_pressure": _cyclic_working_set_pressure,
-        "cyclic_working_set_pressure_shifted": _cyclic_working_set_pressure_shifted,
-        "concurrent_long_generation": _concurrent_long_generation,
-        "reasoning_burst": _reasoning_burst,
-        "reasoning_burst_shifted": _reasoning_burst_shifted,
-        "stochastic_serving_mix": _stochastic_serving_mix,
-        "stochastic_serving_mix_shifted": _stochastic_serving_mix_shifted,
-        "rolling_template_versions": _rolling_template_versions,
-        "rolling_template_versions_shifted": _rolling_template_versions_shifted,
-        "heavy_tailed_prefix_lengths": _heavy_tailed_prefix_lengths,
-        "heavy_tailed_prefix_lengths_shifted": _heavy_tailed_prefix_lengths_shifted,
-        "priority_burst_recovery": _priority_burst_recovery,
-        "priority_burst_recovery_shifted": _priority_burst_recovery_shifted,
-        "priority_one_off_noise": _priority_one_off_noise,
-        "priority_one_off_noise_shifted": _priority_one_off_noise_shifted,
-        "tenant_phase_shift_cycles": _tenant_phase_shift_cycles,
-        "tenant_phase_shift_cycles_shifted": _tenant_phase_shift_cycles_shifted,
-        "adversarial_unique_prompts": _adversarial_unique_prompts,
-        "cross_family_mixture": _cross_family_mixture,
-        "tenant_session_reentry": _tenant_session_reentry,
-    }.get(family)
-    if builder is None:
-        raise ValueError(f"unknown workload family {family!r}")
-    return tuple(builder(request_count, block_size_tokens, rng))
-
-
 def _build_policy(
     factory: Callable[..., PrefixKVPolicy],
     capacity_blocks: int,
@@ -2366,1570 +2478,3 @@ class _FixedAdmissionPolicy:
     def on_cache_miss(self, block: PrefixBlockInfo, request: RequestInfo, now: int) -> None:
         self._admission_policy.on_cache_miss(block, request, now)
         self._eviction_policy.on_cache_miss(block, request, now)
-
-
-def _aggregate_by(
-    keys: Iterable[str],
-    trials: list[TrialMetrics],
-) -> dict[str, dict[str, float | int | bool | str]]:
-    grouped: dict[str, list[TrialMetrics]] = {}
-    for key, trial in zip(keys, trials):
-        grouped.setdefault(key, []).append(trial)
-    return {key: _aggregate_trials(value) for key, value in grouped.items()}
-
-
-def _aggregate_trials(
-    trials: list[TrialMetrics],
-) -> dict[str, float | int | bool | str]:
-    if not trials:
-        return {}
-    numeric_fields = [
-        "block_hit_rate",
-        "token_hit_rate",
-        "priority_weighted_token_hit_rate",
-        "high_priority_token_hit_rate",
-        "low_priority_token_hit_rate",
-        "priority_request_fraction",
-        "request_token_hit_rate_p10",
-        "request_token_hit_rate_p50",
-        "high_priority_request_token_hit_rate_p10",
-        "worst_quarter_token_hit_rate",
-        "final_quarter_token_hit_rate",
-        "quarter_token_hit_rate_stddev",
-        "prefill_tokens_saved",
-        "recompute_tokens",
-        "recompute_cost",
-        "lookup_block_count",
-        "lookup_blocks_per_request",
-        "eviction_count",
-        "admission_count",
-        "admission_score_count",
-        "admission_rejection_count",
-        "admission_rate",
-        "useful_admission_count",
-        "useful_admission_rate",
-        "wasted_admission_count",
-        "wasted_admission_rate",
-        "admitted_token_count",
-        "useful_admission_token_count",
-        "useful_admission_token_rate",
-        "wasted_admission_token_count",
-        "wasted_admission_token_rate",
-        "admission_saved_tokens",
-        "admission_saved_tokens_per_admission",
-        "admission_token_utility",
-        "evicted_without_hit_count",
-        "evicted_without_hit_rate",
-        "policy_bypass_tokens",
-        "policy_bypass_token_rate",
-        "policy_underfill_rate",
-        "cache_churn_per_1k",
-        "forced_bypass_count",
-        "forced_bypass_tokens",
-        "forced_bypass_token_rate",
-        "short_reuse_after_eviction_missed_tokens",
-        "short_reuse_after_eviction_missed_token_rate",
-        "eviction_reuse_distance_p50",
-        "eviction_reuse_distance_p95",
-        "avoidable_eviction_count",
-        "avoidable_eviction_rate",
-        "avoidable_short_reuse_eviction_count",
-        "avoidable_short_reuse_eviction_rate",
-        "tenant_count",
-        "tenant_fairness_penalty",
-        "tenant_token_hit_rate_p10",
-        "tenant_jain_fairness",
-        "p50_latency_proxy",
-        "p95_latency_proxy",
-        "p99_latency_proxy",
-        "high_priority_p95_latency_proxy",
-        "high_priority_p99_latency_proxy",
-        "p95_recompute_cost",
-        "recovery_request_count",
-        "recovery_token_hit_rate",
-        "recovery_p95_latency_proxy",
-        "recovery_phase_count",
-        "worst_recovery_phase_token_hit_rate",
-        "final_recovery_phase_token_hit_rate",
-        "worst_recovery_phase_p95_latency_proxy",
-        "memory_occupancy_mean",
-        "prefix_kv_occupancy_mean",
-        "decode_kv_occupancy_mean",
-        "decode_kv_blocks_requested",
-        "decode_kv_blocks_allocated",
-        "decode_kv_allocation_failure_blocks",
-        "decode_kv_allocation_failure_rate",
-        "decode_pressure_eviction_count",
-        "decode_pressure_eviction_rate",
-        "arrival_span_steps",
-        "max_prefill_cost",
-        "scoring_fn_complexity",
-    ]
-    result: dict[str, float | int | bool | str] = {
-        field: mean(float(getattr(trial, field)) for trial in trials) for field in numeric_fields
-    }
-    result["memory_occupancy_peak"] = max(trial.memory_occupancy_peak for trial in trials)
-    result["prefix_kv_occupancy_peak"] = max(trial.prefix_kv_occupancy_peak for trial in trials)
-    result["decode_kv_occupancy_peak"] = max(trial.decode_kv_occupancy_peak for trial in trials)
-    result["active_request_count_peak"] = max(trial.active_request_count_peak for trial in trials)
-    token_hit_rates = [trial.token_hit_rate for trial in trials]
-    result["token_hit_rate_worst_trial"] = min(token_hit_rates)
-    result["token_hit_rate_p10_across_trials"] = _percentile(token_hit_rates, 10)
-    result["token_hit_rate_stddev_across_trials"] = (
-        pstdev(token_hit_rates) if len(token_hit_rates) > 1 else 0.0
-    )
-    result["p95_latency_proxy_worst_trial"] = max(trial.p95_latency_proxy for trial in trials)
-    result["cache_churn_per_1k_worst_trial"] = max(trial.cache_churn_per_1k for trial in trials)
-    result["invalid_fraction"] = sum(1 for trial in trials if trial.invalid) / len(trials)
-    result["invalid"] = any(trial.invalid for trial in trials)
-    result["invalid_reason"] = "; ".join(
-        sorted({trial.invalid_reason for trial in trials if trial.invalid_reason})
-    )
-    structural_keys = sorted({key for trial in trials for key in trial.structural_metrics})
-    for key in structural_keys:
-        result[key] = mean(float(trial.structural_metrics.get(key, 0.0)) for trial in trials)
-    return result
-
-
-def _workload_base_score(
-    trials: list[TrialMetrics],
-    *,
-    token_weight: float,
-    block_weight: float,
-    request_tail_weight: float,
-    worst_window_weight: float,
-    priority_hit_weight: float,
-    wasted_admission_weight: float,
-    admission_utility_weight: float,
-    avoidable_eviction_weight: float,
-    latency_weight: float,
-    latency_cap: float,
-    latency_norm: float,
-) -> float:
-    token_score = token_weight * mean(trial.token_hit_rate for trial in trials)
-    block_score = block_weight * mean(trial.block_hit_rate for trial in trials)
-    request_tail_score = request_tail_weight * mean(
-        trial.request_token_hit_rate_p10 for trial in trials
-    )
-    worst_window_score = worst_window_weight * mean(
-        trial.worst_quarter_token_hit_rate for trial in trials
-    )
-    priority_trials = [trial for trial in trials if trial.priority_request_fraction > 0.0]
-    priority_score = (
-        priority_hit_weight * mean(trial.high_priority_token_hit_rate for trial in priority_trials)
-        if priority_trials
-        else 0.0
-    )
-    wasted_admission_cost = wasted_admission_weight * mean(
-        trial.wasted_admission_token_rate for trial in trials
-    )
-    admission_utility_score = admission_utility_weight * mean(
-        math.log1p(trial.admission_token_utility) for trial in trials
-    )
-    avoidable_eviction_cost = avoidable_eviction_weight * mean(
-        trial.avoidable_eviction_rate for trial in trials
-    )
-    latency = mean(trial.p95_latency_proxy for trial in trials)
-    if latency_norm <= 0.0:
-        latency_norm = max(
-            (trial.max_prefill_cost for trial in trials),
-            default=1.0,
-        )
-    latency_cost = min(
-        latency_cap,
-        latency_weight * latency / max(latency_norm, 1.0),
-    )
-    return (
-        token_score
-        + block_score
-        + request_tail_score
-        + worst_window_score
-        + priority_score
-        + admission_utility_score
-        - latency_cost
-        - wasted_admission_cost
-        - avoidable_eviction_cost
-    )
-
-
-def _percentile(values: list[float], percentile: int) -> float:
-    if not values:
-        return 0.0
-    if percentile == 50:
-        return float(median(values))
-    values = sorted(values)
-    index = math.ceil((percentile / 100.0) * len(values)) - 1
-    return float(values[max(0, min(index, len(values) - 1))])
-
-
-def _window_token_hit_rates(
-    request_hit_records: list[tuple[int, int]],
-    *,
-    window_count: int,
-) -> list[float]:
-    """Returns token-weighted hit rates for contiguous request windows."""
-
-    if not request_hit_records or window_count <= 0:
-        return []
-    effective_window_count = min(window_count, len(request_hit_records))
-    window_hits = [0] * effective_window_count
-    window_tokens = [0] * effective_window_count
-    for index, (hit_tokens, total_tokens) in enumerate(request_hit_records):
-        window = min(
-            effective_window_count - 1,
-            index * effective_window_count // len(request_hit_records),
-        )
-        window_hits[window] += hit_tokens
-        window_tokens[window] += total_tokens
-    return [
-        hits / tokens if tokens else 0.0
-        for hits, tokens in zip(window_hits, window_tokens, strict=True)
-    ]
-
-
-def _jain_fairness(values: list[float]) -> float:
-    """Returns Jain's fairness index, treating all-zero service as equal."""
-
-    if not values:
-        return 1.0
-    squared_sum = sum(value * value for value in values)
-    if squared_sum == 0.0:
-        return 1.0
-    return sum(values) ** 2 / (len(values) * squared_sum)
-
-
-def _stable_hash(value: object) -> int:
-    digest = hashlib.blake2b(repr(value).encode("utf-8"), digest_size=8).digest()
-    return int.from_bytes(digest, byteorder="big", signed=False)
-
-
-def _request_prefix_hashes(
-    request: WorkloadRequest,
-    block_size_tokens: int,
-) -> list[int]:
-    prefix_hashes: list[int] = []
-    prefix_tokens: list[int] = []
-    tokens = request.prompt_tokens or request.info.prompt_tokens
-    for start in range(0, len(tokens), block_size_tokens):
-        chunk = tokens[start : start + block_size_tokens]
-        prefix_tokens.extend(chunk)
-        prefix_hashes.append(_stable_hash((request.info.tenant_id, tuple(prefix_tokens))))
-    return prefix_hashes
-
-
-def _depth_band(depth: int) -> str:
-    for name, low, high in _DEPTH_BANDS:
-        if depth >= low and (high is None or depth <= high):
-            return name
-    return _DEPTH_BANDS[0][0]
-
-
-def _structural_metrics(
-    *,
-    depth_total_blocks: dict[str, int],
-    depth_hit_blocks: dict[str, int],
-    depth_total_tokens: dict[str, int],
-    depth_hit_tokens: dict[str, int],
-    prefix_role_hit_tokens: dict[str, int],
-    total_hit_tokens: int,
-    high_descendant_evictions: int,
-    eviction_count: int,
-    cold_deep_admission_opportunities: int,
-    cold_deep_admissions: int,
-    reuse_after_eviction_missed_blocks: int,
-    reuse_after_eviction_missed_tokens: int,
-    recompute_tokens: int,
-) -> dict[str, float]:
-    metrics: dict[str, float] = {}
-    for band, _, _ in _DEPTH_BANDS:
-        total_blocks = depth_total_blocks.get(band, 0)
-        total_tokens = depth_total_tokens.get(band, 0)
-        hit_blocks = depth_hit_blocks.get(band, 0)
-        hit_tokens = depth_hit_tokens.get(band, 0)
-        metrics[f"{band}_block_hit_rate"] = hit_blocks / total_blocks if total_blocks else 0.0
-        metrics[f"{band}_token_hit_rate"] = hit_tokens / total_tokens if total_tokens else 0.0
-        metrics[f"{band}_recompute_tokens_saved"] = float(hit_tokens)
-
-    metrics["high_descendant_eviction_count"] = float(high_descendant_evictions)
-    metrics["high_descendant_eviction_rate"] = (
-        high_descendant_evictions / eviction_count if eviction_count else 0.0
-    )
-    metrics["cold_deep_admission_opportunities"] = float(cold_deep_admission_opportunities)
-    metrics["cold_deep_admission_count"] = float(cold_deep_admissions)
-    metrics["cold_deep_admission_rate"] = (
-        cold_deep_admissions / cold_deep_admission_opportunities
-        if cold_deep_admission_opportunities
-        else 0.0
-    )
-    metrics["reuse_after_eviction_missed_blocks"] = float(reuse_after_eviction_missed_blocks)
-    metrics["reuse_after_eviction_missed_tokens"] = float(reuse_after_eviction_missed_tokens)
-    metrics["reuse_after_eviction_missed_token_rate"] = (
-        reuse_after_eviction_missed_tokens / recompute_tokens if recompute_tokens else 0.0
-    )
-    for role in _PREFIX_ROLES:
-        hit_tokens = prefix_role_hit_tokens.get(role, 0)
-        metrics[f"{role}_prefix_hit_tokens"] = float(hit_tokens)
-        metrics[f"{role}_prefix_hit_contribution"] = (
-            hit_tokens / total_hit_tokens if total_hit_tokens else 0.0
-        )
-    return metrics
-
-
-def _prefix_role(tokens: tuple[int, ...]) -> str:
-    roles = {_TOKEN_PREFIX_ROLES[token] for token in tokens if token in _TOKEN_PREFIX_ROLES}
-    if len(roles) == 1:
-        return roles.pop()
-    return "unknown"
-
-
-def _prefix_role_from_label(label: str) -> str:
-    if any(
-        marker in label
-        for marker in (
-            "tail",
-            "query",
-            "tool",
-            "retry",
-            "turn",
-            "scan",
-            "unique",
-        )
-    ):
-        return "user"
-    if any(
-        marker in label
-        for marker in (
-            "shared-system",
-            "rag/template",
-            "agent/root",
-            "/root/",
-        )
-    ):
-        return "system"
-    if any(
-        marker in label
-        for marker in (
-            "shared-task",
-            "rag/chunk",
-            "agent/branch",
-            "schema",
-            "/branch/",
-            "doc/",
-        )
-    ):
-        return "developer"
-    return "unknown"
-
-
-def _block(
-    label: str,
-    block_size_tokens: int,
-    token_count: int | None = None,
-) -> tuple[int, ...]:
-    count = block_size_tokens if token_count is None else max(1, token_count)
-    base = _stable_hash(label) % 1_000_000
-    tokens = tuple(base + index for index in range(count))
-    role = _prefix_role_from_label(label)
-    if role != "unknown":
-        for token in tokens:
-            _TOKEN_PREFIX_ROLES[token] = role
-    return tokens
-
-
-def _partial_tail(label: str, block_size_tokens: int) -> tuple[int, ...]:
-    token_count = 1 + (_stable_hash(label) % max(block_size_tokens - 1, 1))
-    return _block(label, block_size_tokens, token_count=token_count)
-
-
-def _request(
-    *,
-    request_id: int,
-    tenant_id: int,
-    session_id: int,
-    blocks: list[tuple[int, ...]],
-    request_type: str,
-    priority: int = 0,
-    true_output_length: int = 96,
-    predicted_output_length: int | None = None,
-    arrival_step: int | None = None,
-) -> WorkloadRequest:
-    tokens = tuple(token for block in blocks for token in block)
-    return WorkloadRequest(
-        info=RequestInfo(
-            request_id=request_id,
-            tenant_id=tenant_id,
-            session_id=session_id,
-            prompt_length=len(tokens),
-            priority=priority,
-            request_type=request_type,
-            prompt_tokens=(),
-            predicted_output_length=predicted_output_length,
-        ),
-        true_output_length=true_output_length,
-        prompt_tokens=tokens,
-        arrival_step=arrival_step,
-    )
-
-
-def _reindex_request(
-    request: WorkloadRequest,
-    *,
-    request_id: int,
-    request_type: str,
-    arrival_step: int | None = None,
-) -> WorkloadRequest:
-    """Copies a workload request with a new position and descriptive type."""
-    info = request.info
-    return WorkloadRequest(
-        info=RequestInfo(
-            request_id=request_id,
-            tenant_id=info.tenant_id,
-            session_id=info.session_id,
-            prompt_length=info.prompt_length,
-            priority=info.priority,
-            request_type=request_type,
-            prompt_tokens=info.prompt_tokens,
-            predicted_output_length=info.predicted_output_length,
-        ),
-        true_output_length=request.true_output_length,
-        prompt_tokens=request.prompt_tokens,
-        arrival_step=request.arrival_step if arrival_step is None else arrival_step,
-    )
-
-
-def _shared_system_prompt(count: int, block_size: int, rng: random.Random) -> list[WorkloadRequest]:
-    system = [
-        _block("shared-system/a", block_size),
-        _block("shared-system/b", block_size),
-    ]
-    tasks = [_block(f"shared-task/{idx}", block_size) for idx in range(5)]
-    requests = []
-    for request_id in range(count):
-        task = tasks[request_id % len(tasks)]
-        tail = _partial_tail(f"shared-tail/{request_id % 11}", block_size)
-        requests.append(
-            _request(
-                request_id=request_id,
-                tenant_id=0,
-                session_id=request_id % 8,
-                blocks=[*system, task, tail],
-                request_type="chat",
-                true_output_length=64 + rng.randrange(96),
-            )
-        )
-    return requests
-
-
-def _rag_template_reuse(count: int, block_size: int, rng: random.Random) -> list[WorkloadRequest]:
-    template = [
-        _block("rag/template/a", block_size),
-        _block("rag/template/b", block_size),
-    ]
-    chunks = [_block(f"rag/chunk/{idx}", block_size) for idx in range(8)]
-    requests = []
-    for request_id in range(count):
-        chunk = chunks[(request_id // 2 + request_id) % len(chunks)]
-        suffix = _partial_tail(f"rag/query/{request_id % 17}", block_size)
-        requests.append(
-            _request(
-                request_id=request_id,
-                tenant_id=0,
-                session_id=request_id % 13,
-                blocks=[*template, chunk, suffix],
-                request_type="rag",
-                true_output_length=48 + rng.randrange(80),
-            )
-        )
-    return requests
-
-
-def _long_context_mixed(count: int, block_size: int, rng: random.Random) -> list[WorkloadRequest]:
-    docs = [[_block(f"doc/{doc}/block/{idx}", block_size) for idx in range(6)] for doc in range(4)]
-    requests = []
-    for request_id in range(count):
-        doc = docs[(request_id // 3) % len(docs)]
-        length = 3 + (request_id % 4)
-        tail = _partial_tail(f"doc/tail/{request_id % 19}", block_size)
-        requests.append(
-            _request(
-                request_id=request_id,
-                tenant_id=0,
-                session_id=request_id % 9,
-                blocks=[*doc[:length], tail],
-                request_type="long_context",
-                true_output_length=96 + rng.randrange(160),
-            )
-        )
-    return requests
-
-
-def _session_continuation_growth(
-    count: int, block_size: int, rng: random.Random
-) -> list[WorkloadRequest]:
-    system = [
-        _block("session/shared-system/a", block_size),
-        _block("session/shared-system/b", block_size),
-    ]
-    session_count = 4
-    session_roots = {
-        session_id: _block(f"session/{session_id}/root", block_size)
-        for session_id in range(session_count)
-    }
-    histories: dict[int, list[tuple[int, ...]]] = {
-        session_id: [] for session_id in range(session_count)
-    }
-    requests = []
-    for request_id in range(count):
-        session_id = request_id % session_count
-        turn = _block(
-            f"session/{session_id}/turn/{len(histories[session_id])}",
-            block_size,
-        )
-        histories[session_id].append(turn)
-        requests.append(
-            _request(
-                request_id=request_id,
-                tenant_id=0,
-                session_id=session_id,
-                blocks=[*system, session_roots[session_id], *histories[session_id]],
-                request_type="session_continuation",
-                true_output_length=64 + rng.randrange(128),
-            )
-        )
-    return requests
-
-
-def _agentic_tool_workflows(
-    count: int, block_size: int, rng: random.Random
-) -> list[WorkloadRequest]:
-    """Build interleaved tool workflows with forks, resumptions, and replans."""
-
-    root = [
-        _block("agentic/root/system", block_size),
-        _block("agentic/root/instructions", block_size),
-    ]
-    schemas = [
-        _block("agentic/schema/actions", block_size),
-        _block("agentic/schema/observations", block_size),
-    ]
-    workflow_count = 6
-    workflow_roots = {
-        workflow_id: _block(f"agentic/workflow/{workflow_id}/branch/root", block_size)
-        for workflow_id in range(workflow_count)
-    }
-    action_blocks = [
-        _block(f"agentic/tool/action/{action_id}", block_size) for action_id in range(10)
-    ]
-    shared_observations = [
-        _block(f"agentic/tool/observation/shared/{observation_id}", block_size)
-        for observation_id in range(12)
-    ]
-    routes: dict[tuple[int, int], list[tuple[int, ...]]] = {
-        (workflow_id, route_id): []
-        for workflow_id in range(workflow_count)
-        for route_id in range(2)
-    }
-    active_routes = {workflow_id: 0 for workflow_id in range(workflow_count)}
-    workflow_visits = {workflow_id: 0 for workflow_id in range(workflow_count)}
-    workflow_schedule = (0, 1, 2, 0, 3, 1, 4, 0, 5, 2, 1, 3)
-    requests = []
-    for request_id in range(count):
-        workflow_id = workflow_schedule[request_id % len(workflow_schedule)]
-        visit_index = workflow_visits[workflow_id]
-        workflow_visits[workflow_id] += 1
-        route_id = active_routes[workflow_id]
-        history = list(routes[(workflow_id, route_id)])
-        other_route_id = 1 - route_id
-        other_history = routes[(workflow_id, other_route_id)]
-        request_type = "agentic_step"
-
-        if visit_index % 11 == 5:
-            route_id = other_route_id
-            history = list(history)
-            active_routes[workflow_id] = route_id
-            request_type = "agentic_fork"
-        elif visit_index % 13 == 9 and len(history) >= 6:
-            rollback_blocks = min(len(history), 2 + visit_index % 3)
-            history = history[:-rollback_blocks]
-            request_type = "agentic_replan"
-        elif visit_index % 7 == 6 and other_history:
-            route_id = other_route_id
-            history = list(other_history)
-            active_routes[workflow_id] = route_id
-            request_type = "agentic_resume"
-
-        step_count = 1 + int(request_id % 4 == 0) + int(request_id % 15 == 0)
-        for step_index in range(step_count):
-            action_id = (request_id * 3 + workflow_id * 5 + route_id + step_index) % len(
-                action_blocks
-            )
-            history.append(action_blocks[action_id])
-            if (request_id + workflow_id + step_index) % 3 == 0:
-                observation_id = (action_id + request_id // 3 + route_id) % len(shared_observations)
-                history.append(shared_observations[observation_id])
-            else:
-                history.append(
-                    _block(
-                        "agentic/tool/observation/unique/"
-                        f"{workflow_id}/{route_id}/{request_id}/{step_index}",
-                        block_size,
-                    )
-                )
-        routes[(workflow_id, route_id)] = history
-        tail = _partial_tail(
-            f"agentic/tail/{workflow_id}/{route_id}/{request_id}",
-            block_size,
-        )
-        requests.append(
-            _request(
-                request_id=request_id,
-                tenant_id=0,
-                session_id=workflow_id * 10 + route_id,
-                blocks=[
-                    *root,
-                    *schemas,
-                    workflow_roots[workflow_id],
-                    *history,
-                    tail,
-                ],
-                request_type=request_type,
-                true_output_length=80 + rng.randrange(224),
-            )
-        )
-    return requests
-
-
-def _agent_trace_branching(
-    count: int, block_size: int, rng: random.Random
-) -> list[WorkloadRequest]:
-    root = [_block("agent/root/a", block_size), _block("agent/root/b", block_size)]
-    schema = [_block(f"agent/schema/{index}", block_size) for index in range(3)]
-    branches = [_block(f"agent/branch/{idx}", block_size) for idx in range(4)]
-    tool_calls = [_block(f"agent/tool-call/{idx}", block_size) for idx in range(6)]
-    tool_results = [_block(f"agent/tool-result/shared/{idx}", block_size) for idx in range(8)]
-    histories: dict[int, list[tuple[int, ...]]] = {
-        branch_index: [] for branch_index in range(len(branches))
-    }
-    requests = []
-    for request_id in range(count):
-        branch_idx = (request_id // 2 + request_id) % len(branches)
-        history = list(histories[branch_idx])
-        request_type = "agent_loop"
-        if request_id % 11 == 10 and len(history) >= 4:
-            history = history[:-2]
-            request_type = "agent_retry"
-
-        loop_count = 1 + int(request_id % 3 == 0)
-        for loop_index in range(loop_count):
-            tool_index = (request_id + branch_idx * 3 + loop_index) % len(tool_calls)
-            history.append(tool_calls[tool_index])
-            if (request_id + loop_index) % 4 == 0:
-                result_index = (tool_index + request_id // 4) % len(tool_results)
-                history.append(tool_results[result_index])
-            else:
-                history.append(
-                    _block(
-                        f"agent/tool-result/unique/{branch_idx}/{request_id}/{loop_index}",
-                        block_size,
-                    )
-                )
-        histories[branch_idx] = history
-        tail = _partial_tail(f"agent/tail/{branch_idx}/{request_id}", block_size)
-        requests.append(
-            _request(
-                request_id=request_id,
-                tenant_id=0,
-                session_id=branch_idx,
-                blocks=[*root, *schema, branches[branch_idx], *history, tail],
-                request_type=request_type,
-                true_output_length=96 + rng.randrange(192),
-            )
-        )
-    return requests
-
-
-def _multi_tenant_skew(count: int, block_size: int, rng: random.Random) -> list[WorkloadRequest]:
-    tenant_roots = {
-        tenant: [_block(f"tenant/{tenant}/root/{idx}", block_size) for idx in range(2)]
-        for tenant in range(3)
-    }
-    requests = []
-    for request_id in range(count):
-        tenant = 0 if request_id % 6 in {0, 1, 2, 3} else (1 if request_id % 6 == 4 else 2)
-        branch = _block(f"tenant/{tenant}/branch/{request_id % 5}", block_size)
-        tail = _partial_tail(f"tenant/{tenant}/tail/{request_id % 13}", block_size)
-        requests.append(
-            _request(
-                request_id=request_id,
-                tenant_id=tenant,
-                session_id=tenant * 100 + request_id % 9,
-                blocks=[*tenant_roots[tenant], branch, tail],
-                request_type="tenant",
-                true_output_length=64 + rng.randrange(128),
-            )
-        )
-    return requests
-
-
-def _phase_shift_prompts(count: int, block_size: int, rng: random.Random) -> list[WorkloadRequest]:
-    phases = [
-        [_block(f"phase/{phase}/root/{idx}", block_size) for idx in range(2)] for phase in range(2)
-    ]
-    requests = []
-    for request_id in range(count):
-        phase = 0 if request_id < count // 2 else 1
-        branch = _block(f"phase/{phase}/branch/{request_id % 6}", block_size)
-        tail = _partial_tail(f"phase/{phase}/tail/{request_id % 11}", block_size)
-        requests.append(
-            _request(
-                request_id=request_id,
-                tenant_id=0,
-                session_id=request_id % 10,
-                blocks=[*phases[phase], branch, tail],
-                request_type="phase_shift",
-                true_output_length=64 + rng.randrange(128),
-            )
-        )
-    return requests
-
-
-def _hotset_cold_scan(count: int, block_size: int, rng: random.Random) -> list[WorkloadRequest]:
-    hot_root = [
-        _block("hotset/root/a", block_size),
-        _block("hotset/root/b", block_size),
-    ]
-    hot_prompts = [
-        [
-            *hot_root,
-            _block(f"hotset/branch/{index}", block_size),
-            _partial_tail(f"hotset/tail/{index}", block_size),
-        ]
-        for index in range(4)
-    ]
-    warm_count = count // 3
-    scan_end = 2 * warm_count
-    requests = []
-    for request_id in range(count):
-        if warm_count <= request_id < scan_end:
-            blocks = [_block(f"scan/{request_id}/block/{index}", block_size) for index in range(4)]
-            blocks[-1] = _partial_tail(f"scan/{request_id}/tail", block_size)
-            request_type = "cold_scan"
-        else:
-            hot_index = request_id % len(hot_prompts)
-            blocks = hot_prompts[hot_index]
-            request_type = "hotset"
-        requests.append(
-            _request(
-                request_id=request_id,
-                tenant_id=0,
-                session_id=request_id % len(hot_prompts),
-                blocks=blocks,
-                request_type=request_type,
-                true_output_length=32 + rng.randrange(64),
-            )
-        )
-    return requests
-
-
-def _cyclic_working_set_pressure(
-    count: int, block_size: int, rng: random.Random
-) -> list[WorkloadRequest]:
-    return _cyclic_working_set_pressure_workload(
-        count,
-        block_size,
-        rng,
-        shifted=False,
-    )
-
-
-def _cyclic_working_set_pressure_shifted(
-    count: int, block_size: int, rng: random.Random
-) -> list[WorkloadRequest]:
-    return _cyclic_working_set_pressure_workload(
-        count,
-        block_size,
-        rng,
-        shifted=True,
-    )
-
-
-def _cyclic_working_set_pressure_workload(
-    count: int,
-    block_size: int,
-    rng: random.Random,
-    *,
-    shifted: bool,
-) -> list[WorkloadRequest]:
-    """Builds cyclic working sets slightly larger than common cache capacities."""
-
-    root = [
-        _block("cyclic/root/system", block_size),
-        _block("cyclic/root/instructions", block_size),
-    ]
-    small_set_size = 12 if shifted else 9
-    large_set_size = 22 if shifted else 17
-    prompt_count = large_set_size
-    prompts = [
-        [
-            *root,
-            _block(f"cyclic/prompt/{index}/branch", block_size),
-            _block(f"cyclic/prompt/{index}/context", block_size),
-            _partial_tail(f"cyclic/prompt/{index}/tail", block_size),
-        ]
-        for index in range(prompt_count)
-    ]
-    requests = []
-    for request_id in range(count):
-        in_large_phase = request_id >= count // 2
-        working_set_size = large_set_size if in_large_phase else small_set_size
-        cycle_position = request_id if not shifted else request_id * 5
-        prompt_index = cycle_position % working_set_size
-        requests.append(
-            _request(
-                request_id=request_id,
-                tenant_id=0,
-                session_id=prompt_index,
-                blocks=prompts[prompt_index],
-                request_type=(
-                    "cyclic_working_set_large" if in_large_phase else "cyclic_working_set_small"
-                ),
-                true_output_length=48 + rng.randrange(96),
-            )
-        )
-    return requests
-
-
-def _concurrent_long_generation(
-    count: int, block_size: int, rng: random.Random
-) -> list[WorkloadRequest]:
-    root = [
-        _block("concurrent/root/a", block_size),
-        _block("concurrent/root/b", block_size),
-    ]
-    branches = [_block(f"concurrent/branch/{index}", block_size) for index in range(12)]
-    requests = []
-    for request_id in range(count):
-        branch_index = request_id % len(branches)
-        predicted_output_length = 512 + 64 * (request_id % 4)
-        true_output_length = predicted_output_length + rng.randrange(-64, 65)
-        requests.append(
-            _request(
-                request_id=request_id,
-                tenant_id=0,
-                session_id=branch_index,
-                blocks=[
-                    *root,
-                    branches[branch_index],
-                    _partial_tail(f"concurrent/tail/{request_id % 24}", block_size),
-                ],
-                request_type="long_generation",
-                true_output_length=true_output_length,
-                predicted_output_length=predicted_output_length,
-                arrival_step=request_id // 2,
-            )
-        )
-    return requests
-
-
-def _reasoning_burst(count: int, block_size: int, rng: random.Random) -> list[WorkloadRequest]:
-    return _reasoning_burst_workload(count, block_size, rng, shifted=False)
-
-
-def _reasoning_burst_shifted(
-    count: int, block_size: int, rng: random.Random
-) -> list[WorkloadRequest]:
-    return _reasoning_burst_workload(count, block_size, rng, shifted=True)
-
-
-def _reasoning_burst_workload(
-    count: int,
-    block_size: int,
-    rng: random.Random,
-    *,
-    shifted: bool,
-) -> list[WorkloadRequest]:
-    """Builds microbursts with noisy, heavy-tailed reasoning outputs."""
-
-    root = [
-        _block("reasoning/system", block_size),
-        _block("reasoning/developer", block_size),
-        _block("reasoning/shared-task", block_size),
-    ]
-    branches = [_block(f"reasoning/branch/{index}", block_size) for index in range(10)]
-    tools = [_block(f"reasoning/schema/{index}", block_size) for index in range(4)]
-    long_lengths = (768, 1280, 2048, 3072) if shifted else (384, 640, 1024, 1536)
-    burst_width = 4 if shifted else 3
-    requests = []
-    for request_id in range(count):
-        is_reasoning = request_id % 4 != 3
-        branch_index = (request_id * (3 if shifted else 1)) % len(branches)
-        if is_reasoning:
-            true_output_length = long_lengths[request_id % len(long_lengths)]
-            prediction_scale = rng.choice((0.60, 0.75, 0.90, 1.10, 1.25))
-            request_type = "reasoning_generation_shifted" if shifted else "reasoning_generation"
-        else:
-            true_output_length = 32 + 16 * (request_id % 4)
-            prediction_scale = rng.choice((0.80, 1.00, 1.20))
-            request_type = "reasoning_followup_shifted" if shifted else "reasoning_followup"
-        predicted_output_length = max(1, round(true_output_length * prediction_scale))
-        requests.append(
-            _request(
-                request_id=request_id,
-                tenant_id=request_id % 2,
-                session_id=branch_index,
-                blocks=[
-                    *root,
-                    branches[branch_index],
-                    tools[branch_index % len(tools)],
-                    _partial_tail(
-                        f"reasoning/tail/{branch_index}/{request_id % 3}",
-                        block_size,
-                    ),
-                ],
-                request_type=request_type,
-                priority=int(request_id % 7 == 0),
-                true_output_length=true_output_length,
-                predicted_output_length=predicted_output_length,
-                arrival_step=request_id // burst_width,
-            )
-        )
-    return requests
-
-
-def _stochastic_serving_mix(
-    count: int, block_size: int, rng: random.Random
-) -> list[WorkloadRequest]:
-    return _stochastic_serving_mix_workload(count, block_size, rng, shifted=False)
-
-
-def _stochastic_serving_mix_shifted(
-    count: int, block_size: int, rng: random.Random
-) -> list[WorkloadRequest]:
-    return _stochastic_serving_mix_workload(count, block_size, rng, shifted=True)
-
-
-def _stochastic_serving_mix_workload(
-    count: int,
-    block_size: int,
-    rng: random.Random,
-    *,
-    shifted: bool,
-) -> list[WorkloadRequest]:
-    source_requests = {
-        "chat": _shared_system_prompt(count, block_size, rng),
-        "rag": _rag_template_reuse(count, block_size, rng),
-        "agent": _agentic_tool_workflows(count, block_size, rng),
-        "long": _concurrent_long_generation(count, block_size, rng),
-        "oneoff": _adversarial_unique_prompts(count, block_size, rng),
-    }
-    source_indices = {source_name: 0 for source_name in source_requests}
-    if shifted:
-        regimes = (
-            (
-                ("chat", 0.20),
-                ("rag", 0.15),
-                ("agent", 0.35),
-                ("long", 0.20),
-                ("oneoff", 0.10),
-            ),
-            (
-                ("chat", 0.10),
-                ("rag", 0.10),
-                ("agent", 0.25),
-                ("long", 0.35),
-                ("oneoff", 0.20),
-            ),
-            (
-                ("chat", 0.10),
-                ("rag", 0.10),
-                ("agent", 0.15),
-                ("long", 0.20),
-                ("oneoff", 0.45),
-            ),
-        )
-        burst_probability = 0.70
-        max_burst_length = 7
-        arrival_gaps = (0, 1, 2, 5)
-        arrival_gap_weights = (0.55, 0.30, 0.10, 0.05)
-    else:
-        regimes = (
-            (
-                ("chat", 0.45),
-                ("rag", 0.25),
-                ("agent", 0.15),
-                ("long", 0.10),
-                ("oneoff", 0.05),
-            ),
-            (
-                ("chat", 0.15),
-                ("rag", 0.20),
-                ("agent", 0.35),
-                ("long", 0.20),
-                ("oneoff", 0.10),
-            ),
-            (
-                ("chat", 0.25),
-                ("rag", 0.15),
-                ("agent", 0.10),
-                ("long", 0.15),
-                ("oneoff", 0.35),
-            ),
-        )
-        burst_probability = 0.55
-        max_burst_length = 5
-        arrival_gaps = (0, 1, 2, 5)
-        arrival_gap_weights = (0.35, 0.45, 0.15, 0.05)
-
-    requests = []
-    active_source = ""
-    remaining_burst = 0
-    arrival_step = 0
-    for request_id in range(count):
-        if request_id:
-            arrival_step += rng.choices(arrival_gaps, weights=arrival_gap_weights, k=1)[0]
-        regime_index = min(2, request_id * len(regimes) // max(1, count))
-        choices, weights = zip(*regimes[regime_index], strict=True)
-        if remaining_burst <= 0:
-            active_source = rng.choices(choices, weights=weights, k=1)[0]
-            if rng.random() < burst_probability:
-                remaining_burst = rng.randrange(2, max_burst_length + 1) - 1
-        else:
-            remaining_burst -= 1
-
-        source_index = source_indices[active_source]
-        source_request = source_requests[active_source][source_index % count]
-        source_indices[active_source] += 1
-        requests.append(
-            _reindex_request(
-                source_request,
-                request_id=request_id,
-                request_type=f"mix_{active_source}_{source_request.info.request_type}",
-                arrival_step=arrival_step,
-            )
-        )
-    return requests
-
-
-def _rolling_template_versions(
-    count: int, block_size: int, rng: random.Random
-) -> list[WorkloadRequest]:
-    return _rolling_template_versions_workload(count, block_size, rng, shifted=False)
-
-
-def _rolling_template_versions_shifted(
-    count: int, block_size: int, rng: random.Random
-) -> list[WorkloadRequest]:
-    return _rolling_template_versions_workload(count, block_size, rng, shifted=True)
-
-
-def _rolling_template_versions_workload(
-    count: int,
-    block_size: int,
-    rng: random.Random,
-    *,
-    shifted: bool,
-) -> list[WorkloadRequest]:
-    shared_root = _block("rolling/root/shared", block_size)
-    templates = {
-        0: [
-            shared_root,
-            _block("rolling/version/0/instructions", block_size),
-            _block("rolling/version/0/schema", block_size),
-        ],
-        1: [
-            shared_root,
-            _block("rolling/version/1/instructions", block_size),
-            _block("rolling/version/1/schema", block_size),
-        ],
-        2: [
-            _block("rolling/root/revised", block_size),
-            _block("rolling/version/2/instructions", block_size),
-            _block("rolling/version/2/schema", block_size),
-        ],
-    }
-    tasks = [_block(f"rolling/task/{index}", block_size) for index in range(6)]
-    requests = []
-    for request_id in range(count):
-        phase = min(3, request_id * 4 // max(1, count))
-        if shifted:
-            if phase == 0:
-                version = 0
-            elif phase == 1:
-                version = int(request_id % 3 == 0)
-            elif phase == 2:
-                version = 1
-            else:
-                version = 2 if request_id % 3 else 1
-        elif phase == 0:
-            version = 0
-        elif phase == 1:
-            version = int(request_id % 4 == 0)
-        elif phase == 2:
-            version = int(request_id % 4 != 0)
-        else:
-            version = int(request_id % 5 == 0)
-
-        task_index = (request_id + version * 2) % len(tasks)
-        requests.append(
-            _request(
-                request_id=request_id,
-                tenant_id=0,
-                session_id=request_id % 12,
-                blocks=[
-                    *templates[version],
-                    tasks[task_index],
-                    _partial_tail(f"rolling/tail/{request_id}", block_size),
-                ],
-                request_type=f"rolling_template_v{version}",
-                true_output_length=80 + rng.randrange(112),
-            )
-        )
-    return requests
-
-
-def _heavy_tailed_prefix_lengths(
-    count: int, block_size: int, rng: random.Random
-) -> list[WorkloadRequest]:
-    return _heavy_tailed_prefix_lengths_workload(count, block_size, rng, shifted=False)
-
-
-def _heavy_tailed_prefix_lengths_shifted(
-    count: int, block_size: int, rng: random.Random
-) -> list[WorkloadRequest]:
-    return _heavy_tailed_prefix_lengths_workload(count, block_size, rng, shifted=True)
-
-
-def _heavy_tailed_prefix_lengths_workload(
-    count: int,
-    block_size: int,
-    rng: random.Random,
-    *,
-    shifted: bool,
-) -> list[WorkloadRequest]:
-    alpha = 1.25 if shifted else 1.55
-    max_depth = 32 if shifted else 20
-    doc_count = 6 if shifted else 4
-    docs = [
-        [_block(f"heavy/doc/{doc_index}/chunk/{depth}", block_size) for depth in range(max_depth)]
-        for doc_index in range(doc_count)
-    ]
-    doc_weights = list(range(doc_count, 0, -1))
-    root = [
-        _block("heavy/root/system", block_size),
-        _block("heavy/root/instructions", block_size),
-    ]
-    requests = []
-    for request_id in range(count):
-        doc_index = rng.choices(range(doc_count), weights=doc_weights, k=1)[0]
-        body_depth = min(
-            max_depth,
-            max(2, int(1 + rng.paretovariate(alpha) * (3 if shifted else 2))),
-        )
-        requests.append(
-            _request(
-                request_id=request_id,
-                tenant_id=request_id % 3,
-                session_id=request_id % 16,
-                blocks=[
-                    *root,
-                    *docs[doc_index][:body_depth],
-                    _partial_tail(f"heavy/tail/{request_id}", block_size),
-                ],
-                request_type="heavy_tailed_prefix",
-                true_output_length=64 + rng.randrange(224),
-            )
-        )
-    return requests
-
-
-def _priority_burst_recovery(
-    count: int, block_size: int, rng: random.Random
-) -> list[WorkloadRequest]:
-    return _priority_burst_recovery_workload(count, block_size, rng, shifted=False)
-
-
-def _priority_burst_recovery_shifted(
-    count: int, block_size: int, rng: random.Random
-) -> list[WorkloadRequest]:
-    return _priority_burst_recovery_workload(count, block_size, rng, shifted=True)
-
-
-def _priority_burst_recovery_workload(
-    count: int,
-    block_size: int,
-    rng: random.Random,
-    *,
-    shifted: bool,
-) -> list[WorkloadRequest]:
-    high_priority = 5 if shifted else 3
-    medium_priority = 2 if shifted else 1
-    hot_prompt_count = 6 if shifted else 4
-    scan_depth = 8 if shifted else 6
-    high_during_burst_interval = 7 if shifted else 5
-    root = [
-        _block("priority/root/system", block_size),
-        _block("priority/root/instructions", block_size),
-    ]
-    hot_prompts = [
-        [
-            *root,
-            _block(f"priority/hot/{index}/branch", block_size),
-            _block(f"priority/hot/{index}/context", block_size),
-            _partial_tail(f"priority/hot/{index}/tail", block_size),
-        ]
-        for index in range(hot_prompt_count)
-    ]
-    medium_prompts = [
-        [
-            *root,
-            _block(f"priority/medium/{index}/branch", block_size),
-            _partial_tail(f"priority/medium/{index}/tail", block_size),
-        ]
-        for index in range(3)
-    ]
-    warm_end = max(1, count // 4)
-    burst_end = max(warm_end + 1, 3 * count // 4)
-    requests = []
-    arrival_step = 0
-    for request_id in range(count):
-        if request_id < warm_end:
-            hot_index = request_id % len(hot_prompts)
-            blocks = hot_prompts[hot_index]
-            priority = high_priority
-            request_type = "priority_hot_warm"
-        elif request_id < burst_end:
-            burst_index = request_id - warm_end
-            if burst_index % high_during_burst_interval == 0:
-                hot_index = (request_id + burst_index // 2) % len(hot_prompts)
-                blocks = hot_prompts[hot_index]
-                priority = high_priority
-                request_type = "priority_hot_during_burst"
-            else:
-                blocks = [
-                    _block(
-                        f"priority/background/{request_id}/block/{depth}",
-                        block_size,
-                    )
-                    for depth in range(scan_depth)
-                ]
-                blocks[-1] = _partial_tail(f"priority/background/{request_id}/tail", block_size)
-                priority = 0
-                request_type = "priority_background_scan"
-        elif request_id % 5 == 0:
-            medium_index = request_id % len(medium_prompts)
-            blocks = medium_prompts[medium_index]
-            priority = medium_priority
-            request_type = "priority_medium_recovery"
-        else:
-            hot_index = request_id % len(hot_prompts)
-            blocks = hot_prompts[hot_index]
-            priority = high_priority
-            request_type = "priority_hot_recovery"
-
-        if request_id:
-            arrival_step += (
-                rng.choice((0, 0, 1))
-                if warm_end <= request_id < burst_end
-                else rng.choice((1, 1, 2))
-            )
-        requests.append(
-            _request(
-                request_id=request_id,
-                tenant_id=0,
-                session_id=priority * 100 + request_id % max(1, hot_prompt_count),
-                blocks=blocks,
-                request_type=request_type,
-                priority=priority,
-                true_output_length=(
-                    128 + rng.randrange(160) if priority > 0 else 24 + rng.randrange(48)
-                ),
-                arrival_step=arrival_step,
-            )
-        )
-    return requests
-
-
-def _priority_one_off_noise(
-    count: int, block_size: int, rng: random.Random
-) -> list[WorkloadRequest]:
-    return _priority_one_off_noise_workload(count, block_size, rng, shifted=False)
-
-
-def _priority_one_off_noise_shifted(
-    count: int, block_size: int, rng: random.Random
-) -> list[WorkloadRequest]:
-    return _priority_one_off_noise_workload(count, block_size, rng, shifted=True)
-
-
-def _priority_one_off_noise_workload(
-    count: int,
-    block_size: int,
-    rng: random.Random,
-    *,
-    shifted: bool,
-) -> list[WorkloadRequest]:
-    """Mixes reusable normal traffic with high-priority one-off requests."""
-
-    normal_root = [
-        _block("priority-noise/normal/root/system", block_size),
-        _block("priority-noise/normal/root/instructions", block_size),
-    ]
-    normal_prompt_count = 7 if shifted else 5
-    normal_prompts = [
-        [
-            *normal_root,
-            _block(f"priority-noise/normal/{index}/branch", block_size),
-            _block(f"priority-noise/normal/{index}/context", block_size),
-            _partial_tail(f"priority-noise/normal/{index}/tail", block_size),
-        ]
-        for index in range(normal_prompt_count)
-    ]
-    high_priority_root = _block("priority-noise/high/root/shared", block_size)
-    sequence_length = 5
-    high_priority_positions = {2, 3, 4} if shifted else {3, 4}
-    high_priority = 6 if shifted else 4
-    unique_depth = 8 if shifted else 6
-    requests = []
-    for request_id in range(count):
-        if request_id % sequence_length in high_priority_positions:
-            blocks = [
-                high_priority_root,
-                *[
-                    _block(
-                        f"priority-noise/high/{request_id}/unique/{depth}",
-                        block_size,
-                    )
-                    for depth in range(unique_depth - 1)
-                ],
-            ]
-            blocks[-1] = _partial_tail(
-                f"priority-noise/high/{request_id}/tail",
-                block_size,
-            )
-            priority = high_priority
-            request_type = "priority_one_off_noise"
-            session_id = 10_000 + request_id
-        else:
-            normal_index = (request_id // sequence_length + request_id) % len(normal_prompts)
-            blocks = normal_prompts[normal_index]
-            priority = 0
-            request_type = "priority_normal_recurring"
-            session_id = normal_index
-        requests.append(
-            _request(
-                request_id=request_id,
-                tenant_id=0,
-                session_id=session_id,
-                blocks=blocks,
-                request_type=request_type,
-                priority=priority,
-                true_output_length=(
-                    160 + rng.randrange(192) if priority > 0 else 48 + rng.randrange(80)
-                ),
-            )
-        )
-    return requests
-
-
-def _tenant_phase_shift_cycles(
-    count: int, block_size: int, rng: random.Random
-) -> list[WorkloadRequest]:
-    return _tenant_phase_shift_cycles_workload(count, block_size, rng, shifted=False)
-
-
-def _tenant_phase_shift_cycles_shifted(
-    count: int, block_size: int, rng: random.Random
-) -> list[WorkloadRequest]:
-    return _tenant_phase_shift_cycles_workload(count, block_size, rng, shifted=True)
-
-
-def _tenant_phase_shift_cycles_workload(
-    count: int,
-    block_size: int,
-    rng: random.Random,
-    *,
-    shifted: bool,
-) -> list[WorkloadRequest]:
-    """Builds repeated tenant phase shifts with pollution and delayed recovery."""
-
-    tenant_count = 5 if shifted else 4
-    hot_prompt_count = 5 if shifted else 4
-    pollution_depth = 10 if shifted else 7
-    cycle_count = 8 if shifted else 6
-    tenant_roots = {
-        tenant: [
-            _block(f"tenant-cycle/{tenant}/root/system", block_size),
-            _block(f"tenant-cycle/{tenant}/root/instructions", block_size),
-        ]
-        for tenant in range(tenant_count)
-    }
-    hot_prompts = {
-        tenant: [
-            [
-                *tenant_roots[tenant],
-                _block(f"tenant-cycle/{tenant}/hot/{index}/branch", block_size),
-                _block(f"tenant-cycle/{tenant}/hot/{index}/context", block_size),
-                _partial_tail(f"tenant-cycle/{tenant}/hot/{index}/tail", block_size),
-            ]
-            for index in range(hot_prompt_count)
-        ]
-        for tenant in range(tenant_count)
-    }
-    cycle_length = max(12, math.ceil(count / cycle_count))
-    warm_length = max(3, cycle_length // 4)
-    pollution_end = max(warm_length + 3, 3 * cycle_length // 4)
-    requests = []
-    arrival_step = 0
-    for request_id in range(count):
-        cycle = min(cycle_count - 1, request_id // cycle_length)
-        cycle_offset = request_id - cycle * cycle_length
-        active_tenant = cycle % tenant_count
-        if cycle_offset < warm_length:
-            hot_index = (request_id + cycle) % hot_prompt_count
-            tenant = active_tenant
-            blocks = hot_prompts[tenant][hot_index]
-            request_type = "tenant_cycle_warm"
-            output_length = 96 + rng.randrange(160)
-        elif cycle_offset < pollution_end:
-            tenant = (active_tenant + 1 + cycle_offset) % tenant_count
-            blocks = [
-                *tenant_roots[tenant],
-                *[
-                    _block(
-                        f"tenant-cycle/{cycle}/pollution/{request_id}/{depth}",
-                        block_size,
-                    )
-                    for depth in range(pollution_depth - 2)
-                ],
-            ]
-            blocks[-1] = _partial_tail(
-                f"tenant-cycle/{cycle}/pollution/{request_id}/tail",
-                block_size,
-            )
-            request_type = "tenant_cycle_pollution"
-            output_length = 24 + rng.randrange(64)
-        else:
-            hot_index = (request_id + cycle) % hot_prompt_count
-            tenant = active_tenant
-            blocks = hot_prompts[tenant][hot_index]
-            request_type = "tenant_cycle_recovery"
-            output_length = 96 + rng.randrange(160)
-
-        if request_id:
-            arrival_step += (
-                rng.choice((0, 0, 1))
-                if request_type == "tenant_cycle_pollution"
-                else rng.choice((1, 1, 2, 3))
-            )
-        requests.append(
-            _request(
-                request_id=request_id,
-                tenant_id=tenant,
-                session_id=tenant * 100 + request_id % hot_prompt_count,
-                blocks=blocks,
-                request_type=request_type,
-                true_output_length=output_length,
-                arrival_step=arrival_step,
-            )
-        )
-    return requests
-
-
-def _adversarial_unique_prompts(
-    count: int, block_size: int, rng: random.Random
-) -> list[WorkloadRequest]:
-    requests = []
-    for request_id in range(count):
-        blocks = [
-            _block(f"unique/{request_id}/block/{idx}/{rng.randrange(10_000)}", block_size)
-            for idx in range(4)
-        ]
-        blocks[-1] = _partial_tail(
-            f"unique/{request_id}/block/partial/{rng.randrange(10_000)}",
-            block_size,
-        )
-        requests.append(
-            _request(
-                request_id=request_id,
-                tenant_id=request_id % 4,
-                session_id=request_id,
-                blocks=blocks,
-                request_type="adversarial",
-                true_output_length=32 + rng.randrange(64),
-            )
-        )
-    return requests
-
-
-def _tenant_session_reentry(
-    count: int, block_size: int, rng: random.Random
-) -> list[WorkloadRequest]:
-    tenant_roots = {
-        tenant: [_block(f"reentry/tenant/{tenant}/root/{index}", block_size) for index in range(2)]
-        for tenant in range(3)
-    }
-    session_contexts = {
-        (tenant, session): [
-            _block(
-                f"reentry/tenant/{tenant}/session/{session}/context/{index}",
-                block_size,
-            )
-            for index in range(3)
-        ]
-        for tenant in range(3)
-        for session in range(4)
-    }
-    tenant_pattern = (0, 1, 0, 2, 0, 1, 2, 0)
-    visits = {key: 0 for key in session_contexts}
-    requests = []
-    for request_id in range(count):
-        tenant = tenant_pattern[request_id % len(tenant_pattern)]
-        session = (request_id // len(tenant_pattern) + 3 * tenant) % 4
-        visits[(tenant, session)] += 1
-        stable_context = session_contexts[(tenant, session)]
-        stable_depth = 2 if visits[(tenant, session)] == 1 else 3
-        requests.append(
-            _request(
-                request_id=request_id,
-                tenant_id=tenant,
-                session_id=tenant * 100 + session,
-                blocks=[
-                    *tenant_roots[tenant],
-                    *stable_context[:stable_depth],
-                    _partial_tail(
-                        f"reentry/tail/{tenant}/{session}/{request_id}",
-                        block_size,
-                    ),
-                ],
-                request_type="tenant_session_reentry",
-                true_output_length=48 + rng.randrange(96),
-            )
-        )
-    return requests
-
-
-def _cross_family_mixture(count: int, block_size: int, rng: random.Random) -> list[WorkloadRequest]:
-    shared = _shared_system_prompt(count // 3, block_size, rng)
-    phase = _phase_shift_prompts(count // 3, block_size, rng)
-    unique = _adversarial_unique_prompts(count - len(shared) - len(phase), block_size, rng)
-    requests = []
-    for request_id, request in enumerate([*shared, *phase, *unique]):
-        info = request.info
-        requests.append(
-            WorkloadRequest(
-                info=RequestInfo(
-                    request_id=request_id,
-                    tenant_id=info.tenant_id,
-                    session_id=info.session_id,
-                    prompt_length=info.prompt_length,
-                    priority=info.priority,
-                    request_type=f"hidden_{info.request_type}",
-                    prompt_tokens=info.prompt_tokens,
-                    predicted_output_length=info.predicted_output_length,
-                ),
-                true_output_length=request.true_output_length,
-                prompt_tokens=request.prompt_tokens,
-                arrival_step=request.arrival_step,
-            )
-        )
-    return requests

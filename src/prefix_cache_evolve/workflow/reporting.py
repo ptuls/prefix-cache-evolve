@@ -1,3 +1,5 @@
+"""Human-readable reporting for completed evolution runs."""
+
 from loguru import logger
 
 
@@ -5,6 +7,7 @@ class EvolutionReporter:
     """Formats evolution results for terminal output."""
 
     def report(self, result, iterations: int, config_label: str) -> None:
+        """Log a summary of one evolution result."""
         logger.info("\n{}", "=" * 60)
         logger.info("EVOLUTION SUMMARY")
         logger.info("{}", "=" * 60)

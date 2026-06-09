@@ -5,7 +5,6 @@ from types import SimpleNamespace
 import pytest
 
 from prefix_cache_evolve.problems.prefix_kv_cache.pressure_aware_incumbent import (
-    DEFAULT_PRESSURE_HALF_LIFE,
     CompactReusePolicy,
 )
 
@@ -43,7 +42,7 @@ def test_admission_pressure_accumulates_with_decay_and_is_bounded() -> None:
     first_pressure = policy._admission_pressure
     policy.on_request_start(request, now=1)
 
-    expected = first_pressure * 2.0 ** (-1.0 / DEFAULT_PRESSURE_HALF_LIFE) + first_pressure
+    expected = first_pressure * 2.0 ** (-1.0 / 4.0) + first_pressure
     assert policy._admission_pressure == pytest.approx(min(1.5, expected))
 
     for now in range(2, 20):
@@ -74,7 +73,19 @@ def test_cache_miss_does_not_treat_request_priority_as_reuse_evidence() -> None:
     policy.on_request_start(request, now=0)
     policy.on_cache_miss(block, request, now=0)
 
-    assert policy._values(block.prefix_hash, now=0)[1] == 0.0
+    assert policy._state.values(block.prefix_hash, now=0)[1] == 0.0
+
+
+def test_observed_reuse_state_is_bounded() -> None:
+    policy = CompactReusePolicy(1, 4)
+    request = _request()
+
+    for key in range(policy._state.max_keys + 20):
+        block = _block()
+        block.prefix_hash = key
+        policy.on_cache_miss(block, request, now=key)
+
+    assert policy._state.state_size == policy._state.max_keys
 
 
 def test_repeated_deep_misses_relax_depth_penalty_without_relaxing_first_miss() -> None:

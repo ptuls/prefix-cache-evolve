@@ -32,8 +32,8 @@ cache-geometry sweeps, trace replay, and controlled ablations.
 ## Answers So Far
 
 - **Program evolution can find competitive deployable policies.** On the
-  historical discovery verifier, the promoted policy scores `77.230`, ahead of
-  TinyLFU-LRU at `70.362`, the vLLM APC-style approximation at `60.178`, and LRU
+  historical discovery verifier, the previous promoted policy scored `77.230`, ahead of
+  [TinyLFU-LRU](https://arxiv.org/pdf/1512.00727) at `70.362`, the [vLLM APC-style](https://docs.vllm.ai/en/latest/features/automatic_prefix_caching/) approximation at `60.178`, and LRU
   at `51.186`.
 - **Admission pressure and online structural context have been more useful than
   broad recurrence machinery.** Decayed pressure sharply reduced churn; broad
@@ -43,10 +43,9 @@ cache-geometry sweeps, trace replay, and controlled ablations.
   Agentic branching, stochastic serving mixes, and eviction-regret diagnostics
   exposed policies that looked promising before admission regressions or
   workload-specific weaknesses were examined.
-- **Transfer remains the main unresolved question.** On the current
-  production-oriented 16-token verifier, the incumbent narrowly trails
-  TinyLFU-LRU, and no public production trace is yet part of the headline
-  comparison.
+- **Geometry transfer improved; trace transfer remains unresolved.** The current
+  production-oriented 16-token incumbent now beats TinyLFU-LRU, but no public
+  production trace is yet part of the headline comparison.
 
 > This is not a drop-in replacement for vLLM, SGLang, TensorRT-LLM, or another
 > serving stack's cache management. It is a research benchmark and policy-search
@@ -54,40 +53,20 @@ cache-geometry sweeps, trace replay, and controlled ablations.
 
 ## Headline Result
 
-On the historical 8-token discovery verifier, the promoted pressure-aware
-evolved policy scores `77.230`. It beats every deployable baseline in the
-comparison, including TinyLFU-LRU, the benchmark's vLLM APC-style approximation,
-and LRU, while still trailing the reporting-only future-reuse oracle.
+The current production-oriented 16-token policy scores `65.649`, ahead of
+TinyLFU-LRU at `63.548`, while passing the held-out agentic tripwire and
+retaining substantially lower churn. The historical 8-token discovery policy
+scores `77.230`, but the production policy does not transfer unchanged to that
+finer geometry.
 
-| Policy | Type | Combined score | Churn / 1k | Notes |
-|---|---|---:|---:|---|
-| Oracle future reuse | Reporting-only | 97.074 | 43.9 | Not deployable |
-| Pressure-aware incumbent | Deployable | 77.230 | 92.7 | Promoted evolved policy |
-| TinyLFU-LRU | Deployable | 70.362 | 161.1 | Strong admission baseline |
-| vLLM APC-style | Deployable | 60.178 | 807.9 | Behavioral approximation |
-| LRU | Deployable | 51.186 | 1385.0 | Generic baseline |
+The main result is methodological: selective pressure-aware admission,
+fine-grained evaluator feedback, specialist archive dimensions, and explicit
+simplification produced useful compact policies, while richer structured and
+eviction-specialist policies failed complexity or cross-panel promotion gates.
 
-Search provenance for the retained `77.230` result:
-
-| Search budget | Evaluations completed | Models used | Levi-reported model cost | Wall time |
-|---:|---:|---|---:|---:|
-| 300 evaluations | 298 | GPT-5.4-mini for mutations and variants; GPT-5.5 for diverse seeds and paradigm shifts, with medium reasoning | $4.56 | 37.5 min |
-
-The cost above is Levi's reported model/API spend for the retained search run;
-it excludes local verifier compute and development time. The retained local run
-ID is `20260608T001616Z`. Its reported evaluation can be reproduced from the
-[promoted policy](src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py),
-[discovery evaluator config](configs/prefix_kv_cache_discovery.yaml), and
-[committed workload manifest](docs/results/discovery_workload_manifest.json).
-
-That result does not transfer unchanged to every cache geometry. On the current
-production-oriented 16-token verifier, the incumbent scores `62.757` and
-narrowly trails TinyLFU-LRU at `63.548`. The incumbent still has higher
-validation token hit (`0.598` versus `0.580`) and substantially lower churn
-(`168.1` versus `499.0`). Closing that combined-score gap while preserving those
-advantages is an active research target. See the
-[baseline comparison](docs/results/baseline_comparison.md) and
-[block-size robustness report](docs/results/block_size_robustness.md).
+See the current [technical report](docs/technical_report.tex), supplementary
+[research log](docs/research_log.tex), generated [result summaries](docs/results/),
+and [reproducibility guide](docs/reproducibility.md).
 
 ## System Overview
 
@@ -151,8 +130,9 @@ across cache geometries.
 ## Reproducibility
 
 **Policy evaluation is deterministic for the same source, Python environment,
-evaluator config, and deterministic candidate policy. LLM-guided search is not
-expected to reproduce the same mutation sequence or winner.**
+evaluator config, and deterministic candidate policy. LLM-guided search has
+explicit seed controls, but remote providers and asynchronous workers can still
+prevent bit-for-bit replay of the mutation sequence.**
 
 The evaluator constructs each synthetic stream with a locally scoped
 `random.Random(actual_seed)`, where `actual_seed` is the configured base seed
@@ -162,6 +142,12 @@ Capacity sweeps replay the same generated stream at every capacity.
 Candidates receive a separate fixed `policy_seed`, opaque request IDs, a
 normalized request type, and empty prompt-token metadata. Workload-generation
 seeds and descriptive synthetic labels are not candidate-visible.
+
+The separate `search.seed` seeds Python and NumPy selection in the Levi process
+and supplies derived request seeds to model providers that support them. Saved
+runs record the resolved model identifiers, search seed, package versions, Git
+revision and dirty state, config snapshot, and workload manifest. See the
+[reproducibility and model-provider guide](docs/reproducibility.md).
 
 The `77.230` headline result uses synthetic traffic only. No private or external
 production trace contributes to that score. Its reproducibility inputs are all
@@ -229,7 +215,7 @@ def score_eviction(block, now) -> float: ...
 ```
 
 Only the three documented lifecycle callbacks fire. Admission occurs when
-`score_admission(...) > 0`; the simulator evicts the legal inactive resident leaf
+`score_admission(...) > 0`. The simulator evicts the legal inactive resident leaf
 with the highest eviction score. Candidate code cannot mutate simulator-owned
 cache state or access future reuse.
 
@@ -238,35 +224,42 @@ cache state or access future reuse.
 Python 3.11 or newer is required.
 
 ```bash
-python -m venv .venv
-.venv/bin/python -m pip install -e '.[dev]'
+# Install the pinned development and evolution environment.
+uv sync --frozen --group dev
 
-.venv/bin/pytest -q
-.venv/bin/ruff check .
+uv run pytest -q
+uv run ruff check .
+uv run ruff format --check .
 
 # Launch the interactive policy comparison lab.
-.venv/bin/prefix-cache-lab
+uv run prefix-cache-lab
 
 # Fast smoke report. Do not use --quick for ranking decisions.
-.venv/bin/prefix-cache-evolve --baseline-report --quick
+uv run prefix-cache-evolve --baseline-report --quick
 
 # Full validation comparison for the pressure-aware incumbent.
-.venv/bin/prefix-cache-evolve \
+uv run prefix-cache-evolve \
   --baseline-report \
   --candidate-program \
   src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py
 ```
 
-Install Levi explicitly before launching evolution. It is intentionally not a
-normal project dependency because it is currently installed from Git, which
-would otherwise make baseline-only development and offline synchronization
-resolve a network dependency. Evolution defaults to the pressure-aware incumbent
-as its seed; use `--seed-program` to override it.
+For evaluator-only use, `uv sync --frozen --no-default-groups` avoids the
+Git-hosted Levi dependency. For evolution without development tools, use `uv
+sync --frozen --no-default-groups --extra evolution`. The equivalent shortcuts
+are `make setup`, `make setup-evolution`, and `make setup-dev`.
+
+Evolution defaults to the pressure-aware incumbent as its seed; use
+`--seed-program` to override it. Inspect all effective model, worker, evaluator,
+and seed settings without contacting a provider:
 
 ```bash
-uv pip install 'levi @ git+https://github.com/ttanv/levi.git'
-.venv/bin/prefix-cache-evolve \
-  --iterations 100
+uv run prefix-cache-evolve --show-config
+uv run prefix-cache-evolve --show-config \
+  --model anthropic/<model-id> \
+  --search-seed 17
+
+uv run prefix-cache-evolve --iterations 100
 ```
 
 The main configuration is [`configs/prefix_kv_cache.yaml`](configs/prefix_kv_cache.yaml).
@@ -274,6 +267,11 @@ The runner packages a fallback copy so the installed console command can still
 load its default configuration outside a source checkout. Workflow sections and
 problem-owned evaluator settings are validated by Pydantic before execution, so
 unknown keys and invalid ranges fail when the configuration is loaded.
+
+Model identifiers use LiteLLM provider prefixes. OpenAI, Anthropic, Google
+Gemini, Ollama, and self-hosted OpenAI-compatible examples, including
+secret-safe `--api-key-env` and `--api-base` configuration, are documented in
+the [model-provider guide](docs/reproducibility.md#bring-your-own-model).
 
 Eviction-specific exploration exposes only one candidate function:
 `score_eviction(block, now, frequency, priority)`. The evaluator composes that
@@ -310,6 +308,33 @@ reweight captures a smaller `+0.168` raw gain at unchanged complexity, but loses
 
 ```bash
 .venv/bin/python -m prefix_cache_evolve.tools.analyze_eviction
+```
+
+The admission-vs-eviction regret audit turns the claim that admission matters more
+than eviction into a strict workload-capacity-seed falsification test. It compares
+incoming and resident blocks using a quarantined future-token-value oracle, decomposes
+local regret into avoidable admission, avoidable rejection, and value-weighted
+avoidable eviction, and emits every group to JSON. On the full incumbent panel, the
+strict universal claim is falsified: admission dominates `81/123` regretful groups,
+but still accounts for `85.2%` of aggregate surrogate regret. Normalizing each side by
+its own decision count reduces groupwise admission dominance to `61/123`:
+
+```bash
+.venv/bin/python -m prefix_cache_evolve.tools.analyze_regret
+```
+
+The stronger factorial experiment crosses every distinct built-in admission rule
+with LRU, LFU, cost-aware LRU, the incumbent's compact value-aware eviction, and a
+reporting-only constrained next-use control. Eviction materially affects realized
+hit rate, but complexity is not required: LFU and the compact value-aware rule are
+nearly tied across selective admission policies. The best deployable pairing is
+structured admission plus LFU at `0.5558` mean token hit. For the pressure-aware
+admission policy, value-aware eviction improves mean token hit from LRU's `0.5448`
+to `0.5535`; constrained next-use reaches `0.5684`.
+
+```bash
+.venv/bin/python -m prefix_cache_evolve.tools.analyze_regret \
+  --all-admission-policies
 ```
 
 The shared reasoning-KV robustness panel replays all existing algorithms with
@@ -443,74 +468,11 @@ hidden prompt content. See
   src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py
 ```
 
-## Current Result
-
-The promoted pressure-aware incumbent scored `77.230` under the discovery-run
-verifier, which used 8-token blocks and 48/96-block capacity tiers. A controlled
-ablation shows its discovered moderate-pressure penalty for low-priority
-admissions is load-bearing: removing only that term lowers selection to
-`76.630`, restores validation churn from `92.7` to `148.7` per 1,000 requests,
-and lowers hidden score from `11.158` to `9.691`. Its charged aggregate probe
-score is `0.217` lower only because the complexity charge rises by `0.264`; raw
-probe behavior improves by `0.047`, agent churn falls, cyclic behavior is
-unchanged, and the agentic surrogate-to-probe tripwire passes at `0.1025 < 0.12`.
-
-The operative production-oriented verifier now uses 16-token blocks and
-24/48-block tiers, preserving the same 384/768-token capacities. Use
-`--block-size-report` to compare 8-, 16-, and 32-token physical blocks over
-identical synthetic token streams before promoting a new incumbent. On this
-panel, the incumbent scores `62.757` at 16 tokens and narrowly trails
-TinyLFU-LRU's `63.548` only after the incumbent's `8.232` complexity charge.
-Before complexity, the incumbent scores `70.989`; it also has higher validation
-token hit (`0.598` versus `0.580`) and much lower churn (`168.1` versus `499.0`).
-At 32 tokens the incumbent leads the compared policies, but all combined scores
-are negative, indicating that coarse granularity is a poor fit for these
-irregular-prefix workloads.
-
-The larger methodological result is that held-out-faithful surrogate diagnostics
-in mutation feedback, paired with specialist dimensions in the behavior archive,
-let search discover one compact pressure term that improves both targeted
-weaknesses. Earlier seed-locked runs optimizing only the combined scalar could
-not structurally retain and combine those specialist steps. The exact policy
-is committed alongside the exact discovery evaluator config and workload
-fingerprints linked in [Reproducibility](#reproducibility).
-
-Supporting findings:
-
-- Decayed admission pressure sharply reduces churn while preserving useful
-  reused branches.
-- A small extra throttle above sustained admission pressure `0.8` reduces noisy
-  churn without suppressing recurrence-backed deep admissions.
-- Penalizing low-priority admissions once pressure exceeds `0.25` cuts validation
-  churn by `37.6%` with nearly unchanged validation, agent-trace, and cyclic hit
-  rates. The apparent aggregate-probe regression is entirely complexity accounting.
-- Recurrence-gated depth relief raises agent-trace hit rate from `0.230` to
-  `0.376` while holding agent-trace churn to `55.6` per 1,000 requests.
-- Broad explicit recurrence terms increased churn in the structured ablation;
-  recurrence evidence is useful when it only relaxes an otherwise categorical
-  depth penalty.
-- Priority-decay state was inert.
-- Subtree and online regime context carried useful behavior.
-- One generated mutation improved raw validation and both recurrence-family hit
-  rates, but its 1,322-node effective implementation failed final adjudication.
-
-See:
-
-- [`docs/technical_report.tex`](docs/technical_report.tex)
-- [`docs/results/baseline_comparison.md`](docs/results/baseline_comparison.md)
-- [`docs/results/block_size_robustness.md`](docs/results/block_size_robustness.md)
-- [`docs/results/eviction_policy_analysis.md`](docs/results/eviction_policy_analysis.md)
-- [`docs/results/pressure_aware_incumbent.md`](docs/results/pressure_aware_incumbent.md)
-- [`docs/results/priority_aware_pressure_ablation.md`](docs/results/priority_aware_pressure_ablation.md)
-- [`docs/results/reasoning_kv_robustness.md`](docs/results/reasoning_kv_robustness.md)
-- [`docs/results/structured_ablation.md`](docs/results/structured_ablation.md)
-- [`docs/results/three_run_adjudication.md`](docs/results/three_run_adjudication.md)
-
 ## Repository Layout
 
 ```text
 configs/                       Operative Levi/evaluator config and trace schema
-docs/                          Technical report and retained result summaries
+docs/                          Current report, research log, and result summaries
 scripts/                       Deterministic tuner and structured ablation tools
 src/prefix_cache_evolve/
   evaluator_entry.py           Candidate loading and isolated evaluation helpers

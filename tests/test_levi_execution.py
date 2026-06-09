@@ -3,6 +3,7 @@
 import asyncio
 import json
 import pickle
+import random
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,6 +19,7 @@ from prefix_cache_evolve.workflow.execution import (
     _enable_levi_code_feedback_support,
     _enable_levi_degenerate_centroid_fallback,
     _enable_levi_reasoning_completion_support,
+    _enable_levi_reproducibility_support,
     _module_name_from_package_path,
     _persist_levi_paradigm_candidate_capture,
 )
@@ -34,6 +36,28 @@ def test_workflow_config_loader_validates_top_level_and_nested_settings() -> Non
 
     with pytest.raises(ValueError, match=r"(?s)prompt.*Input should be a valid dictionary"):
         loader.from_dict({"prompt": []})
+
+
+def test_workflow_config_resolves_provider_and_search_seed() -> None:
+    config = ConfigLoader().from_dict(
+        {
+            "max_iterations": 3,
+            "llm": {
+                "default_provider": "anthropic",
+                "primary_model": "mutation-model",
+                "secondary_model": "gemini/paradigm-model",
+                "api_base": "http://localhost:8000/v1",
+                "api_key_env": "LOCAL_MODEL_API_KEY",
+            },
+            "search": {"seed": 17},
+        }
+    )
+
+    assert config.mutation_model == "anthropic/mutation-model"
+    assert config.paradigm_model == "gemini/paradigm-model"
+    assert config.search_seed == 17
+    assert config.api_base == "http://localhost:8000/v1"
+    assert config.api_key_env == "LOCAL_MODEL_API_KEY"
 
 
 def test_levi_score_function_exposes_combined_score() -> None:
@@ -186,6 +210,7 @@ def test_levi_code_adapter_accepts_failure_feedback() -> None:
     assert "## Evaluator Feedback" in prompt
     assert "weak validation workload validation/agentic_replan" in prompt
     assert "## Preflight Repair Checks" in prompt
+    assert "dedicated simplification mutation" in prompt
     assert prompt.index("## Evaluator Feedback") < prompt.index("## Output")
 
 
@@ -235,7 +260,7 @@ def test_compact_paradigm_shift_override_reaches_levi_prompt() -> None:
     prompt = adapter.build_paradigm_shift_prompt([(0, representative)], n_evaluations=1)
 
     assert "Target at most 550 effective AST nodes" in prompt
-    assert "candidates above 650 effective AST nodes are rejected" in prompt
+    assert "Candidates above 650 nodes are exploration-only" in prompt
     assert "COMPLETELY DIFFERENT strategy" not in prompt
 
 
@@ -309,6 +334,56 @@ def test_levi_non_reasoning_calls_keep_requested_token_budget(monkeypatch) -> No
     asyncio.run(state.acompletion("openai/gpt-5.4-mini", prompt="mutate", max_tokens=4_096))
 
     assert calls == [4_096]
+
+
+def test_levi_reproducibility_seeds_selection_and_model_requests(monkeypatch) -> None:
+    from levi.pipeline.state import PipelineState
+
+    calls = []
+
+    async def fake_acompletion(_self, _client_spec, *, seed=None, **kwargs):
+        calls.append({"seed": seed, **kwargs})
+        return "response"
+
+    monkeypatch.setattr(PipelineState, "acompletion", fake_acompletion)
+    _enable_levi_reproducibility_support(41)
+    state = object.__new__(PipelineState)
+
+    first_python = random.random()
+    first_numpy = float(np.random.random())
+    asyncio.run(state.acompletion("openai/model", prompt="first"))
+    asyncio.run(state.acompletion("openai/model", prompt="second"))
+
+    _enable_levi_reproducibility_support(41)
+    assert random.random() == first_python
+    assert float(np.random.random()) == first_numpy
+    assert [call["seed"] for call in calls] == [41, 42]
+    assert all(call["drop_params"] is True for call in calls)
+
+
+def test_levi_request_defaults_resolve_api_key_without_recording_it(monkeypatch) -> None:
+    from levi.pipeline.state import PipelineState
+
+    calls = []
+
+    async def fake_acompletion(_self, _client_spec, **kwargs):
+        calls.append(kwargs)
+        return "response"
+
+    monkeypatch.setattr(PipelineState, "acompletion", fake_acompletion)
+    monkeypatch.setenv("LOCAL_MODEL_API_KEY", "secret-value")
+    _enable_levi_reproducibility_support(
+        7,
+        api_base="http://localhost:8000/v1",
+        api_key_env="LOCAL_MODEL_API_KEY",
+    )
+    state = object.__new__(PipelineState)
+
+    asyncio.run(state.acompletion("openai/local-model", prompt="mutate"))
+
+    assert calls[0]["api_base"] == "http://localhost:8000/v1"
+    assert calls[0]["api_key"] == "secret-value"
+    assert calls[0]["seed"] == 7
 
 
 def test_persist_levi_paradigm_candidate_capture_keeps_rejected_code(
@@ -451,7 +526,16 @@ def test_levi_runner_records_generated_snapshot_path(tmp_path, monkeypatch) -> N
             artifacts={},
         ),
     )
-    config = SimpleNamespace(evolve_kwargs=lambda: {})
+    config = SimpleNamespace(
+        evolve_kwargs=lambda: {},
+        search_seed=17,
+        model="anthropic/example-model",
+        paradigm_model=None,
+        mutation_model=None,
+        api_base="http://localhost:8000/v1",
+        api_key_env="LOCAL_MODEL_API_KEY",
+        pipeline={"n_llm_workers": 1},
+    )
 
     result = runner.run(program_path, config)
 
@@ -461,6 +545,13 @@ def test_levi_runner_records_generated_snapshot_path(tmp_path, monkeypatch) -> N
     assert result.metadata["levi_paradigm_candidates_dir"] == str(
         output_dir / "paradigm_candidates"
     )
+    assert result.metadata["search_seed"] == 17
+    assert result.metadata["model"] == "anthropic/example-model"
+    assert result.metadata["api_base"] == "http://localhost:8000/v1"
+    assert result.metadata["api_key_env"] == "LOCAL_MODEL_API_KEY"
+    assert result.metadata["pipeline"] == {"n_llm_workers": 1}
+    assert result.metadata["runtime"]["python"]
+    assert result.metadata["runtime"]["packages"]["numpy"]
 
 
 def test_levi_runner_prefers_configured_function_signature(tmp_path, monkeypatch) -> None:

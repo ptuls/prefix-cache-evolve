@@ -34,7 +34,6 @@ def candidate_evaluator(
     splits: tuple[str, ...],
 ) -> PrefixKVCacheEvaluator | EvictionOnlyEvaluator:
     """Build an evaluator with any configured candidate-only specialist controls."""
-
     if config.candidate_policy_surface == "eviction_only":
         return EvictionOnlyEvaluator(config, splits=splits)
     if config.candidate_policy_surface != "full":
@@ -50,7 +49,6 @@ def fixed_admission_factory(
     policy_name: str | None,
 ) -> Callable[..., PrefixKVPolicy] | None:
     """Resolve a configured fixed-admission policy factory."""
-
     if policy_name is None:
         return None
     try:
@@ -64,7 +62,6 @@ def fixed_admission_factory(
 
 def candidate_exported_names(config: EvaluatorConfig) -> tuple[str, ...]:
     """Return the candidate entry points accepted by one evaluator configuration."""
-
     if config.candidate_policy_surface == "eviction_only":
         return ("score_eviction",)
     return ("candidate_factory", "build_candidate")
@@ -87,6 +84,7 @@ class EvictionOnlyEvaluator:
         *,
         scoring_fn_complexity: int = 0,
     ) -> EvaluationResult:
+        """Evaluate an eviction scorer composed with the fixed base policy."""
         return self._evaluator(
             self._composed_factory(score_eviction),
             scoring_fn_complexity=scoring_fn_complexity,
@@ -103,7 +101,6 @@ class EvictionOnlyEvaluator:
         scoring_fn_complexity: int = 0,
     ) -> EvaluationResult:
         """Evaluate one fixed request stream using frozen admission and callbacks."""
-
         return self._evaluator.evaluate_requests(
             self._composed_factory(score_eviction),
             requests,
@@ -168,7 +165,6 @@ class _EvictionOnlyPolicy:
 
 def eviction_only_source_violations(source: str) -> tuple[str, ...]:
     """Return violations of the function-only eviction specialist contract."""
-
     try:
         tree = ast.parse(source)
     except SyntaxError:
@@ -245,7 +241,6 @@ def compose_eviction_specialist_source(
     base_source: str,
 ) -> str:
     """Compose one function-only eviction specialist into the complete incumbent."""
-
     violations = eviction_only_source_violations(specialist_source)
     if violations:
         raise ValueError("; ".join(violations))

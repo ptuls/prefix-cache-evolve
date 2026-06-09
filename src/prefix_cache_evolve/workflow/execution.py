@@ -1,10 +1,16 @@
+"""Adapters that execute candidate evolution through Levi."""
+
 import importlib
 import importlib.util
 import inspect
 import json
 import math
+import os
+import random
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Callable
 
@@ -18,6 +24,10 @@ from prefix_cache_evolve.evaluator_entry import (
 
 _levi_reasoning_max_tokens: int | None = None
 _levi_paradigm_candidate_output_dir: Path | None = None
+_levi_search_seed = 0
+_levi_completion_index = 0
+_levi_api_base: str | None = None
+_levi_api_key_env: str | None = None
 
 
 @dataclass
@@ -36,10 +46,12 @@ class LeviRunResult:
 
     @property
     def code(self) -> str:
+        """Return the best evolved program."""
         return self.best_program
 
     @property
     def best_code(self) -> str:
+        """Return the best evolved program for compatibility callers."""
         return self.best_program
 
 
@@ -57,6 +69,7 @@ class LeviScoreFunction:
         self._score_metric = score_metric
 
     def __call__(self, factory: Callable[..., object], inputs=None) -> dict[str, Any]:
+        """Evaluate one candidate and return Levi-compatible scalar metrics."""
         source = _candidate_source(factory, inputs)
         if self._evaluate_source is not None:
             if source is None:
@@ -97,7 +110,6 @@ class LeviScoreFunction:
 
 def _failure_message(result: EvaluatorResult) -> str:
     """Return evaluator failure text with any structured repair guidance."""
-
     metrics = result.metrics or {}
     message = str(metrics.get("error") or "candidate failed evaluator validation")
     artifacts = result.artifacts or {}
@@ -127,6 +139,7 @@ class LeviRunner:
         self._evaluate_source = self._load_evaluate_source(evaluator_path)
 
     def run(self, program_path: Path, config) -> LeviRunResult:
+        """Run Levi from a seed program and resolved configuration."""
         seed_program = program_path.read_text(encoding="utf-8")
         score_fn = LeviScoreFunction(self._evaluate_factory, self._evaluate_source)
         kwargs = config.evolve_kwargs()
@@ -143,6 +156,12 @@ class LeviRunner:
         _enable_levi_code_feedback_support()
         _enable_levi_degenerate_centroid_fallback()
         _enable_levi_reasoning_completion_support(_configured_reasoning_max_tokens(config))
+        search_seed = int(getattr(config, "search_seed", 0))
+        _enable_levi_reproducibility_support(
+            search_seed,
+            api_base=getattr(config, "api_base", None),
+            api_key_env=getattr(config, "api_key_env", None),
+        )
         _enable_levi_paradigm_candidate_persistence(Path(output_dir) / "paradigm_candidates")
         result = self._evolve_code(
             getattr(config, "problem_description", None) or self._problem_description,
@@ -159,6 +178,24 @@ class LeviRunner:
             "levi_output_dir": str(output_dir),
             "levi_snapshot_path": str(Path(output_dir) / "snapshot.json"),
             "levi_paradigm_candidates_dir": str(Path(output_dir) / "paradigm_candidates"),
+            "search_seed": search_seed,
+            "model": getattr(config, "model", None),
+            "paradigm_model": getattr(config, "paradigm_model", None),
+            "mutation_model": getattr(config, "mutation_model", None),
+            "api_base": getattr(config, "api_base", None),
+            "api_key_env": getattr(config, "api_key_env", None),
+            "pipeline": dict(getattr(config, "pipeline", {}) or {}),
+            "runtime": {
+                "python": sys.version,
+                "packages": {
+                    package: _package_version(package)
+                    for package in ("levi", "litellm", "numpy", "pydantic", "pyyaml")
+                },
+            },
+            "reproducibility_limits": (
+                "Python and NumPy selection plus supported model requests are seeded. "
+                "Remote provider behavior and asynchronous worker ordering may still vary."
+            ),
         }
 
         return LeviRunResult(
@@ -232,9 +269,16 @@ class LeviRunner:
         return evaluate_source if callable(evaluate_source) else None
 
 
+def _package_version(package: str) -> str | None:
+    """Return an installed package version without failing the run."""
+    try:
+        return version(package)
+    except PackageNotFoundError:
+        return None
+
+
 def _candidate_source(factory: Callable[..., object], inputs: Any) -> str | None:
     """Recover the candidate source Levi attaches while evaluating code."""
-
     if isinstance(inputs, str):
         return inputs
     if isinstance(inputs, dict):
@@ -258,7 +302,6 @@ def _candidate_source(factory: Callable[..., object], inputs: Any) -> str | None
 
 def _enable_levi_code_feedback_support() -> None:
     """Make older Levi code adapters accept producer-supplied failure feedback."""
-
     from levi.artifacts.code import CodeAdapter
 
     original = CodeAdapter.build_mutation_prompt
@@ -289,6 +332,9 @@ def _enable_levi_code_feedback_support() -> None:
             "- Use only documented fields and callbacks; remove guessed fallbacks and broad "
             "exception handlers.\n"
             "- Keep imports top-level and delete unused imports.\n"
+            "- For an exploration-only over-cap parent, perform the requested dedicated "
+            "simplification mutation: preserve behavior, add nothing, and delete at least the "
+            "reported excess.\n"
             "- When near a complexity cap, make a net deletion before adding behavior."
         )
         section = "\n\n".join(sections)
@@ -303,7 +349,6 @@ def _enable_levi_code_feedback_support() -> None:
 
 def _enable_levi_degenerate_centroid_fallback() -> None:
     """Keep a usable CVT archive when valid initialization behaviors are duplicates."""
-
     from levi.pool.cvt_map_elites import CVTMAPElitesPool
 
     original = CVTMAPElitesPool.set_centroids_from_data
@@ -332,7 +377,6 @@ def _enable_levi_degenerate_centroid_fallback() -> None:
 
 def _configured_reasoning_max_tokens(config: Any) -> int | None:
     """Return the explicit paradigm reasoning budget, falling back to the pipeline budget."""
-
     punctuated_equilibrium = getattr(config, "punctuated_equilibrium", {}) or {}
     pipeline = getattr(config, "pipeline", {}) or {}
     raw_value = punctuated_equilibrium.get("max_tokens")
@@ -347,7 +391,6 @@ def _configured_reasoning_max_tokens(config: Any) -> int | None:
 
 def _enable_levi_reasoning_completion_support(max_tokens: int | None) -> None:
     """Prevent Levi's 4096-token PE cap from exhausting reasoning-model output."""
-
     global _levi_reasoning_max_tokens
     _levi_reasoning_max_tokens = max_tokens
     if max_tokens is None:
@@ -385,12 +428,85 @@ def _enable_levi_reasoning_completion_support(max_tokens: int | None) -> None:
         )
 
     acompletion_with_reasoning_budget._prefix_cache_evolve_reasoning_budget_patch = True
+    acompletion_with_reasoning_budget._prefix_cache_evolve_seed_patch = getattr(
+        original,
+        "_prefix_cache_evolve_seed_patch",
+        False,
+    )
     PipelineState.acompletion = acompletion_with_reasoning_budget
+
+
+def _enable_levi_reproducibility_support(
+    seed: int,
+    *,
+    api_base: str | None = None,
+    api_key_env: str | None = None,
+) -> None:
+    """Seed Levi and apply secret-safe model request defaults."""
+    global _levi_api_base
+    global _levi_api_key_env
+    global _levi_completion_index
+    global _levi_search_seed
+
+    _levi_search_seed = int(seed)
+    _levi_completion_index = 0
+    _levi_api_base = api_base
+    _levi_api_key_env = api_key_env
+    random.seed(_levi_search_seed)
+    np.random.seed(_levi_search_seed)
+
+    from levi.pipeline.state import PipelineState
+
+    original = PipelineState.acompletion
+    if getattr(original, "_prefix_cache_evolve_seed_patch", False):
+        return
+
+    async def acompletion_with_seed(
+        self,
+        client_spec,
+        *,
+        prompt,
+        temperature=None,
+        max_tokens=None,
+        timeout=None,
+        **extras,
+    ):
+        global _levi_completion_index
+
+        request_seed = _levi_search_seed + _levi_completion_index
+        _levi_completion_index += 1
+        extras.setdefault("seed", request_seed)
+        extras.setdefault("drop_params", True)
+        if _levi_api_base:
+            extras.setdefault("api_base", _levi_api_base)
+        if _levi_api_key_env:
+            api_key = os.environ.get(_levi_api_key_env)
+            if not api_key:
+                raise ValueError(
+                    f"configured LLM API key environment variable {_levi_api_key_env!r} is not set"
+                )
+            extras.setdefault("api_key", api_key)
+        return await original(
+            self,
+            client_spec,
+            prompt=prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+            **extras,
+        )
+
+    acompletion_with_seed._prefix_cache_evolve_seed_patch = True
+    acompletion_with_seed._prefix_cache_evolve_reasoning_budget_patch = getattr(
+        original,
+        "_prefix_cache_evolve_reasoning_budget_patch",
+        False,
+    )
+    PipelineState.acompletion = acompletion_with_seed
 
 
 def _enable_levi_paradigm_candidate_persistence(output_dir: Path) -> None:
     """Persist every evaluated PE candidate, including archive rejections."""
-
     global _levi_paradigm_candidate_output_dir
     _levi_paradigm_candidate_output_dir = output_dir
 
@@ -439,7 +555,6 @@ def _enable_levi_paradigm_candidate_persistence(output_dir: Path) -> None:
 
 def _persist_levi_paradigm_candidate_capture(capture: dict[str, Any], stats: Any) -> None:
     """Write one PE event's evaluated source files and results."""
-
     output_dir = _levi_paradigm_candidate_output_dir
     if output_dir is None or not capture.get("candidates"):
         return
@@ -485,7 +600,6 @@ def _write_levi_json(path: Path, payload: Any) -> None:
 
 def _module_name_from_package_path(path: Path) -> str | None:
     """Return an importable module name for a file inside a Python package."""
-
     resolved = path.resolve()
     if resolved.suffix != ".py" or not resolved.exists():
         return None

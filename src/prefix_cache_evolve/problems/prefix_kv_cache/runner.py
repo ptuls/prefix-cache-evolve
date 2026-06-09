@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-import argparse
 import json
-import math
+import os
 import shutil
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any
+
+import click
 
 from prefix_cache_evolve.evaluator_entry import load_candidate_factory, run_with_timeout
 from prefix_cache_evolve.evaluators.baseline_suite import BASELINE_SUITE_EVALUATOR
@@ -26,7 +29,6 @@ from prefix_cache_evolve.workflow.configuration import (
     MinimalConfigProvider,
     YamlConfigProvider,
 )
-from prefix_cache_evolve.workflow.execution import LeviRunner
 from prefix_cache_evolve.workflow.program import ProgramSource
 from prefix_cache_evolve.workflow.reporting import EvolutionReporter
 
@@ -44,9 +46,64 @@ from .specialist import (
     compose_eviction_specialist_source,
 )
 from .trace_replay import calibrate_anonymized_trace, load_anonymized_trace
+from .utilities import (
+    agentic_surrogate_probe_tripwire as _agentic_surrogate_probe_tripwire,
+)
+from .utilities import (
+    capacity_blocks_for_token_tiers as _capacity_blocks_for_token_tiers,
+)
+from .utilities import (
+    elite_source as _elite_source,
+)
+from .utilities import (
+    evaluation_result_summary as _evaluation_result_summary,
+)
+from .utilities import (
+    format_int_tuple as _format_int_tuple,
+)
+from .utilities import (
+    normalized_source as _normalized_source,
+)
+from .utilities import (
+    parse_positive_int_csv,
+    parse_unique_positive_int_csv,
+)
+from .utilities import (
+    promotion_check as _promotion_check,
+)
+from .utilities import (
+    promotion_tripwire_check as _promotion_tripwire_check,
+)
+from .utilities import (
+    raw_selection_improvement as _raw_selection_improvement,
+)
+from .utilities import (
+    score_non_regression as _score_non_regression,
+)
+from .utilities import (
+    split_metric_non_regression as _split_metric_non_regression,
+)
+from .utilities import (
+    workload_metric_non_regression as _workload_metric_non_regression,
+)
+from .utilities import (
+    write_agentic_surrogate_probe_tripwire_report as _write_agentic_surrogate_probe_tripwire_report,
+)
+from .utilities import (
+    write_generated_mutation_report as _write_generated_mutation_report,
+)
+from .utilities import (
+    write_json as _write_json,
+)
+from .utilities import (
+    write_specialist_promotion_adjudication_report as _write_specialist_report,
+)
+
+if TYPE_CHECKING:
+    from prefix_cache_evolve.workflow.execution import LeviRunner
 
 _DEFAULT_SEED_PATH = Path(__file__).parent / "pressure_aware_incumbent.py"
-_EVICTION_SPECIALIST_SEED_PATH = Path(__file__).parent / "eviction_specialist_seed.py"
+_EVICTION_SPECIALIST_SEED_PATH = Path(__file__).parent / "seeds" / "eviction_specialist.py"
 DEFAULT_SEED_SOURCE = ProgramSource(_DEFAULT_SEED_PATH.read_text(encoding="utf-8"))
 _EVALUATOR_PATH = Path(__file__).parent / "evaluator.py"
 _COMPACT_SEED_PATH = Path(__file__).parent / "compact_seed.py"
@@ -66,13 +123,12 @@ _SENSITIVITY_WEIGHTS = (
     "fairness_weight",
 )
 _SENSITIVITY_FACTORS = (0.0, 0.5, 1.0, 1.5, 2.0)
-_AGENTIC_SURROGATE_WORKLOAD = "train/agentic_tool_workflows"
-_AGENTIC_PROBE_WORKLOAD = "probe/agent_trace_branching"
-_AGENTIC_SURROGATE_PROBE_DIVERGENCE_THRESHOLD = 0.12
 
 
 def _build_runner() -> LeviRunner:
     import levi
+
+    from prefix_cache_evolve.workflow.execution import LeviRunner
 
     return LeviRunner(
         levi.evolve_code,
@@ -139,7 +195,6 @@ def _build_workflow(
 
 def _load_seed_program_source(path: Path) -> ProgramSource:
     """Load an evolution seed from a candidate file or saved run directory."""
-
     candidate_path = _resolve_candidate_program(path)
     return ProgramSource(candidate_path.read_text(encoding="utf-8"))
 
@@ -151,17 +206,49 @@ def demo_run_evolution(
     quick: bool = False,
     seed_program: Path | None = None,
     artifact_output: Path | None = Path("artifacts/prefix_kv_cache_runs"),
+    model: str | None = None,
+    primary_model: str | None = None,
+    secondary_model: str | None = None,
+    search_seed: int | None = None,
+    api_base: str | None = None,
+    api_key_env: str | None = None,
 ) -> object:
+    """Run one Levi evolution session and optionally persist its artifacts."""
     evaluator_config = load_evaluator_config(Path(config_file))
+    base_workflow_config = _CONFIG_LOADER.load(Path(config_file))
     default_seed_path = (
         _EVICTION_SPECIALIST_SEED_PATH
         if evaluator_config.candidate_policy_surface == "eviction_only"
         else _DEFAULT_SEED_PATH
     )
     effective_seed_program = seed_program or default_seed_path
-    provider = (
-        MinimalConfigProvider() if quick else YamlConfigProvider(Path(config_file), _CONFIG_LOADER)
-    )
+    if quick:
+        quick_model = (
+            model
+            or primary_model
+            or secondary_model
+            or base_workflow_config.mutation_model
+            or base_workflow_config.paradigm_model
+        )
+        provider = MinimalConfigProvider(
+            model=quick_model,
+            search_seed=(
+                search_seed if search_seed is not None else base_workflow_config.search_seed
+            ),
+            api_base=api_base or base_workflow_config.api_base,
+            api_key_env=api_key_env or base_workflow_config.api_key_env,
+        )
+    else:
+        provider = YamlConfigProvider(
+            Path(config_file),
+            _CONFIG_LOADER,
+            model=model,
+            primary_model=primary_model,
+            secondary_model=secondary_model,
+            search_seed=search_seed,
+            api_base=api_base,
+            api_key_env=api_key_env,
+        )
     program_source = _load_seed_program_source(effective_seed_program)
     workflow = _build_workflow(provider, program_source=program_source)
     with prefix_kv_config_environment(Path(config_file), quick=quick):
@@ -192,6 +279,7 @@ def compare_baselines(
     candidate_program: Path | None = None,
     config_file: str = _DEFAULT_CONFIG_FILE,
 ) -> None:
+    """Evaluate and print the candidate and registered baselines."""
     config = _config_from_args(
         quick=quick,
         capacity_blocks=capacity_blocks,
@@ -251,7 +339,6 @@ def write_baseline_plots(
     config_file: str = _DEFAULT_CONFIG_FILE,
 ) -> tuple[Path, ...]:
     """Write lightweight SVG plots for baseline comparison and debugging."""
-
     config = _config_from_args(
         quick=quick,
         capacity_blocks=capacity_blocks,
@@ -277,7 +364,6 @@ def save_run_artifacts(
     timestamp: datetime | None = None,
 ) -> Path:
     """Persist the best evolved program and evaluation metadata."""
-
     timestamp = timestamp or datetime.now(UTC)
     run_id = timestamp.strftime("%Y%m%dT%H%M%SZ")
     run_dir = output_root / run_id
@@ -314,6 +400,7 @@ def save_run_artifacts(
         "total_cost": getattr(result, "total_cost", None),
         "archive_size": getattr(result, "archive_size", None),
         "runtime_seconds": getattr(result, "runtime_seconds", None),
+        "repository": _repository_state(),
         "agentic_surrogate_probe_tripwire": {
             key: agentic_tripwire[key]
             for key in (
@@ -393,120 +480,28 @@ def save_run_artifacts(
     return run_dir
 
 
-def _agentic_surrogate_probe_tripwire(
-    workload_metrics: object,
-    *,
-    threshold: float = _AGENTIC_SURROGATE_PROBE_DIVERGENCE_THRESHOLD,
-) -> dict[str, Any]:
-    """Flag excessive agentic surrogate-to-held-out-probe divergence."""
-
-    payload: dict[str, Any] = {
-        "schema": "prefix-kv-cache-agentic-surrogate-probe-tripwire-v1",
-        "selection_score_excludes_probe": True,
-        "metric": "token_hit_rate",
-        "surrogate_workload": _AGENTIC_SURROGATE_WORKLOAD,
-        "probe_workload": _AGENTIC_PROBE_WORKLOAD,
-        "surrogate_value": None,
-        "probe_value": None,
-        "surrogate_minus_probe": None,
-        "absolute_gap": None,
-        "threshold": threshold,
-    }
-    surrogate_value = _tripwire_metric_value(workload_metrics, _AGENTIC_SURROGATE_WORKLOAD)
-    probe_value = _tripwire_metric_value(workload_metrics, _AGENTIC_PROBE_WORKLOAD)
-    payload["surrogate_value"] = surrogate_value
-    payload["probe_value"] = probe_value
-    if surrogate_value is None or probe_value is None:
-        payload.update(
-            {
-                "status": "flagged",
-                "flagged": True,
-                "flag_reason": "missing_or_invalid_metric",
-                "interpretation": (
-                    "The tripwire could not compare both agentic workloads and failed closed."
-                ),
-            }
-        )
-        return payload
-
-    signed_gap = surrogate_value - probe_value
-    absolute_gap = abs(signed_gap)
-    flagged = absolute_gap > threshold
-    payload.update(
-        {
-            "status": "flagged" if flagged else "pass",
-            "flagged": flagged,
-            "flag_reason": "divergence_exceeds_threshold" if flagged else None,
-            "surrogate_minus_probe": signed_gap,
-            "absolute_gap": absolute_gap,
-            "interpretation": (
-                "The surrogate and held-out agentic probe diverge beyond the allowed threshold."
-                if flagged
-                else "The surrogate and held-out agentic probe remain within the allowed threshold."
-            ),
-        }
-    )
-    return payload
-
-
-def _tripwire_metric_value(workload_metrics: object, workload: str) -> float | None:
-    """Return a finite workload token-hit rate, or None when unavailable."""
-
-    if not isinstance(workload_metrics, dict):
-        return None
-    metrics = workload_metrics.get(workload)
-    if not isinstance(metrics, dict):
-        return None
-    value = metrics.get("token_hit_rate")
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    numeric_value = float(value)
-    return numeric_value if math.isfinite(numeric_value) else None
-
-
-def _write_agentic_surrogate_probe_tripwire_report(
-    path: Path,
-    tripwire: dict[str, Any],
-) -> None:
-    """Write a compact human-readable agentic divergence tripwire report."""
-
-    lines = [
-        "# Agentic Surrogate-to-Probe Tripwire",
-        "",
-        f"**Status: {str(tripwire['status']).upper()}**",
-        "",
-        (
-            "This check compares token hit rate on the non-quarantined agentic surrogate "
-            "with the held-out agentic probe. The probe remains excluded from selection."
-        ),
-        "",
-    ]
-    if tripwire["absolute_gap"] is None:
-        lines.append(
-            "The check failed closed because one or both required workload metrics were "
-            "missing or invalid."
-        )
-    else:
-        lines.extend(
-            [
-                "| Surrogate | Held-out probe | Surrogate - probe | Absolute gap | Threshold |",
-                "|---:|---:|---:|---:|---:|",
-                (
-                    f"| {tripwire['surrogate_value']:.4f} | {tripwire['probe_value']:.4f} | "
-                    f"{tripwire['surrogate_minus_probe']:.4f} | "
-                    f"{tripwire['absolute_gap']:.4f} | {tripwire['threshold']:.4f} |"
-                ),
-                "",
-                str(tripwire["interpretation"]),
-            ]
-        )
-    lines.append("")
-    path.write_text("\n".join(lines), encoding="utf-8")
+def _repository_state() -> dict[str, Any]:
+    """Return the current Git revision and whether tracked files differ."""
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        status = subprocess.run(
+            ["git", "status", "--short", "--untracked-files=normal"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return {"commit": None, "dirty": None}
+    return {"commit": commit, "dirty": bool(status.strip())}
 
 
 def _persist_paradigm_candidates(run_dir: Path, *, metadata: dict[str, Any]) -> None:
     """Copy all evaluated PE candidates into the final run artifacts."""
-
     source_value = metadata.get("levi_paradigm_candidates_dir")
     if not source_value:
         return
@@ -523,7 +518,6 @@ def _persist_best_generated_mutation(
     config: EvaluatorConfig,
 ) -> None:
     """Persist and decompose the strongest archived elite that differs from seed."""
-
     snapshot_value = metadata.get("levi_snapshot_path")
     if not seed_source or not snapshot_value:
         return
@@ -586,7 +580,6 @@ def _persist_specialist_promotion_adjudication(
     config: EvaluatorConfig,
 ) -> dict[str, Any] | None:
     """Re-evaluate a specialist winner as a complete policy before promotion."""
-
     if config.fixed_admission_policy is None:
         return None
     promotion_limit = (
@@ -694,11 +687,14 @@ def _persist_specialist_promotion_adjudication(
             "interpretation": (
                 "The specialist winner is eligible for manual promotion as a complete policy."
                 if eligible
-                else "The specialist winner remains exploration-only and must not replace the incumbent."
+                else (
+                    "The specialist winner remains exploration-only and must not replace "
+                    "the incumbent."
+                )
             ),
         }
         _write_json(run_dir / "promotion_adjudication.json", payload)
-        _write_specialist_promotion_adjudication_report(
+        _write_specialist_report(
             run_dir / "promotion_adjudication.md",
             payload,
         )
@@ -718,178 +714,11 @@ def _persist_specialist_promotion_adjudication(
             ),
         }
         _write_json(run_dir / "promotion_adjudication.json", payload)
-        _write_specialist_promotion_adjudication_report(
+        _write_specialist_report(
             run_dir / "promotion_adjudication.md",
             payload,
         )
         return payload
-
-
-def _promotion_check(passed: bool, candidate: object, incumbent: object) -> dict[str, Any]:
-    """Build one serializable promotion-check result."""
-
-    return {
-        "passed": passed,
-        "candidate": candidate,
-        "incumbent_or_limit": incumbent,
-    }
-
-
-def _score_non_regression(
-    candidate: dict[str, Any],
-    incumbent: dict[str, Any],
-    *,
-    panel: str,
-) -> dict[str, Any]:
-    """Check a candidate panel score against the incumbent."""
-
-    candidate_score = float(candidate[panel]["combined_score"])
-    incumbent_score = float(incumbent[panel]["combined_score"])
-    return _promotion_check(
-        math.isfinite(candidate_score)
-        and math.isfinite(incumbent_score)
-        and candidate_score >= incumbent_score,
-        candidate_score,
-        incumbent_score,
-    )
-
-
-def _raw_selection_improvement(
-    candidate: dict[str, Any],
-    incumbent: dict[str, Any],
-) -> dict[str, Any]:
-    """Require strictly better selection behavior before complexity accounting."""
-
-    candidate_selection = candidate["selection"]
-    incumbent_selection = incumbent["selection"]
-    candidate_raw = float(candidate_selection["combined_score"]) + float(
-        candidate_selection["score_breakdown"].get("complexity_cost", 0.0)
-    )
-    incumbent_raw = float(incumbent_selection["combined_score"]) + float(
-        incumbent_selection["score_breakdown"].get("complexity_cost", 0.0)
-    )
-    return _promotion_check(
-        math.isfinite(candidate_raw)
-        and math.isfinite(incumbent_raw)
-        and candidate_raw > incumbent_raw,
-        candidate_raw,
-        incumbent_raw,
-    )
-
-
-def _split_metric_non_regression(
-    candidate: dict[str, Any],
-    incumbent: dict[str, Any],
-    *,
-    split: str,
-    metric: str,
-    lower_is_better: bool = False,
-) -> dict[str, Any]:
-    """Check one aggregate split metric against the incumbent."""
-
-    candidate_value = float(candidate["selection"]["split_metrics"][split][metric])
-    incumbent_value = float(incumbent["selection"]["split_metrics"][split][metric])
-    passed = (
-        candidate_value <= incumbent_value
-        if lower_is_better
-        else candidate_value >= incumbent_value
-    )
-    return _promotion_check(
-        math.isfinite(candidate_value) and math.isfinite(incumbent_value) and passed,
-        candidate_value,
-        incumbent_value,
-    )
-
-
-def _workload_metric_non_regression(
-    candidate: dict[str, Any],
-    incumbent: dict[str, Any],
-    *,
-    panel: str,
-    workload: str,
-    metric: str,
-) -> dict[str, Any]:
-    """Check one candidate workload metric against the incumbent."""
-
-    candidate_value = float(candidate[panel]["workload_metrics"][workload][metric])
-    incumbent_value = float(incumbent[panel]["workload_metrics"][workload][metric])
-    return _promotion_check(
-        math.isfinite(candidate_value)
-        and math.isfinite(incumbent_value)
-        and candidate_value >= incumbent_value,
-        candidate_value,
-        incumbent_value,
-    )
-
-
-def _promotion_tripwire_check(candidate: dict[str, Any]) -> dict[str, Any]:
-    """Apply the existing agentic surrogate-to-probe tripwire to a candidate."""
-
-    workloads = {
-        **candidate["selection"]["workload_metrics"],
-        **candidate["probe"]["workload_metrics"],
-    }
-    tripwire = _agentic_surrogate_probe_tripwire(workloads)
-    return {
-        "passed": not tripwire["flagged"],
-        "candidate": tripwire.get("absolute_gap"),
-        "incumbent_or_limit": tripwire["threshold"],
-        "tripwire": tripwire,
-    }
-
-
-def _write_specialist_promotion_adjudication_report(
-    path: Path,
-    payload: dict[str, Any],
-) -> None:
-    """Write a compact specialist promotion report."""
-
-    lines = [
-        "# Specialist Promotion Adjudication",
-        "",
-        f"**Status: {str(payload['status']).upper()}**",
-        "",
-        str(payload["interpretation"]),
-        "",
-    ]
-    checks = payload.get("checks")
-    if isinstance(checks, dict):
-        lines.extend(
-            [
-                "| Check | Passed | Candidate | Incumbent or limit |",
-                "|---|---:|---:|---:|",
-            ]
-        )
-        for name, check in checks.items():
-            lines.append(
-                f"| `{name}` | {check['passed']} | "
-                f"{_format_promotion_value(check.get('candidate'))} | "
-                f"{_format_promotion_value(check.get('incumbent_or_limit'))} |"
-            )
-    elif payload.get("error_message"):
-        lines.append(f"Adjudication error: `{payload['error_type']}: {payload['error_message']}`")
-    lines.append("")
-    path.write_text("\n".join(lines), encoding="utf-8")
-
-
-def _format_promotion_value(value: object) -> str:
-    """Format one promotion result value for Markdown."""
-
-    if isinstance(value, float):
-        return f"{value:.6f}"
-    return str(value)
-
-
-def _elite_source(elite: dict[str, Any]) -> str:
-    """Return source text from a Levi snapshot elite."""
-
-    return str(elite.get("content") or elite.get("code") or "")
-
-
-def _normalized_source(source: str) -> str:
-    """Normalize source for exact seed-versus-generated identity checks."""
-
-    return source.strip()
 
 
 def _candidate_panel_decomposition(
@@ -897,7 +726,6 @@ def _candidate_panel_decomposition(
     candidate_path: Path,
 ) -> dict[str, Any]:
     """Evaluate one candidate on selection, probe, and hidden panels."""
-
     source = candidate_path.read_text(encoding="utf-8")
     raw_complexity = scoring_fn_complexity(source)
     effective_complexity = scoring_fn_complexity(
@@ -919,56 +747,6 @@ def _candidate_panel_decomposition(
     }
 
 
-def _write_generated_mutation_report(
-    path: Path,
-    decomposition: dict[str, Any],
-) -> None:
-    """Write a compact incumbent-versus-generated decomposition table."""
-
-    rows = [
-        ("Seed", decomposition["seed"]),
-        ("Best generated mutation", decomposition["best_generated_mutation"]),
-    ]
-    lines = [
-        "# Best Generated Mutation Decomposition",
-        "",
-        (
-            "The recurrence-heavy probe and hidden panel are reporting-only and "
-            "do not affect the selection combined score."
-        ),
-        "",
-        "| Candidate | Selection | Raw before cx | Mean | Min contrib. | "
-        "Churn cost | Underfill cost | Cx | Cx subsidy | Probe | Agent hit | "
-        "Cyclic hit | Hidden |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
-    ]
-    for label, candidate in rows:
-        selection = candidate["selection"]
-        selection_breakdown = selection["score_breakdown"]
-        probe = candidate["probe"]
-        probe_workloads = probe["workload_metrics"]
-        hidden = candidate["hidden"]
-        raw_before_complexity = selection["combined_score"] + selection_breakdown.get(
-            "complexity_cost", 0.0
-        )
-        lines.append(
-            f"| {label} | {selection['combined_score']:.3f} | "
-            f"{raw_before_complexity:.3f} | "
-            f"{selection_breakdown.get('mean_workload_score', 0.0):.3f} | "
-            f"{selection_breakdown.get('min_workload_contribution', 0.0):.3f} | "
-            f"{selection_breakdown.get('churn_cost', 0.0):.3f} | "
-            f"{selection_breakdown.get('underfill_cost', 0.0):.3f} | "
-            f"{candidate['effective_complexity']} | "
-            f"{candidate['primitive_subsidy_nodes']} | "
-            f"{probe['combined_score']:.3f} | "
-            f"{probe_workloads['probe/agent_trace_branching']['token_hit_rate']:.4f} | "
-            f"{probe_workloads['probe/cyclic_working_set_pressure']['token_hit_rate']:.4f} | "
-            f"{hidden['combined_score']:.3f} |"
-        )
-    lines.append("")
-    path.write_text("\n".join(lines), encoding="utf-8")
-
-
 def hidden_report(
     *,
     quick: bool = False,
@@ -978,6 +756,7 @@ def hidden_report(
     candidate_program: Path | None = None,
     config_file: str = _DEFAULT_CONFIG_FILE,
 ) -> None:
+    """Evaluate a candidate and baselines on the hidden split."""
     config = _config_from_args(
         quick=quick,
         capacity_blocks=capacity_blocks,
@@ -1013,7 +792,6 @@ def probe_report(
     config_file: str = _DEFAULT_CONFIG_FILE,
 ) -> dict[str, Any]:
     """Evaluate and report the quarantined structure-generalization probe."""
-
     config = _config_from_args(
         quick=quick,
         capacity_blocks=capacity_blocks,
@@ -1059,7 +837,6 @@ def calibrate_trace_report(
     request_limit: int | None,
 ) -> dict[str, Any]:
     """Write production-trace calibration targets without loading prompt content."""
-
     calibration = {
         **calibrate_anonymized_trace(
             trace_path,
@@ -1090,7 +867,6 @@ def replay_trace_report(
     block_size_tokens: int | None = None,
 ) -> dict[str, Any]:
     """Replay an anonymized metadata trace through deployable policies."""
-
     config = _config_from_args(
         quick=False,
         capacity_blocks=capacity_blocks,
@@ -1152,7 +928,6 @@ def write_workload_manifest_report(
     config_file: str = _DEFAULT_CONFIG_FILE,
 ) -> dict[str, object]:
     """Write fingerprints and summaries for every generated synthetic stream."""
-
     config = _config_from_args(
         quick=quick,
         capacity_blocks=capacity_blocks,
@@ -1177,7 +952,6 @@ def write_score_weight_sensitivity_report(
     block_size_tokens: int | None = None,
 ) -> Path:
     """Evaluate rank sensitivity to the verifier's principal penalty weights."""
-
     config = _config_from_args(
         quick=False,
         capacity_blocks=capacity_blocks,
@@ -1227,7 +1001,6 @@ def write_block_size_robustness_report(
     block_sizes: tuple[int, ...] = _DEFAULT_BLOCK_SIZE_SWEEP_TOKENS,
 ) -> Path:
     """Compare the incumbent and credibility baselines at fixed token capacities."""
-
     if not block_sizes:
         raise ValueError("at least one block size is required")
     base = _config_from_args(
@@ -1360,26 +1133,6 @@ def write_block_size_robustness_report(
     return output_path
 
 
-def _capacity_blocks_for_token_tiers(
-    capacity_tokens: tuple[int, ...],
-    *,
-    block_size_tokens: int,
-) -> tuple[int, ...]:
-    """Convert fixed token-capacity tiers into exact block counts."""
-
-    if block_size_tokens <= 0:
-        raise ValueError("block size tokens must be positive")
-    if not capacity_tokens or any(capacity <= 0 for capacity in capacity_tokens):
-        raise ValueError("capacity token tiers must be positive")
-    if any(capacity % block_size_tokens for capacity in capacity_tokens):
-        raise ValueError("capacity token tiers must be divisible by every block size")
-    return tuple(capacity // block_size_tokens for capacity in capacity_tokens)
-
-
-def _format_int_tuple(values: tuple[int, ...]) -> str:
-    return " / ".join(str(value) for value in values)
-
-
 def _score_weight_sensitivity_rows(
     results: dict[str, EvaluationResult],
     config: EvaluatorConfig,
@@ -1388,7 +1141,6 @@ def _score_weight_sensitivity_rows(
     factors: tuple[float, ...] = _SENSITIVITY_FACTORS,
 ) -> list[dict[str, Any]]:
     """Rescore fixed trials over one-at-a-time score-weight perturbations."""
-
     rows = []
     for weight in weights:
         base_value = float(getattr(config, weight))
@@ -1422,154 +1174,213 @@ def _score_weight_sensitivity_rows(
     return rows
 
 
-def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--iterations", type=int, default=25)
-    parser.add_argument(
-        "--quick",
-        action="store_true",
-        help="Use a smoke-only single-seed slice; do not use it for ranking decisions.",
-    )
-    parser.add_argument(
-        "--workload-preset",
-        default="default",
-        choices=("default", "small"),
-    )
-    parser.add_argument("--capacity-blocks", type=int, default=None)
-    parser.add_argument(
-        "--capacity-sweep-blocks",
-        default="",
-        help="Comma-separated capacities to evaluate, for example 48,96.",
-    )
-    parser.add_argument("--block-size-tokens", type=int, default=None)
-    parser.add_argument("--baseline-report", action="store_true")
-    parser.add_argument(
-        "--candidate-program",
-        type=Path,
-        default=None,
-        help="Candidate .py file or run directory to compare in --baseline-report.",
-    )
-    parser.add_argument("--hidden-report", action="store_true")
-    parser.add_argument(
-        "--probe-report",
-        action="store_true",
-        help="Evaluate the quarantined recurrence/structure-generalization probe.",
-    )
-    parser.add_argument(
-        "--probe-output",
-        type=Path,
-        default=Path("artifacts/prefix_kv_cache_structure_probe.json"),
-        help="JSON output for --probe-report.",
-    )
-    parser.add_argument(
-        "--plot-report",
-        action="store_true",
-        help="Write SVG baseline plots without launching Levi.",
-    )
-    parser.add_argument(
-        "--plot-output",
-        default="artifacts/prefix_kv_cache_plots",
-        help="Directory for --plot-report SVG files.",
-    )
-    parser.add_argument(
-        "--artifact-output",
-        default="artifacts/prefix_kv_cache_runs",
-        help="Directory for saved evolution run artifacts.",
-    )
-    parser.add_argument(
-        "--seed-program",
-        type=Path,
-        default=None,
-        help=(
-            "Candidate .py file or saved run directory to use as the evolution seed; "
-            "defaults to the pressure-aware incumbent."
-        ),
-    )
-    parser.add_argument(
-        "--no-save-artifacts",
-        action="store_true",
-        help="Do not save best_program.py and run metadata after evolution.",
-    )
-    parser.add_argument(
-        "--config",
-        default=_DEFAULT_CONFIG_FILE,
-        help="Path to the Levi YAML config file.",
-    )
-    parser.add_argument(
-        "--calibrate-trace",
-        type=Path,
-        default=None,
-        help="Summarize an anonymized metadata-only JSONL production trace.",
-    )
-    parser.add_argument(
-        "--replay-trace",
-        type=Path,
-        default=None,
-        help="Replay an anonymized metadata-only JSONL production trace.",
-    )
-    parser.add_argument(
-        "--trace-output",
-        type=Path,
-        default=Path("artifacts/prefix_kv_cache_trace_report.json"),
-        help="Output JSON for --calibrate-trace or --replay-trace.",
-    )
-    parser.add_argument(
-        "--trace-arrival-bucket-ms",
-        type=int,
-        default=100,
-        help="Convert trace timestamps to simulator arrival steps using this bucket.",
-    )
-    parser.add_argument(
-        "--trace-request-limit",
-        type=int,
-        default=None,
-        help="Optional prefix request count for trace calibration or replay.",
-    )
-    parser.add_argument(
-        "--workload-manifest",
-        action="store_true",
-        help="Write deterministic fingerprints and summaries for all synthetic streams.",
-    )
-    parser.add_argument(
-        "--workload-manifest-output",
-        type=Path,
-        default=Path("artifacts/prefix_kv_cache_workload_manifest.json"),
-        help="JSON output for --workload-manifest.",
-    )
-    parser.add_argument(
-        "--sensitivity-report",
-        action="store_true",
-        help="Rescore fixed full-panel trials under one-at-a-time weight changes.",
-    )
-    parser.add_argument(
-        "--sensitivity-output",
-        type=Path,
-        default=Path("artifacts/prefix_kv_cache_weight_sensitivity.md"),
-        help="Markdown output for --sensitivity-report.",
-    )
-    parser.add_argument(
-        "--block-size-report",
-        action="store_true",
-        help="Compare block sizes over identical traffic and fixed token-capacity tiers.",
-    )
-    parser.add_argument(
-        "--block-size-sweep",
-        default="8,16,32",
-        help="Comma-separated cache block sizes for --block-size-report.",
-    )
-    parser.add_argument(
-        "--block-size-output",
-        type=Path,
-        default=Path("artifacts/prefix_kv_cache_block_size_robustness.md"),
-        help="Markdown output for --block-size-report.",
-    )
-    return parser
-
-
-def main() -> None:
-    args = build_arg_parser().parse_args()
-    capacity_sweep_blocks = _parse_capacity_sweep(args.capacity_sweep_blocks)
-    block_size_sweep = _parse_block_size_sweep(args.block_size_sweep)
+@click.command()
+@click.option("--iterations", type=click.IntRange(min=1), default=25, show_default=True)
+@click.option(
+    "--quick",
+    is_flag=True,
+    help="Use a smoke-only single-seed slice; do not use it for ranking decisions.",
+)
+@click.option(
+    "--workload-preset",
+    type=click.Choice(("default", "small")),
+    default="default",
+    show_default=True,
+)
+@click.option("--capacity-blocks", type=click.IntRange(min=1))
+@click.option(
+    "--capacity-sweep-blocks",
+    default="",
+    help="Comma-separated capacities to evaluate, for example 48,96.",
+)
+@click.option("--block-size-tokens", type=click.IntRange(min=1))
+@click.option("--baseline-report", is_flag=True)
+@click.option(
+    "--candidate-program",
+    type=click.Path(path_type=Path),
+    help="Candidate .py file or run directory to compare in --baseline-report.",
+)
+@click.option("--hidden-report", is_flag=True)
+@click.option(
+    "--probe-report",
+    is_flag=True,
+    help="Evaluate the quarantined recurrence/structure-generalization probe.",
+)
+@click.option(
+    "--probe-output",
+    type=click.Path(path_type=Path),
+    default=Path("artifacts/prefix_kv_cache_structure_probe.json"),
+    show_default=True,
+    help="JSON output for --probe-report.",
+)
+@click.option(
+    "--plot-report",
+    is_flag=True,
+    help="Write SVG baseline plots without launching Levi.",
+)
+@click.option(
+    "--plot-output",
+    type=click.Path(path_type=Path),
+    default=Path("artifacts/prefix_kv_cache_plots"),
+    show_default=True,
+    help="Directory for --plot-report SVG files.",
+)
+@click.option(
+    "--artifact-output",
+    type=click.Path(path_type=Path),
+    default=Path("artifacts/prefix_kv_cache_runs"),
+    show_default=True,
+    help="Directory for saved evolution run artifacts.",
+)
+@click.option(
+    "--seed-program",
+    type=click.Path(path_type=Path),
+    help=(
+        "Candidate .py file or saved run directory to use as the evolution seed; "
+        "defaults to the pressure-aware incumbent."
+    ),
+)
+@click.option(
+    "--no-save-artifacts",
+    is_flag=True,
+    help="Do not save best_program.py and run metadata after evolution.",
+)
+@click.option(
+    "--config",
+    type=click.Path(path_type=str),
+    default=_DEFAULT_CONFIG_FILE,
+    show_default=True,
+    help="Path to the Levi YAML config file.",
+)
+@click.option(
+    "--model",
+    help=(
+        "Use one LiteLLM model for all search calls, for example "
+        "anthropic/<model>, gemini/<model>, ollama/<model>, or openai/<model>."
+    ),
+)
+@click.option(
+    "--primary-model",
+    help="Override the mutation model with a provider-qualified LiteLLM model.",
+)
+@click.option(
+    "--secondary-model",
+    help="Override the paradigm-shift model with a provider-qualified LiteLLM model.",
+)
+@click.option(
+    "--search-seed",
+    type=click.IntRange(min=0),
+    help="Override search.seed for Levi selection and supported model requests.",
+)
+@click.option(
+    "--api-base",
+    help="Override the model API base URL, useful for self-hosted OpenAI-compatible APIs.",
+)
+@click.option(
+    "--api-key-env",
+    help="Name of the environment variable containing the model API key.",
+)
+@click.option(
+    "--show-config",
+    is_flag=True,
+    help="Print resolved evaluator, model, and seed settings without calling a model.",
+)
+@click.option(
+    "--calibrate-trace",
+    type=click.Path(path_type=Path),
+    help="Summarize an anonymized metadata-only JSONL production trace.",
+)
+@click.option(
+    "--replay-trace",
+    type=click.Path(path_type=Path),
+    help="Replay an anonymized metadata-only JSONL production trace.",
+)
+@click.option(
+    "--trace-output",
+    type=click.Path(path_type=Path),
+    default=Path("artifacts/prefix_kv_cache_trace_report.json"),
+    show_default=True,
+    help="Output JSON for --calibrate-trace or --replay-trace.",
+)
+@click.option(
+    "--trace-arrival-bucket-ms",
+    type=click.IntRange(min=1),
+    default=100,
+    show_default=True,
+    help="Convert trace timestamps to simulator arrival steps using this bucket.",
+)
+@click.option(
+    "--trace-request-limit",
+    type=click.IntRange(min=1),
+    help="Optional prefix request count for trace calibration or replay.",
+)
+@click.option(
+    "--workload-manifest",
+    is_flag=True,
+    help="Write deterministic fingerprints and summaries for all synthetic streams.",
+)
+@click.option(
+    "--workload-manifest-output",
+    type=click.Path(path_type=Path),
+    default=Path("artifacts/prefix_kv_cache_workload_manifest.json"),
+    show_default=True,
+    help="JSON output for --workload-manifest.",
+)
+@click.option(
+    "--sensitivity-report",
+    is_flag=True,
+    help="Rescore fixed full-panel trials under one-at-a-time weight changes.",
+)
+@click.option(
+    "--sensitivity-output",
+    type=click.Path(path_type=Path),
+    default=Path("artifacts/prefix_kv_cache_weight_sensitivity.md"),
+    show_default=True,
+    help="Markdown output for --sensitivity-report.",
+)
+@click.option(
+    "--block-size-report",
+    is_flag=True,
+    help="Compare block sizes over identical traffic and fixed token-capacity tiers.",
+)
+@click.option(
+    "--block-size-sweep",
+    default="8,16,32",
+    show_default=True,
+    help="Comma-separated cache block sizes for --block-size-report.",
+)
+@click.option(
+    "--block-size-output",
+    type=click.Path(path_type=Path),
+    default=Path("artifacts/prefix_kv_cache_block_size_robustness.md"),
+    show_default=True,
+    help="Markdown output for --block-size-report.",
+)
+def main(**kwargs: Any) -> None:
+    """Run reports, trace tools, or the Levi evolution workflow."""
+    args = SimpleNamespace(**kwargs)
+    if args.model and (args.primary_model or args.secondary_model):
+        raise click.UsageError(
+            "--model cannot be combined with --primary-model or --secondary-model"
+        )
+    try:
+        capacity_sweep_blocks = _parse_capacity_sweep(args.capacity_sweep_blocks)
+        block_size_sweep = _parse_block_size_sweep(args.block_size_sweep)
+    except ValueError as error:
+        raise click.BadParameter(str(error)) from error
+    if args.show_config:
+        _show_resolved_config(
+            iterations=args.iterations,
+            config_file=args.config,
+            quick=args.quick or args.workload_preset == "small",
+            model=args.model,
+            primary_model=args.primary_model,
+            secondary_model=args.secondary_model,
+            search_seed=args.search_seed,
+            api_base=args.api_base,
+            api_key_env=args.api_key_env,
+        )
+        return
     if args.calibrate_trace is not None:
         calibrate_trace_report(
             args.calibrate_trace,
@@ -1603,7 +1414,7 @@ def main() -> None:
         return
     if args.sensitivity_report:
         if args.candidate_program is None:
-            raise ValueError("--sensitivity-report requires --candidate-program")
+            raise click.UsageError("--sensitivity-report requires --candidate-program")
         write_score_weight_sensitivity_report(
             args.sensitivity_output,
             candidate_program=args.candidate_program,
@@ -1671,7 +1482,85 @@ def main() -> None:
         quick=args.quick or args.workload_preset == "small",
         seed_program=args.seed_program,
         artifact_output=None if args.no_save_artifacts else Path(args.artifact_output),
+        model=args.model,
+        primary_model=args.primary_model,
+        secondary_model=args.secondary_model,
+        search_seed=args.search_seed,
+        api_base=args.api_base,
+        api_key_env=args.api_key_env,
     )
+
+
+def _show_resolved_config(
+    *,
+    iterations: int,
+    config_file: str,
+    quick: bool,
+    model: str | None,
+    primary_model: str | None,
+    secondary_model: str | None,
+    search_seed: int | None,
+    api_base: str | None,
+    api_key_env: str | None,
+) -> None:
+    """Print the effective workflow and evaluator configuration."""
+    evaluator = load_evaluator_config(Path(config_file))
+    base_workflow = _CONFIG_LOADER.load(Path(config_file))
+    if quick:
+        provider = MinimalConfigProvider(
+            model=(
+                model
+                or primary_model
+                or secondary_model
+                or base_workflow.mutation_model
+                or base_workflow.paradigm_model
+            ),
+            search_seed=search_seed if search_seed is not None else base_workflow.search_seed,
+            api_base=api_base or base_workflow.api_base,
+            api_key_env=api_key_env or base_workflow.api_key_env,
+        )
+    else:
+        provider = YamlConfigProvider(
+            Path(config_file),
+            _CONFIG_LOADER,
+            model=model,
+            primary_model=primary_model,
+            secondary_model=secondary_model,
+            search_seed=search_seed,
+            api_base=api_base,
+            api_key_env=api_key_env,
+        )
+    workflow = provider.load(iterations)
+    payload = {
+        "config": str(Path(config_file)),
+        "quick": quick,
+        "iterations": iterations,
+        "models": {
+            "model": workflow.model,
+            "mutation_model": workflow.mutation_model,
+            "paradigm_model": workflow.paradigm_model,
+        },
+        "search_seed": workflow.search_seed,
+        "api_base": workflow.api_base,
+        "api_key_env": workflow.api_key_env,
+        "api_key_env_set": bool(workflow.api_key_env and os.environ.get(workflow.api_key_env)),
+        "search_reproducibility": {
+            "python_random_seeded": True,
+            "numpy_random_seeded": True,
+            "model_request_seeds": True,
+            "bit_exact_remote_search_guaranteed": False,
+        },
+        "pipeline": workflow.pipeline,
+        "evaluator": {
+            "workload_seeds": list(evaluator.seeds),
+            "policy_seed": evaluator.policy_seed,
+            "request_count": evaluator.request_count,
+            "block_size_tokens": evaluator.block_size_tokens,
+            "capacity_blocks": list(evaluator.effective_capacity_blocks()),
+            "workload_token_granularity": evaluator.workload_token_granularity,
+        },
+    }
+    print(json.dumps(payload, indent=2, sort_keys=True))
 
 
 def _config_from_args(
@@ -1698,21 +1587,14 @@ def _config_from_args(
 
 
 def _parse_capacity_sweep(value: str) -> tuple[int, ...]:
-    if not value.strip():
-        return ()
-    capacities = tuple(int(part.strip()) for part in value.split(",") if part.strip())
-    if not capacities:
-        return ()
-    if any(capacity <= 0 for capacity in capacities):
-        raise ValueError("--capacity-sweep-blocks values must be positive")
-    return capacities
+    return parse_positive_int_csv(value, option_name="--capacity-sweep-blocks")
 
 
 def _parse_block_size_sweep(value: str) -> tuple[int, ...]:
-    block_sizes = tuple(int(part.strip()) for part in value.split(",") if part.strip())
-    if not block_sizes or any(block_size <= 0 for block_size in block_sizes):
+    block_sizes = parse_unique_positive_int_csv(value, option_name="--block-size-sweep")
+    if not block_sizes:
         raise ValueError("--block-size-sweep values must be positive")
-    return tuple(dict.fromkeys(block_sizes))
+    return block_sizes
 
 
 def _evaluate_baselines(
@@ -1733,7 +1615,6 @@ def _baseline_report_headline(
     ranked: list[tuple[str, EvaluationResult]],
 ) -> str:
     """Compatibility wrapper for the extracted report renderer."""
-
     return baseline_reporting.baseline_report_headline(ranked)
 
 
@@ -1837,27 +1718,6 @@ def _resolve_candidate_program(path: Path) -> Path:
     if not path.exists():
         raise FileNotFoundError(f"candidate program {path} does not exist")
     return path
-
-
-def _write_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
-        encoding="utf-8",
-    )
-
-
-def _evaluation_result_summary(result: EvaluationResult) -> dict[str, Any]:
-    return {
-        "combined_score": result.combined_score,
-        "success": result.success,
-        "invalid_fraction": result.invalid_fraction,
-        "split_metrics": result.split_metrics,
-        "workload_metrics": result.workload_metrics,
-        "capacity_metrics": result.capacity_metrics,
-        "candidate_metadata": result.candidate_metadata,
-        "score_breakdown": result.score_breakdown,
-    }
 
 
 if __name__ == "__main__":

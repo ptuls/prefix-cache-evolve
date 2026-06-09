@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
+
+import click
 
 from prefix_cache_evolve.evaluators.prefix_kv_cache import (
     EvaluationResult,
@@ -61,6 +62,7 @@ class AblationStructuredPolicy(StructuredRecurrencePolicy):
         self._disabled = disabled
 
     def score_admission(self, block, now):
+        """Score admission with the selected components disabled."""
         fast, slow, priority, _ = self._state.values(block.prefix_hash, now)
         reuse = math.log1p(fast + 0.6 * slow)
         structure = 0.15 * math.log1p(block.descendant_count)
@@ -90,6 +92,7 @@ class AblationStructuredPolicy(StructuredRecurrencePolicy):
         )
 
     def score_eviction(self, block, now):
+        """Score eviction with the selected components disabled."""
         fast, slow, priority, misses = self._state.values(block.prefix_hash, now)
         reuse = math.log1p(fast + 0.6 * slow)
         structure = math.log1p(block.descendant_count + block.active_ref_count)
@@ -145,7 +148,6 @@ def _summary(result: EvaluationResult, split: str) -> dict[str, float]:
 
 def run_ablation(config_path: Path) -> dict[str, object]:
     """Evaluate every structured feature deletion on validation and probe."""
-
     config = load_evaluator_config(config_path)
     rows = []
     for ablation in ABLATIONS:
@@ -211,27 +213,28 @@ def _write_markdown(path: Path, payload: dict[str, object]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=Path("configs/prefix_kv_cache.yaml"),
-    )
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=Path("artifacts/prefix_kv_cache_structured_ablation.json"),
-    )
-    args = parser.parse_args()
-
-    payload = run_ablation(args.config)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-    markdown_path = args.output.with_suffix(".md")
+@click.command()
+@click.option(
+    "--config",
+    type=click.Path(path_type=Path),
+    default=Path("configs/prefix_kv_cache.yaml"),
+    show_default=True,
+)
+@click.option(
+    "--output",
+    type=click.Path(path_type=Path),
+    default=Path("artifacts/prefix_kv_cache_structured_ablation.json"),
+    show_default=True,
+)
+def main(config: Path, output: Path) -> None:
+    """Ablate structured prefix KV-cache policy terms."""
+    payload = run_ablation(config)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    markdown_path = output.with_suffix(".md")
     _write_markdown(markdown_path, payload)
-    print(args.output)
-    print(markdown_path)
+    click.echo(output)
+    click.echo(markdown_path)
 
 
 if __name__ == "__main__":

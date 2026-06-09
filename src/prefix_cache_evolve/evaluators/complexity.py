@@ -12,7 +12,6 @@ _FORM_AWARE_MAX_DISCOUNT_FRACTION = 0.25
 
 def scoring_fn_complexity(source: str, *, form_aware: bool = False) -> int:
     """Count effective AST nodes in the candidate policy implementation."""
-
     try:
         tree = ast.parse(source)
     except SyntaxError:
@@ -43,13 +42,11 @@ def scoring_fn_complexity(source: str, *, form_aware: bool = False) -> int:
 
 def _nested_implementation_complexity(node: ast.AST) -> int:
     """Counts policy implementations nested inside an ignored factory wrapper."""
-
     return sum(sum(1 for _ in ast.walk(root)) for root in _nested_implementation_roots(node))
 
 
 def _nested_implementation_roots(node: ast.AST) -> list[ast.AST]:
     """Return policy implementations nested inside an ignored factory wrapper."""
-
     roots = []
     for child in ast.iter_child_nodes(node):
         if isinstance(child, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -64,7 +61,6 @@ def _provided_primitive_credit(
     implementation_roots: list[ast.AST],
 ) -> int:
     """Return bounded credits for canonical primitive composition call sites."""
-
     constructor_credits: dict[str, int] = {}
     function_credits: dict[str, int] = {}
     for node in tree.body:
@@ -121,13 +117,11 @@ def _provided_primitive_credit(
 
 def _called_name(node: ast.expr) -> str | None:
     """Return the direct called name when statically identifiable."""
-
     return node.id if isinstance(node, ast.Name) else None
 
 
 def _expression_key(node: ast.expr) -> str | None:
     """Return a stable dotted key for simple assignment/call expressions."""
-
     if isinstance(node, ast.Name):
         return node.id
     if isinstance(node, ast.Attribute):

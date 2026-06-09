@@ -64,7 +64,6 @@ _MUTATION_GUIDANCE_WORKLOADS = (
 
 def evaluate(program_path: str) -> EvaluatorResult:
     """Evaluate selection splits and the quarantined structure probe."""
-
     try:
         source = Path(program_path).read_text(encoding="utf-8")
     except Exception as exc:
@@ -88,13 +87,11 @@ def evaluate_factory(factory: Callable) -> EvaluatorResult:
 
     Complexity is unavailable for opaque callables and is therefore set to 0.
     """
-
     return _evaluate_isolated(_evaluate_factory, factory, 0)
 
 
 def evaluate_source(source: str) -> EvaluatorResult:
     """Evaluate candidate source and apply the formula-complexity penalty."""
-
     complexity = _source_complexity(source)
     rejection = _static_rejection(source, complexity)
     if rejection is not None:
@@ -108,7 +105,6 @@ def evaluate_source(source: str) -> EvaluatorResult:
 
 def evaluate_hidden(factory: Callable) -> EvaluatorResult:
     """Evaluate the quarantined hidden split for final reporting only."""
-
     return _evaluate_isolated(
         _evaluate_factory,
         factory,
@@ -120,7 +116,6 @@ def evaluate_hidden(factory: Callable) -> EvaluatorResult:
 
 def _source_complexity(source: str) -> int:
     """Return effective source complexity under the active evaluator config."""
-
     config = active_evaluator_config(DEFAULT_CONFIG)
     return scoring_fn_complexity(
         source,
@@ -130,7 +125,6 @@ def _source_complexity(source: str) -> int:
 
 def _static_rejection(source: str, complexity: int) -> EvaluatorResult | None:
     """Reject source patterns that are outside the deployable search contract."""
-
     config = active_evaluator_config(DEFAULT_CONFIG)
     violations = _candidate_source_violations(source, complexity, config)
     if not violations:
@@ -156,7 +150,6 @@ def _candidate_source_violations(
     config: EvaluatorConfig,
 ) -> tuple[str, ...]:
     """Return deterministic static violations for one candidate source."""
-
     violations = []
     try:
         tree = ast.parse(source)
@@ -225,7 +218,6 @@ def _static_repair_feedback(
     config: EvaluatorConfig,
 ) -> tuple[str, ...]:
     """Translate static violations into concise, actionable repair instructions."""
-
     repairs = []
     for violation in violations:
         if violation.startswith("syntax error"):
@@ -258,7 +250,8 @@ def _static_repair_feedback(
                 " is not deployable"
             )
             repairs.append(
-                f"Remove {field}; use observed recurrence, subtree, gap, or pressure fields instead."
+                f"Remove {field}; use observed recurrence, subtree, gap, "
+                "or pressure fields instead."
             )
         elif violation.startswith("sanitized request field "):
             field = violation.removeprefix("sanitized request field ").removesuffix(
@@ -330,7 +323,6 @@ def _multi_timescale_decay_violations(node: ast.Call) -> tuple[str, ...]:
 
 def _threshold_excess_violations(node: ast.Call) -> tuple[str, ...]:
     """Validate the compact stateless threshold primitive's call shape."""
-
     violations = []
     if len(node.args) > 2:
         violations.append("threshold_excess accepts at most two positional arguments")
@@ -453,7 +445,6 @@ def _load_error_artifacts(exc: Exception) -> dict:
 
 def _load_repair_feedback(exc: Exception) -> tuple[str, ...]:
     """Return a concise repair instruction for a candidate load failure."""
-
     if isinstance(exc, SyntaxError):
         line = f" at line {exc.lineno}" if exc.lineno is not None else ""
         return (f"Fix the syntax error{line}: {exc.msg}.",)
@@ -554,7 +545,6 @@ def _success_result(
 
 def _runtime_repair_feedback(invalid_reasons: tuple[str, ...]) -> tuple[str, ...]:
     """Translate runtime policy-contract failures into focused repair instructions."""
-
     repairs = []
     for reason in invalid_reasons:
         if reason.startswith("policy must implement "):
@@ -585,7 +575,6 @@ def _selection_feedback_metrics(
     prefix_result: PrefixEvaluationResult,
 ) -> dict[str, float]:
     """Flatten selection and targeted guidance diagnostics for Levi."""
-
     metrics = {
         f"selection_{key}": float(value)
         for key, value in prefix_result.score_breakdown.items()
@@ -626,7 +615,6 @@ def _promotion_eligibility_metrics(
     prefix_result: PrefixEvaluationResult,
 ) -> dict[str, float | bool]:
     """Report whether an exploratory candidate clears the final complexity gate."""
-
     config = active_evaluator_config(DEFAULT_CONFIG)
     limit = config.promotion_max_candidate_complexity
     complexity = int(prefix_result.candidate_metadata.get("scoring_fn_complexity", 0))
@@ -641,7 +629,6 @@ def _promotion_eligibility_metrics(
 
 def _promotion_complexity_feedback(prefix_result: PrefixEvaluationResult) -> str | None:
     """Ask exploratory over-cap candidates to preserve behavior while simplifying."""
-
     config = active_evaluator_config(DEFAULT_CONFIG)
     limit = config.promotion_max_candidate_complexity
     complexity = int(prefix_result.candidate_metadata.get("scoring_fn_complexity", 0))
@@ -651,8 +638,9 @@ def _promotion_complexity_feedback(prefix_result: PrefixEvaluationResult) -> str
     return (
         f"Exploration-only candidate: behavioral evaluation completed at effective complexity "
         f"{complexity}, but final promotion requires at most {limit}. Delete or simplify at least "
-        f"{excess} effective AST nodes while preserving the eviction behavior and score gains. "
-        "Do not replace the removed code with another subsystem."
+        f"{excess} effective AST nodes in a dedicated simplification mutation while preserving "
+        "the policy behavior and score gains. Do not add new behavior or replace the removed "
+        "code with another subsystem."
     )
 
 
@@ -660,7 +648,6 @@ def _workload_failure_feedback(
     prefix_result: PrefixEvaluationResult,
 ) -> tuple[list[float], list[str]]:
     """Build focused non-quarantined diagnostics for Levi mutation prompts."""
-
     breakdown = prefix_result.score_breakdown
     summary = (
         "Selection diagnostics: "

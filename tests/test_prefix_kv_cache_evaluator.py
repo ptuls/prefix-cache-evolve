@@ -985,6 +985,10 @@ def test_evaluate_source_scores_over_promotion_cap_and_requests_simplification(
         "Exploration-only candidate: behavioral evaluation completed" in feedback
         for feedback in result.metrics["feedback_per_example"]
     )
+    assert any(
+        "dedicated simplification mutation" in feedback
+        for feedback in result.metrics["feedback_per_example"]
+    )
     assert result.artifacts["workload_metrics"]
 
 
@@ -1613,8 +1617,72 @@ def test_avoidable_eviction_audit_distinguishes_lru_from_oracle() -> None:
 
     assert lru.avoidable_eviction_count == 1
     assert lru.avoidable_short_reuse_eviction_count == 1
+    assert lru.value_weighted_avoidable_eviction_count == 1
+    assert lru.value_weighted_avoidable_eviction_regret_tokens == 4.0
+    assert lru.avoidable_admission_regret_tokens == 0.0
+    assert lru.avoidable_rejection_regret_tokens == 0.0
     assert oracle.avoidable_eviction_count == 0
+    assert oracle.value_weighted_avoidable_eviction_count == 0
     assert oracle.token_hit_rate > lru.token_hit_rate
+
+
+def test_admission_audit_distinguishes_avoidable_admission_and_rejection() -> None:
+    def requests(tokens: tuple[int, ...]) -> tuple[WorkloadRequest, ...]:
+        return tuple(
+            WorkloadRequest(
+                info=RequestInfo(
+                    request_id=request_id,
+                    tenant_id=0,
+                    session_id=0,
+                    prompt_length=4,
+                    priority=0,
+                    request_type="unit",
+                    prompt_tokens=tuple([token] * 4),
+                ),
+                true_output_length=1,
+            )
+            for request_id, token in enumerate(tokens)
+        )
+
+    def run(
+        policy,
+        token_stream: tuple[int, ...],
+        *,
+        capacity_blocks: int = 1,
+    ) -> TrialMetrics:
+        simulator = PrefixKVCacheSimulator(
+            capacity_blocks=capacity_blocks,
+            block_size_tokens=4,
+            prefill_cost_per_token=1.0,
+            lookup_cost_per_block=0.0,
+            eviction_cost_per_block=0.0,
+        )
+        return simulator.run(
+            policy,
+            requests(token_stream),
+            split="train",
+            workload="unit",
+            seed=1,
+        )
+
+    admit_all = run(AdmitAllLRU(), (1, 2, 1))
+    reject_all = run(baseline_no_cache(1, 4), (1, 1))
+    threshold_and_ranking_error = run(
+        AdmitAllLRU(),
+        (1, 2, 2, 3, 2, 1, 1),
+        capacity_blocks=2,
+    )
+
+    assert admit_all.avoidable_admission_count == 1
+    assert admit_all.avoidable_admission_regret_tokens == 4.0
+    assert admit_all.avoidable_rejection_count == 0
+    assert admit_all.value_weighted_avoidable_eviction_regret_tokens == 0.0
+    assert reject_all.avoidable_admission_count == 0
+    assert reject_all.avoidable_rejection_count == 1
+    assert reject_all.avoidable_rejection_regret_tokens == 4.0
+    assert reject_all.value_weighted_avoidable_eviction_regret_tokens == 0.0
+    assert threshold_and_ranking_error.avoidable_admission_regret_tokens == 4.0
+    assert threshold_and_ranking_error.value_weighted_avoidable_eviction_regret_tokens == 4.0
 
 
 def test_temporal_and_tenant_tail_metrics_expose_service_collapse() -> None:
@@ -2499,7 +2567,8 @@ def test_candidate_config_matches_default_verifier_panel_and_score_weights() -> 
     assert loaded.effective_capacity_tokens() == (384, 768)
     assert loaded.block_size_tokens == 16
     assert loaded.workload_token_granularity == 8
-    assert loaded.max_candidate_complexity == 650
+    assert loaded.max_candidate_complexity is None
+    assert loaded.promotion_max_candidate_complexity == 650
     assert loaded.reject_unsupported_source_patterns is True
     for field in (
         "w_avg_tok",
@@ -2548,6 +2617,7 @@ def test_candidate_search_configuration_is_forwarded_to_levi() -> None:
     assert kwargs["pipeline"]["eval_timeout"] == raw["evaluator"]["timeout"]
     assert kwargs["pipeline"]["n_eval_processes"] == raw["evaluator"]["parallel_evaluations"]
     assert kwargs["cascade"]["enabled"] == raw["evaluator"]["cascade_evaluation"]
+    assert config.search_seed == raw["search"]["seed"]
     assert {
         "train_workload_agentic_tool_workflows_token_hit_rate",
         "train_workload_agentic_tool_workflows_policy_underfill_rate",
@@ -2690,6 +2760,35 @@ def test_demo_run_evolution_defaults_to_pressure_aware_incumbent(monkeypatch) ->
         "src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py"
     ).read_text(encoding="utf-8")
     assert captured["source"] == expected
+
+
+def test_show_config_applies_model_and_search_seed_overrides(capsys, monkeypatch) -> None:
+    monkeypatch.setenv("LOCAL_MODEL_API_KEY", "secret-value")
+    prefix_runner._show_resolved_config(
+        iterations=3,
+        config_file="configs/prefix_kv_cache.yaml",
+        quick=False,
+        model="anthropic/example-model",
+        primary_model=None,
+        secondary_model=None,
+        search_seed=17,
+        api_base="http://localhost:8000/v1",
+        api_key_env="LOCAL_MODEL_API_KEY",
+    )
+
+    output = capsys.readouterr().out
+    payload = json.loads(output)
+    assert payload["models"] == {
+        "model": "anthropic/example-model",
+        "mutation_model": None,
+        "paradigm_model": None,
+    }
+    assert payload["search_seed"] == 17
+    assert payload["api_base"] == "http://localhost:8000/v1"
+    assert payload["api_key_env"] == "LOCAL_MODEL_API_KEY"
+    assert payload["api_key_env_set"] is True
+    assert "secret-value" not in output
+    assert payload["evaluator"]["workload_seeds"] == [11, 23, 37]
 
 
 def test_hidden_report_evaluates_requested_candidate(tmp_path, monkeypatch, capsys) -> None:
@@ -3307,9 +3406,12 @@ def test_structural_prefix_metrics_are_reported() -> None:
     assert "wasted_admission_token_rate" in metrics
     assert "admission_saved_tokens_per_admission" in metrics
     assert "admission_token_utility" in metrics
+    assert "avoidable_admission_regret_token_rate" in metrics
+    assert "avoidable_rejection_regret_token_rate" in metrics
     assert "short_reuse_after_eviction_missed_token_rate" in metrics
     assert "avoidable_eviction_rate" in metrics
     assert "avoidable_short_reuse_eviction_rate" in metrics
+    assert "value_weighted_avoidable_eviction_regret_token_rate" in metrics
     assert "worst_quarter_token_hit_rate" in metrics
     assert "final_quarter_token_hit_rate" in metrics
     assert "worst_recovery_phase_token_hit_rate" in metrics
@@ -3610,6 +3712,11 @@ def test_save_run_artifacts_persists_best_program_and_metadata(tmp_path, monkeyp
             "oracle_future_reuse": _report_result(16.0, capacities=(8,)),
         },
     )
+    monkeypatch.setattr(
+        prefix_runner,
+        "_repository_state",
+        lambda: {"commit": "abc123", "dirty": True},
+    )
     best_program = textwrap.dedent(
         """
         class NoCachePolicy:
@@ -3692,6 +3799,7 @@ def test_save_run_artifacts_persists_best_program_and_metadata(tmp_path, monkeyp
     )
     run_summary = json.loads((run_dir / "run_summary.json").read_text(encoding="utf-8"))
     assert run_summary["agentic_surrogate_probe_tripwire"]["status"] == "pass"
+    assert run_summary["repository"] == {"commit": "abc123", "dirty": True}
     assert (run_dir / "config_snapshot.yaml").read_text(
         encoding="utf-8"
     ) == config_snapshot.read_text(encoding="utf-8")

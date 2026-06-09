@@ -27,7 +27,6 @@ def run_with_timeout(
     **kwargs,
 ) -> ResultT:
     """Executes ``func`` with a wall-clock timeout."""
-
     if multiprocessing.current_process().daemon:
         # Pool workers cannot create child processes. Their parent pool is
         # responsible for enforcing its evaluation timeout.
@@ -73,7 +72,6 @@ def _run_in_subprocess(
     kwargs: dict,
 ) -> None:
     """Runs one evaluation and sends either its result or raised exception."""
-
     try:
         send_conn.send(("result", func(*args, **kwargs)))
     except BaseException as exc:  # pragma: no cover - exercised through parent process
@@ -94,7 +92,6 @@ def _run_in_subprocess(
 
 def _stop_process(process) -> None:
     """Terminates and reaps an evaluation worker if it is still running."""
-
     if process.is_alive():
         process.terminate()
     process.join(timeout=1.0)
@@ -144,7 +141,6 @@ def load_candidate_factory_from_source(
 
 def _exec_registered_module(module: ModuleType, exec_fn: Callable[[], object]) -> None:
     """Executes a candidate module while it is visible via ``sys.modules``."""
-
     module_name = module.__name__
     previous_module = sys.modules.get(module_name)
     sys.modules[module_name] = module

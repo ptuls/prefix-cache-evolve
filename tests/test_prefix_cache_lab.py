@@ -37,9 +37,9 @@ def test_lab_catalog_exposes_candidates_baselines_and_public_workloads() -> None
     assert policies["candidate"]["label"] == "Priority-aware pressure incumbent"
     assert policies["candidate"]["status"] == "promoted incumbent"
     assert policies["candidate"]["promoted"] is True
-    assert policies["candidate"]["benchmark_selection_score"] == 77.230
-    assert policies["candidate"]["benchmark_context"] == "discovery · 8-token verifier"
-    assert "low-priority admissions" in policies["candidate"]["description"]
+    assert policies["candidate"]["benchmark_selection_score"] == 65.649
+    assert policies["candidate"]["benchmark_context"] == "production · 16-token verifier"
+    assert "bounded multi-timescale reuse state" in policies["candidate"]["description"]
     assert policies["vllm_apc"]["group"] == "deployable"
     assert policies["vllm_apc"]["status"] == "deployable"
     assert policies["vllm_apc"]["promoted"] is False
@@ -70,7 +70,7 @@ def test_lab_simulation_emits_aligned_policy_snapshots() -> None:
         "lru",
     ]
     assert result["policies"][0]["promoted"] is True
-    assert result["policies"][0]["benchmark_selection_score"] == 77.230
+    assert result["policies"][0]["benchmark_selection_score"] == 65.649
     assert result["policies"][1]["promoted"] is False
     for policy in result["policies"]:
         events = policy["events"]
@@ -84,8 +84,9 @@ def test_lab_simulation_emits_aligned_policy_snapshots() -> None:
     first_event = result["policies"][0]["events"][0]
     assert first_event["prompt_blocks"] > 0
     assert first_event["prompt_tokens"] > 0
-    assert first_event["admissions"] > 0
-    assert first_event["cache"]
+    events = result["policies"][0]["events"]
+    assert any(event["admissions"] > 0 for event in events)
+    cached_event = next(event for event in events if event["cache"])
     assert {
         "block_id",
         "parent_id",
@@ -93,7 +94,7 @@ def test_lab_simulation_emits_aligned_policy_snapshots() -> None:
         "hit_this_request",
         "in_request",
         "is_leaf",
-    } <= first_event["cache"][0].keys()
+    } <= cached_event["cache"][0].keys()
 
 
 def test_lab_can_run_reporting_only_future_knowledge_baseline() -> None:

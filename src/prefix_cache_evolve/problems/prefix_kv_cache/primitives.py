@@ -12,7 +12,6 @@ DEFAULT_MAX_DECAY_KEYS = 1024
 
 def threshold_excess(value: float, threshold: float) -> float:
     """Return the positive amount by which ``value`` exceeds ``threshold``."""
-
     value = float(value)
     threshold = float(threshold)
     if not math.isfinite(value) or not math.isfinite(threshold):
@@ -26,7 +25,6 @@ def decay_vector(
     elapsed: int,
 ) -> tuple[float, ...]:
     """Return a deterministically decayed value vector without mutating state."""
-
     if len(values) != len(half_lives):
         raise ValueError("values and half_lives must have the same length")
     if any(not math.isfinite(value) for value in values):
@@ -62,13 +60,11 @@ class MultiTimescaleDecay:
     @property
     def timescale_count(self) -> int:
         """Return the fixed number of accumulators stored per key."""
-
         return len(self.half_lives)
 
     @property
     def state_size(self) -> int:
         """Return the number of keys currently retained."""
-
         return len(self._state)
 
     def observe(
@@ -78,7 +74,6 @@ class MultiTimescaleDecay:
         now: int,
     ) -> tuple[float, ...]:
         """Add ``amount`` to every timescale for ``key`` and return the vector."""
-
         if not math.isfinite(amount):
             raise ValueError("amount must be finite")
         values = self.values(key, now)
@@ -93,7 +88,6 @@ class MultiTimescaleDecay:
         now: int,
     ) -> tuple[float, ...]:
         """Add one amount per timescale for ``key`` and return the vector."""
-
         if len(amounts) != self.timescale_count:
             raise ValueError("amounts must match the configured timescales")
         if any(not math.isfinite(amount) for amount in amounts):
@@ -107,7 +101,6 @@ class MultiTimescaleDecay:
 
     def values(self, key: Hashable, now: int) -> tuple[float, ...]:
         """Return the online-decayed vector for ``key`` at logical step ``now``."""
-
         stored = self._state.get(key)
         if stored is None:
             values = (0.0,) * self.timescale_count
@@ -126,7 +119,6 @@ class MultiTimescaleDecay:
         weights: Sequence[float],
     ) -> float:
         """Return a weighted sum of the current per-timescale values."""
-
         if len(weights) != self.timescale_count:
             raise ValueError("weights must match the configured timescales")
         if any(not math.isfinite(weight) for weight in weights):
@@ -144,7 +136,6 @@ class MultiTimescaleDecay:
 
 def _validate_half_lives(half_lives: Sequence[float]) -> tuple[float, ...]:
     """Validate and normalize a bounded half-life vector."""
-
     normalized = tuple(float(half_life) for half_life in half_lives)
     if not normalized:
         raise ValueError("at least one half-life is required")

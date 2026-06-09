@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import math
 import random
 from dataclasses import asdict, dataclass, replace
+
+import click
 
 from prefix_cache_evolve.evaluators.prefix_kv_cache import (
     EvaluationResult,
@@ -64,15 +65,19 @@ class TunableCompactPolicy:
         self._current_priority = 0
 
     def on_request_start(self, request, now: int) -> None:
+        """Observe the current request priority."""
         self._current_priority = max(0, request.priority)
 
     def on_cache_hit(self, block, request, now: int) -> None:
+        """Record a weighted cache-hit observation."""
         self._observe(block, self.parameters.hit_weight, now)
 
     def on_cache_miss(self, block, request, now: int) -> None:
+        """Record a cache-miss observation."""
         self._observe(block, 1.0, now)
 
     def score_admission(self, block, now: int) -> float:
+        """Score a block for admission."""
         parameters = self.parameters
         frequency, priority = self._values(block.prefix_hash, now)
         structure = parameters.admission_descendant * math.log1p(block.descendant_count)
@@ -92,6 +97,7 @@ class TunableCompactPolicy:
         )
 
     def score_eviction(self, block, now: int) -> float:
+        """Score a resident block for eviction."""
         parameters = self.parameters
         frequency, priority = self._values(block.prefix_hash, now)
         return (
@@ -205,21 +211,27 @@ def _run_decay_ablation(
         )
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--samples", type=int, default=160)
-    parser.add_argument("--full-top", type=int, default=12)
-    parser.add_argument("--seed", type=int, default=20260605)
-    parser.add_argument("--decay-ablation", action="store_true")
-    parser.add_argument("--frequency-half-life", type=float, default=12.0)
-    parser.add_argument("--priority-half-life", type=float, default=1.5)
-    args = parser.parse_args()
-
-    if args.decay_ablation:
-        _run_decay_ablation(args.frequency_half_life, args.priority_half_life)
+@click.command()
+@click.option("--samples", type=click.IntRange(min=1), default=160, show_default=True)
+@click.option("--full-top", type=click.IntRange(min=1), default=12, show_default=True)
+@click.option("--seed", type=int, default=20260605, show_default=True)
+@click.option("--decay-ablation", is_flag=True)
+@click.option("--frequency-half-life", type=float, default=12.0, show_default=True)
+@click.option("--priority-half-life", type=float, default=1.5, show_default=True)
+def main(
+    samples: int,
+    full_top: int,
+    seed: int,
+    decay_ablation: bool,
+    frequency_half_life: float,
+    priority_half_life: float,
+) -> None:
+    """Tune the compact deployable policy on validation."""
+    if decay_ablation:
+        _run_decay_ablation(frequency_half_life, priority_half_life)
         return
 
-    rng = random.Random(args.seed)
+    rng = random.Random(seed)
     quick_config = EvaluatorConfig(
         request_count=48,
         seeds=(3,),
@@ -227,14 +239,14 @@ def main() -> None:
     )
     sampled = [
         (_evaluate(parameters, quick_config), parameters)
-        for parameters in (_sample_parameters(rng) for _ in range(args.samples))
+        for parameters in (_sample_parameters(rng) for _ in range(samples))
     ]
 
     full_config = EvaluatorConfig(capacity_sweep_blocks=(24, 48))
     finalists = [
         (_evaluate(parameters, full_config), quick_score, parameters)
         for quick_score, parameters in sorted(sampled, key=lambda item: item[0], reverse=True)[
-            : args.full_top
+            :full_top
         ]
     ]
     for full_score, quick_score, parameters in sorted(

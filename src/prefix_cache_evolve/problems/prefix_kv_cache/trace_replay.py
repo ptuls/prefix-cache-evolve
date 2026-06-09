@@ -65,7 +65,6 @@ def load_anonymized_trace(
     They are deterministically expanded into private simulator tokens; raw prompt
     content is rejected and candidate-visible ``prompt_tokens`` remains empty.
     """
-
     if block_size_tokens <= 0:
         raise ValueError("block_size_tokens must be positive")
     if arrival_bucket_ms <= 0:
@@ -106,7 +105,6 @@ def calibrate_anonymized_trace(
     request_limit: int | None = None,
 ) -> dict[str, Any]:
     """Summarize trace-derived workload mix, depth, burst, and length targets."""
-
     if arrival_bucket_ms <= 0:
         raise ValueError("arrival_bucket_ms must be positive")
     records = _load_trace_records(path, request_limit=request_limit)

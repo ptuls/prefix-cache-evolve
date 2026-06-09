@@ -1,6 +1,9 @@
 max_iterations: 300
 
 llm:
+  # Unprefixed model names use this LiteLLM provider. Provider-qualified
+  # identifiers such as anthropic/..., gemini/..., or ollama/... override it.
+  default_provider: "openai"
   primary_model: "gpt-5.4-mini"
   secondary_model: "gpt-5.5"
   temperature: 0.3
@@ -95,15 +98,29 @@ prompt:
     rather than broadly increasing admission. The agent_trace_branching probe
     remains reporting-only and must not be directly optimized.
 
+    The promoted production parent scores 65.649 on this 16-token verifier,
+    ahead of TinyLFU-LRU at 63.548, with effective complexity 572. Preserve
+    that charged-score lead, the agentic surrogate-to-probe tripwire pass, and
+    the positive hidden-panel margin. A structured-admission plus LFU
+    composition raises mean token hit but scores only 60.556 because its churn
+    is too high. Preserve the parent's pressure-aware admission economics,
+    bounded canonical decay state, and low turnover. Pure LRU leaves measurable
+    hit rate unused; prefer one compact, validated correction over a large
+    eviction subsystem.
+
     Default to local improvement of the supplied parent. Make exactly one
     semantic change per mutation. Preserve the existing class, imports, and
-    state representation unless the mutation deletes or simplifies them. Keep
-    effective complexity at or below 650 AST nodes. Do not add broad exception
-    handlers, future-reuse references, schema fallbacks, unused imports, or
-    speculative state. Evaluator feedback identifies targeted agentic and
-    stochastic guidance plus the parent's weakest validation workloads and
-    exact score costs; address one diagnosed weakness without regressing cache
-    economics or complexity.
+    state representation unless the mutation deletes or simplifies them.
+    Production promotion requires effective complexity at or below 650 AST
+    nodes. Exploratory proposals may temporarily reach roughly 750 nodes so the
+    evaluator can measure their behavior; any proposal above 650 is
+    exploration-only and its next mutation must be a dedicated simplification
+    pass that preserves measured behavior while deleting at least the reported
+    excess. Do not add broad exception handlers, future-reuse references,
+    schema fallbacks, unused imports, or speculative state. Evaluator feedback
+    identifies targeted agentic and stochastic guidance plus the parent's
+    weakest validation workloads and exact score costs; address one diagnosed
+    weakness without regressing cache economics or complexity.
   objectives:
     - "Maximize mean validation workload score while keeping the weakest workload competitive."
     - "Keep p95 deterministic latency and churn low."
@@ -122,6 +139,7 @@ prompt:
     - "Use prefix_hash/block_id for stable per-block state; never use object identity."
     - "Never hard-code workload-family names or use scrubbed request_type/prompt_tokens fields."
     - "Do not inspect hidden workloads; hidden is final reporting only."
+    - "Improve on the incumbent's 65.649 charged score without falling below TinyLFU-LRU's 63.548 score or exceeding 650 effective AST nodes."
 
 evaluator:
   timeout: 90
@@ -176,10 +194,11 @@ prompt_overrides:
     representative. Change one core admission or eviction idea, but preserve
     the representative's small overall architecture and delete or simplify
     existing logic to pay for the change. Target at most 550 effective AST
-    nodes; candidates above 650 effective AST nodes are rejected before
-    evaluation. Keep the complete file under 120 nonblank lines, with at most
-    one policy class, one bounded state dictionary or canonical decay
-    primitive, and a small build_candidate factory. Implement exactly
+    nodes. Candidates above 650 nodes are exploration-only and must receive a
+    dedicated simplification mutation before promotion. Keep the complete file
+    under 120 nonblank lines, with at most one policy class, one bounded state
+    dictionary or canonical decay primitive, and a small build_candidate
+    factory. Implement exactly
     score_admission, score_eviction, on_request_start, on_cache_hit, and
     on_cache_miss. Use only documented fields and top-level imports. Do not add
     helper frameworks, dataclasses, schema fallbacks, guessed getattr calls,
@@ -215,7 +234,7 @@ problem:
     latency_norm: 0
     max_memory_bytes: 67108864
     form_aware_complexity: true
-    max_candidate_complexity: 650
+    promotion_max_candidate_complexity: 650
     reject_unsupported_source_patterns: true
     train_families:
       - shared_system_prompt
@@ -273,6 +292,7 @@ problem:
       invalid_surcharge: 1000
 
 search:
+  seed: 20260609
   notes: >
     Candidates should keep the build_candidate(capacity_blocks,
     block_size_tokens, seed=None) entry point and the documented score methods.
@@ -284,4 +304,9 @@ search:
     benefit pays for their complexity. Default to one local semantic change and
     preserve the supplied parent's state representation. If the parent uses
     bounded canonical vector-decay state, mutate or ablate that representation
-    before introducing a custom state dictionary.
+    before introducing a custom state dictionary. Candidates above 650
+    effective nodes are exploratory parents only: use their evaluator feedback
+    for a dedicated behavior-preserving simplification mutation. Promotion
+    requires a charged combined score above the 65.649 incumbent, no invalid
+    groups, effective complexity at or below 650, and subsequent probe and
+    hidden non-regression review.

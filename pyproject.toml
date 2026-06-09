@@ -29,19 +29,26 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
+  "click>=8.1,<9",
   "loguru>=0.7",
+  "numpy>=1.26,<3",
   "pydantic>=2.10,<3",
   "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
 dev = [
+  "levi @ git+https://github.com/ttanv/levi.git",
   "pytest>=8.0,<9",
   "ruff>=0.11,<0.16",
+]
+evolution = [
+  "levi @ git+https://github.com/ttanv/levi.git",
 ]
 
 [dependency-groups]
 dev = [
+  "levi @ git+https://github.com/ttanv/levi.git",
   "pytest>=8.0,<9",
   "ruff>=0.11,<0.16",
 ]
@@ -53,6 +60,7 @@ repository = "https://github.com/ptuls/prefix-cache-evolve"
 prefix-cache-evolve = "prefix_cache_evolve.problems.prefix_kv_cache.runner:main"
 prefix-cache-ablate-structured = "prefix_cache_evolve.tools.ablate_structured:main"
 prefix-cache-analyze-eviction = "prefix_cache_evolve.tools.analyze_eviction:main"
+prefix-cache-analyze-regret = "prefix_cache_evolve.tools.analyze_regret:main"
 prefix-cache-analyze-reasoning-kv = "prefix_cache_evolve.tools.analyze_reasoning_kv:main"
 prefix-cache-lab = "prefix_cache_evolve.problems.prefix_kv_cache.lab:main"
 prefix-cache-tune-compact = "prefix_cache_evolve.tools.tune_compact:main"
@@ -67,8 +75,13 @@ include = [
   "/scripts",
   "/src",
   "/tests",
+  "/.env.example",
+  "/AGENTS.md",
+  "/CITATION.cff",
   "/LICENSE",
+  "/Makefile",
   "/README.md",
+  "/uv.lock",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -88,4 +101,15 @@ line-length = 100
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F", "I"]
+select = ["D", "E4", "E501", "E7", "E9", "F", "I", "N"]
+ignore = ["D105", "D107"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["D"]
+"src/prefix_cache_evolve/problems/prefix_kv_cache/compact_seed.py" = ["D"]
+"src/prefix_cache_evolve/problems/prefix_kv_cache/initial_program.py" = ["D"]
+"src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py" = ["D"]
+"src/prefix_cache_evolve/problems/prefix_kv_cache/seeds/*.py" = ["D"]

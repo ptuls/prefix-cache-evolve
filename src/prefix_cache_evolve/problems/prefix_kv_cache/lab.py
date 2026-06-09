@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 from dataclasses import asdict
 from http import HTTPStatus
@@ -10,6 +9,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from typing import Any, Mapping
 from urllib.parse import urlsplit
+
+import click
 
 from prefix_cache_evolve.evaluators.baselines import (
     ALL_REPORTING_BASELINES,
@@ -35,11 +36,11 @@ _DEFAULT_POLICIES = (
     "lru",
 )
 _INCUMBENT_ID = "candidate"
-_INCUMBENT_BENCHMARK_SELECTION_SCORE = 77.230
+_INCUMBENT_BENCHMARK_SELECTION_SCORE = 65.649
 _POLICY_DESCRIPTIONS = {
     "candidate": (
-        "Promoted priority-aware pressure policy. It throttles low-priority admissions "
-        "under moderate sustained pressure while preserving recurrence-backed reuse."
+        "Promoted pressure-aware policy with bounded multi-timescale reuse state. "
+        "It filters low-evidence admissions while preserving recurring and priority reuse."
     ),
     "no_cache": "Control policy that bypasses every cache admission.",
     "lru": "Admit all blocks and evict the least recently used legal leaf.",
@@ -88,7 +89,6 @@ _STATIC_CONTENT_TYPES = {
 
 def _display_name(name: str) -> str:
     """Convert an internal identifier to a concise UI label."""
-
     special_names = {
         "candidate": "Priority-aware pressure incumbent",
         "lru": "LRU",
@@ -102,7 +102,6 @@ def _display_name(name: str) -> str:
 
 def _policy_metadata(name: str) -> dict[str, Any]:
     """Return stable UI metadata for a policy."""
-
     group = "candidate" if name == _INCUMBENT_ID else BASELINE_REGISTRY.group(name)
     promoted = name == _INCUMBENT_ID
     return {
@@ -113,7 +112,7 @@ def _policy_metadata(name: str) -> dict[str, Any]:
         "status": "promoted incumbent" if promoted else group,
         "promoted": promoted,
         "benchmark_selection_score": (_INCUMBENT_BENCHMARK_SELECTION_SCORE if promoted else None),
-        "benchmark_context": "discovery · 8-token verifier" if promoted else None,
+        "benchmark_context": "production · 16-token verifier" if promoted else None,
     }
 
 
@@ -145,7 +144,6 @@ class SimulationLab:
 
     def catalog(self) -> dict[str, Any]:
         """Return policies, workloads, and defaults supported by the lab."""
-
         return {
             "source": {
                 "id": "synthetic",
@@ -190,7 +188,6 @@ class SimulationLab:
 
     def simulate(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         """Run selected policies over one identical generated workload."""
-
         policies = self._policies(payload.get("policies"))
         workload = str(payload.get("workload", ""))
         if workload not in self._workloads:
@@ -288,7 +285,6 @@ class SimulationLab:
 
 def _summary(metrics: TrialMetrics) -> dict[str, Any]:
     """Return the metrics most useful during interactive comparisons."""
-
     return {
         "token_hit_rate": metrics.token_hit_rate,
         "block_hit_rate": metrics.block_hit_rate,
@@ -326,6 +322,7 @@ class LabRequestHandler(BaseHTTPRequestHandler):
     lab = SimulationLab()
 
     def do_GET(self) -> None:
+        """Serve lab assets and read-only API endpoints."""
         path = urlsplit(self.path).path
         if path == "/api/catalog":
             self._send_json(self.lab.catalog())
@@ -341,6 +338,7 @@ class LabRequestHandler(BaseHTTPRequestHandler):
         self._send_bytes(asset.read_bytes(), _STATIC_CONTENT_TYPES[filename])
 
     def do_POST(self) -> None:
+        """Serve the simulation API endpoint."""
         if urlsplit(self.path).path != "/api/simulate":
             self.send_error(HTTPStatus.NOT_FOUND)
             return
@@ -357,7 +355,6 @@ class LabRequestHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format_string: str, *args: Any) -> None:
         """Use concise server logs."""
-
         print(f"{self.address_string()} - {format_string % args}")
 
     def _send_json(
@@ -384,15 +381,13 @@ class LabRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def main(argv: list[str] | None = None) -> None:
+@click.command()
+@click.option("--host", default="127.0.0.1", show_default=True)
+@click.option("--port", type=click.IntRange(min=1, max=65535), default=8765, show_default=True)
+def main(host: str, port: int) -> None:
     """Run the local Prefix Cache Lab server."""
-
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8765)
-    args = parser.parse_args(argv)
-    server = ThreadingHTTPServer((args.host, args.port), LabRequestHandler)
-    print(f"Prefix Cache Lab listening at http://{args.host}:{args.port}")
+    server = ThreadingHTTPServer((host, port), LabRequestHandler)
+    click.echo(f"Prefix Cache Lab listening at http://{host}:{port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

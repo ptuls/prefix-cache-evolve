@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 from pathlib import Path
+
+import click
 
 from prefix_cache_evolve.evaluators.baselines import BASELINE_REGISTRY, REPORTING_BASELINES
 from prefix_cache_evolve.evaluators.complexity import scoring_fn_complexity
@@ -79,7 +80,6 @@ def run_analysis(
     seeds: tuple[int, ...] | None = None,
 ) -> dict[str, object]:
     """Run the policy panel under prefix-only and shared-KV capacity models."""
-
     base = load_evaluator_config(config_path)
     if request_count is not None:
         base = base.with_updates(request_count=request_count)
@@ -218,7 +218,8 @@ def _write_markdown(path: Path, payload: dict[str, object]) -> None:
             "The failure rate is the main systems result: these prefix-cache-sized capacities",
             "cannot sustain the synthetic reasoning bursts when prompt and decode KV share the",
             "same pool. Eviction-policy differences still change which reusable prefixes survive,",
-            "but no prefix policy can recover capacity occupied by active decode state. A production",
+            "but no prefix policy can recover capacity occupied by active decode state. A "
+            "production",
             "extension should add scheduler actions such as admission control, preemption, or",
             "separate prefix/decode budgets before using this mode as an optimization objective.",
         ]
@@ -226,38 +227,46 @@ def _write_markdown(path: Path, payload: dict[str, object]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=Path("configs/prefix_kv_cache.yaml"),
-    )
-    parser.add_argument("--request-count", type=int)
-    parser.add_argument("--seeds", type=int, nargs="+")
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=Path("artifacts/prefix_kv_cache_reasoning_kv_analysis.json"),
-    )
-    parser.add_argument(
-        "--markdown",
-        type=Path,
-        default=Path("docs/results/reasoning_kv_robustness.md"),
-    )
-    args = parser.parse_args()
-
+@click.command()
+@click.option(
+    "--config",
+    type=click.Path(path_type=Path),
+    default=Path("configs/prefix_kv_cache.yaml"),
+    show_default=True,
+)
+@click.option("--request-count", type=click.IntRange(min=1))
+@click.option("--seeds", type=int, multiple=True)
+@click.option(
+    "--output",
+    type=click.Path(path_type=Path),
+    default=Path("artifacts/prefix_kv_cache_reasoning_kv_analysis.json"),
+    show_default=True,
+)
+@click.option(
+    "--markdown",
+    type=click.Path(path_type=Path),
+    default=Path("docs/results/reasoning_kv_robustness.md"),
+    show_default=True,
+)
+def main(
+    config: Path,
+    request_count: int | None,
+    seeds: tuple[int, ...],
+    output: Path,
+    markdown: Path,
+) -> None:
+    """Compare policies under shared reasoning decode KV pressure."""
     payload = run_analysis(
-        args.config,
-        request_count=args.request_count,
-        seeds=tuple(args.seeds) if args.seeds else None,
+        config,
+        request_count=request_count,
+        seeds=seeds or None,
     )
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    args.markdown.parent.mkdir(parents=True, exist_ok=True)
-    _write_markdown(args.markdown, payload)
-    print(args.output)
-    print(args.markdown)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    markdown.parent.mkdir(parents=True, exist_ok=True)
+    _write_markdown(markdown, payload)
+    click.echo(output)
+    click.echo(markdown)
 
 
 if __name__ == "__main__":

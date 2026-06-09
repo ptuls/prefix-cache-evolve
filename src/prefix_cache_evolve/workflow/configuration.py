@@ -1,3 +1,5 @@
+"""Validated configuration models and providers for Levi workflows."""
+
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +11,7 @@ from pydantic import (
     ConfigDict,
     Field,
     NonNegativeFloat,
+    NonNegativeInt,
     PositiveFloat,
     PositiveInt,
 )
@@ -23,8 +26,11 @@ class _StrictConfigModel(BaseModel):
 class LLMConfig(_StrictConfigModel):
     """LLM settings accepted by the workflow YAML."""
 
+    default_provider: str = "openai"
     primary_model: str | None = None
     secondary_model: str | None = None
+    api_base: str | None = None
+    api_key_env: str | None = None
     temperature: float | None = None
     max_tokens: PositiveInt | None = None
 
@@ -54,6 +60,7 @@ class ProblemConfig(_StrictConfigModel):
 class SearchConfig(_StrictConfigModel):
     """Search notes accepted by the workflow YAML."""
 
+    seed: NonNegativeInt = 0
     notes: str | None = None
 
 
@@ -82,10 +89,23 @@ class WorkflowFileConfig(_StrictConfigModel):
     output_dir: str | None = None
 
 
-def _litellm_model_name(model: str | None) -> str | None:
+def normalize_model_name(
+    model: str | None,
+    *,
+    default_provider: str = "openai",
+) -> str | None:
+    """Return a provider-qualified LiteLLM model identifier."""
     if not model:
         return None
-    return model if "/" in model else f"openai/{model}"
+    normalized_model = model.strip()
+    normalized_provider = default_provider.strip().rstrip("/")
+    if not normalized_model:
+        return None
+    if "/" in normalized_model:
+        return normalized_model
+    if not normalized_provider:
+        raise ValueError("llm.default_provider must not be empty")
+    return f"{normalized_provider}/{normalized_model}"
 
 
 class LeviRunConfig(BaseModel):
@@ -96,9 +116,12 @@ class LeviRunConfig(BaseModel):
     max_iterations: PositiveInt
     problem_description: str
     function_signature: str
+    search_seed: NonNegativeInt = 0
     model: str | None = None
     paradigm_model: str | None = None
     mutation_model: str | None = None
+    api_base: str | None = None
+    api_key_env: str | None = None
     budget_dollars: NonNegativeFloat | None = None
     budget_seconds: NonNegativeFloat | None = None
     output_dir: str | None = None
@@ -114,6 +137,7 @@ class LeviRunConfig(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
     def evolve_kwargs(self) -> dict[str, Any]:
+        """Return keyword arguments accepted by Levi's evolution API."""
         kwargs: dict[str, Any] = {
             "budget_evals": self.max_iterations,
         }
@@ -151,10 +175,12 @@ class ConfigLoader:
     """Loads repo YAML files into Levi run configuration objects."""
 
     def load(self, path: Path) -> LeviRunConfig:
+        """Load and validate a workflow YAML file."""
         raw_data = self._read_yaml(path)
         return self.from_dict(raw_data)
 
     def from_dict(self, data: object) -> LeviRunConfig:
+        """Validate and normalize a workflow configuration mapping."""
         data = WorkflowFileConfig.model_validate(data).model_dump(
             exclude_none=True,
             exclude_unset=True,
@@ -176,9 +202,20 @@ class ConfigLoader:
             cascade["enabled"] = evaluator["cascade_evaluation"]
 
         model_override = os.environ.get("LEVI_MODEL")
-        primary_model = _litellm_model_name(model_override or llm.get("primary_model"))
-        secondary_model = _litellm_model_name(model_override or llm.get("secondary_model"))
-        default_model = _litellm_model_name(os.environ.get("LEVI_MODEL", "gpt-4o-mini"))
+        default_provider = str(llm.get("default_provider") or "openai")
+        primary_model = normalize_model_name(
+            model_override or llm.get("primary_model"),
+            default_provider=default_provider,
+        )
+        secondary_model = normalize_model_name(
+            model_override or llm.get("secondary_model"),
+            default_provider=default_provider,
+        )
+        default_model = normalize_model_name(
+            os.environ.get("LEVI_MODEL", "gpt-4o-mini"),
+            default_provider=default_provider,
+        )
+        search = data.get("search", {}) or {}
 
         problem = data.get("problem", {}) or {}
         description = _compose_problem_description(data, problem)
@@ -193,8 +230,11 @@ class ConfigLoader:
             function_signature=str(
                 data.get("function_signature") or "def candidate_factory(*args, **kwargs):"
             ),
+            search_seed=int(search.get("seed", 0)),
             paradigm_model=secondary_model or primary_model or default_model,
             mutation_model=primary_model or secondary_model or default_model,
+            api_base=llm.get("api_base"),
+            api_key_env=llm.get("api_key_env"),
             budget_dollars=data.get("budget_dollars"),
             budget_seconds=data.get("budget_seconds"),
             output_dir=data.get("output_dir"),
@@ -221,7 +261,6 @@ def _compose_problem_description(
     problem: dict[str, Any],
 ) -> str:
     """Build the full Levi prompt from YAML problem and prompt sections."""
-
     sections: list[str] = []
     base = str(problem.get("description") or data.get("description") or "").strip()
     if base:
@@ -248,9 +287,13 @@ def _compose_problem_description(
 class ConfigProvider(Protocol):
     """Abstracts the origin of Levi configuration objects."""
 
-    def load(self, iterations: int) -> LeviRunConfig: ...
+    def load(self, iterations: int) -> LeviRunConfig:
+        """Return a resolved configuration for the requested iteration budget."""
+        ...
 
-    def describe(self) -> str: ...
+    def describe(self) -> str:
+        """Return a human-readable configuration source label."""
+        ...
 
 
 @dataclass(slots=True)
@@ -259,13 +302,44 @@ class YamlConfigProvider(ConfigProvider):
 
     path: Path
     loader: ConfigLoader
+    model: str | None = None
+    primary_model: str | None = None
+    secondary_model: str | None = None
+    search_seed: int | None = None
+    api_base: str | None = None
+    api_key_env: str | None = None
 
     def load(self, iterations: int) -> LeviRunConfig:
+        """Load YAML configuration and apply command-line overrides."""
         config = self.loader.load(self.path)
         config.max_iterations = iterations
+        default_provider = str(config.raw.get("llm", {}).get("default_provider") or "openai")
+        if self.model:
+            model = normalize_model_name(self.model, default_provider=default_provider)
+            config.model = model
+            config.paradigm_model = None
+            config.mutation_model = None
+        else:
+            if self.primary_model:
+                config.mutation_model = normalize_model_name(
+                    self.primary_model,
+                    default_provider=default_provider,
+                )
+            if self.secondary_model:
+                config.paradigm_model = normalize_model_name(
+                    self.secondary_model,
+                    default_provider=default_provider,
+                )
+        if self.search_seed is not None:
+            config.search_seed = self.search_seed
+        if self.api_base is not None:
+            config.api_base = self.api_base
+        if self.api_key_env is not None:
+            config.api_key_env = self.api_key_env
         return config
 
     def describe(self) -> str:
+        """Return the YAML path used by this provider."""
         return str(self.path)
 
 
@@ -277,19 +351,30 @@ class MinimalConfigProvider(ConfigProvider):
         problem_description: str = "Optimize the candidate_factory implementation.",
         function_signature: str = "def candidate_factory(*args, **kwargs):",
         model: Optional[str] = None,
+        search_seed: int = 0,
+        api_base: str | None = None,
+        api_key_env: str | None = None,
     ) -> None:
         self._problem_description = problem_description
         self._function_signature = function_signature
-        self._model = _litellm_model_name(model or os.environ.get("LEVI_MODEL", "gpt-4o-mini"))
+        self._model = normalize_model_name(model or os.environ.get("LEVI_MODEL", "gpt-4o-mini"))
+        self._search_seed = search_seed
+        self._api_base = api_base
+        self._api_key_env = api_key_env
 
     def load(self, iterations: int) -> LeviRunConfig:
+        """Build an in-memory minimal workflow configuration."""
         return LeviRunConfig(
             max_iterations=iterations,
             problem_description=self._problem_description,
             function_signature=self._function_signature,
+            search_seed=self._search_seed,
             model=self._model,
+            api_base=self._api_base,
+            api_key_env=self._api_key_env,
             behavior={"score_keys": ["combined_score"]},
         )
 
     def describe(self) -> str:
+        """Return a label for the in-memory configuration."""
         return "Inline minimal Levi configuration"

@@ -48,10 +48,14 @@ _WORKLOAD_FEEDBACK_KEYS = (
     "block_hit_rate",
     "worst_quarter_token_hit_rate",
     "request_token_hit_rate_p10",
+    "admission_rate",
     "wasted_admission_token_rate",
     "admission_token_utility",
+    "avoidable_admission_regret_token_rate",
+    "avoidable_rejection_regret_token_rate",
     "avoidable_eviction_rate",
     "short_reuse_after_eviction_missed_token_rate",
+    "value_weighted_avoidable_eviction_regret_token_rate",
     "policy_underfill_rate",
     "cache_churn_per_1k",
 )
@@ -672,6 +676,7 @@ def _workload_failure_feedback(
         waste = _metric(values, "wasted_admission_token_rate")
         avoidable = _metric(values, "avoidable_eviction_rate")
         churn = _metric(values, "cache_churn_per_1k")
+        diagnosis = _workload_mutation_diagnosis(values)
         quality = max(
             0.0,
             min(
@@ -695,13 +700,19 @@ def _workload_failure_feedback(
                 f"request_p10={request_p10:.3f}, "
                 f"waste={waste:.3f}, "
                 f"utility={_metric(values, 'admission_token_utility'):.3f}, "
+                f"avoidable_admission_regret="
+                f"{_metric(values, 'avoidable_admission_regret_token_rate'):.3f}, "
+                f"avoidable_rejection_regret="
+                f"{_metric(values, 'avoidable_rejection_regret_token_rate'):.3f}, "
                 f"avoidable_eviction={avoidable:.3f}, "
                 f"short_reuse_after_eviction="
                 f"{_metric(values, 'short_reuse_after_eviction_missed_token_rate'):.3f}, "
+                f"value_weighted_eviction_regret="
+                f"{_metric(values, 'value_weighted_avoidable_eviction_regret_token_rate'):.3f}, "
                 f"churn_per_1k={churn:.1f}, "
                 f"underfill={_metric(values, 'policy_underfill_rate'):.3f}. "
-                "Make one focused change that improves this workload without "
-                "worsening cache economics or complexity."
+                f"Primary diagnosis: {diagnosis}. Make only that focused change, hold the other "
+                "policy subsystem fixed, and avoid worsening cache economics or complexity."
             ),
         )
 
@@ -722,6 +733,54 @@ def _workload_failure_feedback(
         [quality for quality, _ in selected],
         [feedback for _, feedback in selected],
     )
+
+
+def _workload_mutation_diagnosis(values: dict) -> str:
+    """Rank likely policy failure mechanisms and prescribe one focused mutation."""
+    token_hit = _metric(values, "token_hit_rate")
+    worst_quarter = _metric(values, "worst_quarter_token_hit_rate")
+    request_p10 = _metric(values, "request_token_hit_rate_p10")
+    waste = _metric(values, "wasted_admission_token_rate")
+    admission_regret = _metric(values, "avoidable_admission_regret_token_rate")
+    rejection_regret = _metric(values, "avoidable_rejection_regret_token_rate")
+    avoidable_eviction = _metric(values, "avoidable_eviction_rate")
+    short_reuse = _metric(values, "short_reuse_after_eviction_missed_token_rate")
+    eviction_regret = _metric(
+        values,
+        "value_weighted_avoidable_eviction_regret_token_rate",
+    )
+    underfill = _metric(values, "policy_underfill_rate")
+    churn = _metric(values, "cache_churn_per_1k")
+
+    diagnoses = (
+        (
+            waste + 4.0 * admission_regret + min(1.0, churn / 5_000.0),
+            "admission pollution is the largest measured opportunity; tighten admission for "
+            "low-evidence blocks under pressure while leaving eviction ranking unchanged",
+        ),
+        (
+            2.0 * underfill + 4.0 * rejection_regret,
+            "over-rejection is the largest measured opportunity; admit a narrow class of "
+            "observably recurrent or structurally shared blocks while retaining one-off "
+            "filtering",
+        ),
+        (
+            avoidable_eviction + 2.0 * short_reuse + 4.0 * eviction_regret,
+            "eviction choice is the largest measured opportunity; protect near-term reusable "
+            "or high-value blocks while leaving admission thresholds unchanged",
+        ),
+        (
+            2.0 * max(0.0, token_hit - worst_quarter),
+            "performance collapses during the weakest time window; add bounded adaptation to "
+            "recent observed reuse or pressure without adding unbounded state",
+        ),
+        (
+            2.0 * max(0.0, token_hit - request_p10),
+            "the request tail lags the average; protect sparse but demonstrated reuse without "
+            "broadly admitting cold blocks",
+        ),
+    )
+    return max(diagnoses, key=lambda item: item[0])[1]
 
 
 def _metric(values: dict, key: str) -> float:

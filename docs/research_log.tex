@@ -1340,6 +1340,12 @@ Some unsuccessful runs diagnose the search process rather than a policy idea:
   state, guessed schemas, and defensive fallback branches.  Tightening the candidate
   contract and preserving structured invalid results reduced this unproductive search
   space, but invalid generation remains a material budget cost.
+  \item The weak-seed rediscovery winner exposed a verifier blind spot: the historical
+  token-hit-only agentic tripwire passed with a \(0.1191\) gap, while surrogate and
+  held-out-probe wasted-admission rates diverged by \(0.2807\).  The current
+  fail-closed surrogate gate therefore checks seven aggregate, tail, cache-economics,
+  and churn metrics.  Replaying it preserves the previously accepted production and
+  incumbent runs while flagging the rediscovery winner on admission-waste divergence.
 \end{itemize}
 
 The negative-result ledger changes how later experiments are interpreted.  A generated

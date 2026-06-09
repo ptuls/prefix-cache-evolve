@@ -54,7 +54,7 @@ cache-geometry sweeps, trace replay, and controlled ablations.
 ## Headline Result
 
 The current production-oriented 16-token policy scores `65.649`, ahead of
-TinyLFU-LRU at `63.548`, while passing the held-out agentic tripwire and
+TinyLFU-LRU at `63.548`, while passing the held-out agentic surrogate gate and
 retaining substantially lower churn. The historical 8-token discovery policy
 scores `77.230`, but the production policy does not transfer unchanged to that
 finer geometry.
@@ -262,6 +262,12 @@ uv run prefix-cache-evolve --show-config \
 uv run prefix-cache-evolve --iterations 100
 ```
 
+The default prompt is intentionally incumbent-aware and should be interpreted as local
+refinement. To test whether the same policy family is independently discoverable from
+a weaker base, use the neutral
+[incumbent rediscovery protocol](docs/rediscovery.md) and
+`configs/prefix_kv_cache_rediscovery.yaml`.
+
 The main configuration is [`configs/prefix_kv_cache.yaml`](configs/prefix_kv_cache.yaml).
 The runner packages a fallback copy so the installed console command can still
 load its default configuration outside a source checkout. Workflow sections and
@@ -292,7 +298,7 @@ configuration. Every saved winner is composed back into the complete incumbent
 and receives a fail-closed `promotion_adjudication.json`. Promotion requires the
 composed deployable source to remain at most `650` effective nodes, strictly
 improve raw selection behavior, and pass selection, eviction-regret, aggregate
-probe, both probe-family, hidden, and agentic-tripwire checks.
+probe, both probe-family, hidden, and agentic-surrogate-gate checks.
 
 A completed 500-budget function-only run improved the raw specialist objective
 from `70.989` to `72.091` and filled all 16 archive cells. Its best function
@@ -372,12 +378,28 @@ combined selection scalar.
 Static and runtime contract failures carry specific repair instructions into
 Levi's failure summaries. Mutation prompts also include a compact preflight
 checklist for syntax, entry points, documented fields and callbacks, imports,
-and complexity headroom.
+and complexity headroom. Each raw Levi run writes a complete
+`failure_feedback.jsonl` audit trail and feeds recurring failures back to later
+iterations of that run. Cross-run memory is opt-in so independent discovery
+trials remain clean:
 
-Every saved evolution run also writes an agentic surrogate-to-probe tripwire.
-It flags, and fails closed on missing metrics, when the absolute token-hit-rate
-gap between those workloads exceeds `0.12`; the held-out probe remains excluded
-from selection.
+```yaml
+failure_memory:
+  mode: global
+  global_path: runs/global_failure_feedback.jsonl
+  max_global_events: 1000
+```
+
+Global mode retains stable categorized failures across compatible opt-in runs,
+scoped by evaluator identity and candidate signature. Transient timeouts and
+uncategorized errors do not enter the global prompt memory. The default
+`run_only` mode neither reads nor writes the global store.
+
+Every saved evolution run also writes a fail-closed agentic surrogate-to-probe
+gate. It compares aggregate token hit, request-tail hit, worst-quarter hit,
+admission waste, underfill, short-reuse eviction misses, and normalized churn.
+The JSON and Markdown reports identify every failed or missing metric; the
+held-out probe remains excluded from selection.
 
 ## Interactive Lab
 

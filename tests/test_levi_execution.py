@@ -11,13 +11,16 @@ import numpy as np
 import pytest
 
 from prefix_cache_evolve.evaluator_entry import EvaluatorResult
+from prefix_cache_evolve.workflow import execution
 from prefix_cache_evolve.workflow.configuration import ConfigLoader
 from prefix_cache_evolve.workflow.execution import (
     LeviRunner,
     LeviScoreFunction,
+    _configured_levi_failure_memory,
     _configured_reasoning_max_tokens,
     _enable_levi_code_feedback_support,
     _enable_levi_degenerate_centroid_fallback,
+    _enable_levi_failure_memory_support,
     _enable_levi_reasoning_completion_support,
     _enable_levi_reproducibility_support,
     _module_name_from_package_path,
@@ -36,6 +39,9 @@ def test_workflow_config_loader_validates_top_level_and_nested_settings() -> Non
 
     with pytest.raises(ValueError, match=r"(?s)prompt.*Input should be a valid dictionary"):
         loader.from_dict({"prompt": []})
+
+    with pytest.raises(ValueError, match=r"(?s)failure_memory.mode.*run_only.*global"):
+        loader.from_dict({"failure_memory": {"mode": "unknown"}})
 
 
 def test_workflow_config_resolves_provider_and_search_seed() -> None:
@@ -58,6 +64,40 @@ def test_workflow_config_resolves_provider_and_search_seed() -> None:
     assert config.search_seed == 17
     assert config.api_base == "http://localhost:8000/v1"
     assert config.api_key_env == "LOCAL_MODEL_API_KEY"
+    assert config.failure_memory.mode == "run_only"
+
+
+def test_failure_memory_defaults_to_independent_runs_and_allows_global_opt_in(tmp_path) -> None:
+    evaluator_path = tmp_path / "evaluator.py"
+    evaluator_path.write_text("", encoding="utf-8")
+    run_only = ConfigLoader().from_dict({"max_iterations": 1})
+    global_path = tmp_path / "global.jsonl"
+    global_config = ConfigLoader().from_dict(
+        {
+            "max_iterations": 1,
+            "failure_memory": {
+                "mode": "global",
+                "global_path": str(global_path),
+                "max_global_events": 25,
+            },
+        }
+    )
+
+    assert _configured_levi_failure_memory(
+        run_only,
+        evaluator_path,
+        "def build_candidate():",
+    ) == ("run_only", None, None, 1_000)
+
+    mode, configured_path, scope, max_events = _configured_levi_failure_memory(
+        global_config,
+        evaluator_path,
+        "def build_candidate():",
+    )
+    assert mode == "global"
+    assert configured_path == global_path
+    assert scope is not None
+    assert max_events == 25
 
 
 def test_levi_score_function_exposes_combined_score() -> None:
@@ -209,9 +249,113 @@ def test_levi_code_adapter_accepts_failure_feedback() -> None:
 
     assert "## Evaluator Feedback" in prompt
     assert "weak validation workload validation/agentic_replan" in prompt
+    assert "These diagnostics describe the selected parent" in prompt
     assert "## Preflight Repair Checks" in prompt
+    assert "Never reference request_type or prompt_tokens" in prompt
     assert "dedicated simplification mutation" in prompt
     assert prompt.index("## Evaluator Feedback") < prompt.index("## Output")
+
+
+def test_levi_repeated_failure_memory_reaches_later_prompts(tmp_path, monkeypatch) -> None:
+    from levi.artifacts.code import CodeAdapter
+    from levi.core import Program
+    from levi.pipeline.state import PipelineState
+    from levi.prompts import ProgramWithScore
+
+    feedback_path = tmp_path / "failure_feedback.jsonl"
+    monkeypatch.setattr(execution, "_levi_failure_feedback_path", feedback_path)
+    feedback_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"key": "stale", "guidance": "stale prior-run failure"}),
+                json.dumps({"key": "stale", "guidance": "stale prior-run failure"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _enable_levi_failure_memory_support(feedback_path)
+    state = object.__new__(PipelineState)
+    state.budget_tracker = SimpleNamespace(eval_count=0)
+    state.error_count = 0
+    state.period_errors = 0
+    state.period_error_messages = set()
+    state.all_error_counts = {}
+
+    error = "Static policy violations: sanitized request field request_type is not a policy signal"
+    state.record_error(error)
+    state.record_error(error)
+    with feedback_path.open("a", encoding="utf-8") as stream:
+        stream.write("[]\n{partial-json\n")
+
+    config = SimpleNamespace(
+        function_signature="def build_candidate():",
+        problem_description="test problem",
+        prompt_overrides={},
+        init=SimpleNamespace(diversity_prompt=None),
+    )
+    adapter = CodeAdapter(config)
+    parents = [ProgramWithScore(Program(content="def build_candidate():\n    pass\n"))]
+    _enable_levi_code_feedback_support()
+
+    mutation_prompt = adapter.build_mutation_prompt(parents)
+    diversity_prompt = adapter.build_diversity_prompt([])
+
+    assert feedback_path.is_file()
+    assert "## Failure Memory" in mutation_prompt
+    assert "from this Levi run" in mutation_prompt
+    assert "(2x) Remove request_type entirely" in mutation_prompt
+    assert "stale prior-run failure" not in mutation_prompt
+    assert "## Failure Memory" in diversity_prompt
+    assert "(2x) Remove request_type entirely" in diversity_prompt
+
+
+def test_levi_global_failure_memory_reaches_compatible_later_runs(tmp_path) -> None:
+    from levi.pipeline.state import PipelineState
+
+    global_path = tmp_path / "global_failure_feedback.jsonl"
+    first_run_path = tmp_path / "run-1" / "failure_feedback.jsonl"
+    _enable_levi_failure_memory_support(
+        first_run_path,
+        global_path=global_path,
+        scope="prefix-cache-contract",
+    )
+    state = object.__new__(PipelineState)
+    state.budget_tracker = SimpleNamespace(eval_count=0)
+    state.error_count = 0
+    state.period_errors = 0
+    state.period_error_messages = set()
+    state.all_error_counts = {}
+    error = "Static policy violations: sanitized request field request_type is not a policy signal"
+    state.record_error(error)
+    state.record_error(error)
+    state.record_error("Timeout")
+
+    second_run_path = tmp_path / "run-2" / "failure_feedback.jsonl"
+    _enable_levi_failure_memory_support(
+        second_run_path,
+        global_path=global_path,
+        scope="prefix-cache-contract",
+    )
+    compatible_feedback = execution._recurring_levi_failure_feedback()
+
+    _enable_levi_failure_memory_support(
+        second_run_path,
+        global_path=global_path,
+        scope="different-contract",
+    )
+    incompatible_feedback = execution._recurring_levi_failure_feedback()
+
+    _enable_levi_failure_memory_support(second_run_path)
+    isolated_feedback = execution._recurring_levi_failure_feedback()
+
+    assert compatible_feedback == [
+        (2, "Remove request_type entirely; it is not available to candidate policies.")
+    ]
+    assert incompatible_feedback == []
+    assert isolated_feedback == []
+    assert '"scope": "prefix-cache-contract"' in global_path.read_text(encoding="utf-8")
+    assert "timeout" not in global_path.read_text(encoding="utf-8").lower()
 
 
 def test_levi_duplicate_init_behaviors_fall_back_to_distinct_uniform_centroids(monkeypatch) -> None:
@@ -545,6 +689,13 @@ def test_levi_runner_records_generated_snapshot_path(tmp_path, monkeypatch) -> N
     assert result.metadata["levi_paradigm_candidates_dir"] == str(
         output_dir / "paradigm_candidates"
     )
+    assert result.metadata["levi_failure_feedback_path"] == str(
+        output_dir / "failure_feedback.jsonl"
+    )
+    assert result.metadata["levi_failure_memory_mode"] == "run_only"
+    assert result.metadata["levi_global_failure_feedback_path"] is None
+    assert result.metadata["levi_failure_feedback_scope"] is None
+    assert result.metadata["levi_global_failure_feedback_max_events"] == 1_000
     assert result.metadata["search_seed"] == 17
     assert result.metadata["model"] == "anthropic/example-model"
     assert result.metadata["api_base"] == "http://localhost:8000/v1"

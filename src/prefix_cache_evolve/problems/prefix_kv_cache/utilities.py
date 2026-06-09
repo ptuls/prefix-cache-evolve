@@ -11,7 +11,20 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import EvaluationResult
 
 AGENTIC_SURROGATE_WORKLOAD = "train/agentic_tool_workflows"
 AGENTIC_PROBE_WORKLOAD = "probe/agent_trace_branching"
-AGENTIC_SURROGATE_PROBE_DIVERGENCE_THRESHOLD = 0.12
+AGENTIC_SURROGATE_GATE_ABSOLUTE_GAP_THRESHOLDS = {
+    "token_hit_rate": 0.12,
+    "request_token_hit_rate_p10": 0.15,
+    "worst_quarter_token_hit_rate": 0.20,
+    "wasted_admission_token_rate": 0.20,
+    "policy_underfill_rate": 0.16,
+    "short_reuse_after_eviction_missed_token_rate": 0.10,
+}
+AGENTIC_SURROGATE_GATE_NORMALIZED_GAP_THRESHOLDS = {
+    "cache_churn_per_1k": {
+        "threshold": 0.75,
+        "scale_floor": 100.0,
+    },
+}
 
 
 def write_json(path: Path, payload: Any) -> None:
@@ -75,112 +88,201 @@ def format_int_tuple(values: tuple[int, ...]) -> str:
     return " / ".join(str(value) for value in values)
 
 
-def agentic_surrogate_probe_tripwire(
-    workload_metrics: object,
-    *,
-    threshold: float = AGENTIC_SURROGATE_PROBE_DIVERGENCE_THRESHOLD,
-) -> dict[str, Any]:
-    """Flag excessive agentic surrogate-to-held-out-probe divergence."""
+def agentic_surrogate_probe_gate(workload_metrics: object) -> dict[str, Any]:
+    """Apply a fail-closed multi-metric agentic surrogate gate."""
     payload: dict[str, Any] = {
-        "schema": "prefix-kv-cache-agentic-surrogate-probe-tripwire-v1",
+        "schema": "prefix-kv-cache-agentic-surrogate-probe-gate-v1",
         "selection_score_excludes_probe": True,
-        "metric": "token_hit_rate",
         "surrogate_workload": AGENTIC_SURROGATE_WORKLOAD,
         "probe_workload": AGENTIC_PROBE_WORKLOAD,
-        "surrogate_value": None,
-        "probe_value": None,
-        "surrogate_minus_probe": None,
-        "absolute_gap": None,
-        "threshold": threshold,
+        "checks": {},
     }
-    surrogate_value = tripwire_metric_value(workload_metrics, AGENTIC_SURROGATE_WORKLOAD)
-    probe_value = tripwire_metric_value(workload_metrics, AGENTIC_PROBE_WORKLOAD)
-    payload["surrogate_value"] = surrogate_value
-    payload["probe_value"] = probe_value
-    if surrogate_value is None or probe_value is None:
-        payload.update(
-            {
-                "status": "flagged",
-                "flagged": True,
-                "flag_reason": "missing_or_invalid_metric",
-                "interpretation": (
-                    "The tripwire could not compare both agentic workloads and failed closed."
-                ),
-            }
+    checks = payload["checks"]
+    for metric, threshold in AGENTIC_SURROGATE_GATE_ABSOLUTE_GAP_THRESHOLDS.items():
+        checks[metric] = surrogate_gate_metric_check(
+            workload_metrics,
+            metric=metric,
+            comparison="absolute_gap",
+            threshold=threshold,
         )
-        return payload
+    for metric, spec in AGENTIC_SURROGATE_GATE_NORMALIZED_GAP_THRESHOLDS.items():
+        checks[metric] = surrogate_gate_metric_check(
+            workload_metrics,
+            metric=metric,
+            comparison="normalized_absolute_gap",
+            threshold=spec["threshold"],
+            scale_floor=spec["scale_floor"],
+        )
 
-    signed_gap = surrogate_value - probe_value
-    absolute_gap = abs(signed_gap)
-    flagged = absolute_gap > threshold
+    failed_metrics = [metric for metric, check in checks.items() if check["flagged"]]
+    missing_metrics = [
+        metric
+        for metric, check in checks.items()
+        if check["flag_reason"] == "missing_or_invalid_metric"
+    ]
+    flagged = bool(failed_metrics)
     payload.update(
         {
             "status": "flagged" if flagged else "pass",
             "flagged": flagged,
-            "flag_reason": "divergence_exceeds_threshold" if flagged else None,
-            "surrogate_minus_probe": signed_gap,
-            "absolute_gap": absolute_gap,
-            "interpretation": (
-                "The surrogate and held-out agentic probe diverge beyond the allowed threshold."
+            "flag_reason": (
+                "missing_or_invalid_metric"
+                if missing_metrics
+                else "one_or_more_metric_gaps_exceed_threshold"
                 if flagged
-                else "The surrogate and held-out agentic probe remain within the allowed threshold."
+                else None
+            ),
+            "checked_metric_count": len(checks),
+            "failed_metric_count": len(failed_metrics),
+            "failed_metrics": failed_metrics,
+            "missing_metrics": missing_metrics,
+            "interpretation": (
+                "The surrogate gate failed because one or more required metrics were "
+                "missing or invalid."
+                if missing_metrics
+                else (
+                    "The surrogate and held-out agentic probe diverge beyond one or "
+                    "more allowed metric thresholds."
+                )
+                if flagged
+                else (
+                    "The surrogate and held-out agentic probe remain within every "
+                    "allowed metric threshold."
+                )
             ),
         }
     )
     return payload
 
 
-def tripwire_metric_value(workload_metrics: object, workload: str) -> float | None:
-    """Return a finite workload token-hit rate, or None when unavailable."""
+def surrogate_gate_metric_check(
+    workload_metrics: object,
+    *,
+    metric: str,
+    comparison: str,
+    threshold: float,
+    scale_floor: float | None = None,
+) -> dict[str, Any]:
+    """Build one fail-closed surrogate-to-probe metric check."""
+    check: dict[str, Any] = {
+        "comparison": comparison,
+        "surrogate_value": workload_metric_value(
+            workload_metrics,
+            AGENTIC_SURROGATE_WORKLOAD,
+            metric,
+        ),
+        "probe_value": workload_metric_value(
+            workload_metrics,
+            AGENTIC_PROBE_WORKLOAD,
+            metric,
+        ),
+        "surrogate_minus_probe": None,
+        "absolute_gap": None,
+        "comparison_value": None,
+        "threshold": threshold,
+    }
+    if scale_floor is not None:
+        check["scale_floor"] = scale_floor
+    surrogate_value = check["surrogate_value"]
+    probe_value = check["probe_value"]
+    if surrogate_value is None or probe_value is None:
+        check.update(
+            {
+                "status": "flagged",
+                "flagged": True,
+                "flag_reason": "missing_or_invalid_metric",
+            }
+        )
+        return check
+
+    signed_gap = surrogate_value - probe_value
+    absolute_gap = abs(signed_gap)
+    comparison_value = absolute_gap
+    if comparison == "normalized_absolute_gap":
+        if scale_floor is None or scale_floor <= 0:
+            raise ValueError("normalized absolute gap requires a positive scale floor")
+        comparison_value = absolute_gap / max(
+            abs(surrogate_value),
+            abs(probe_value),
+            scale_floor,
+        )
+    elif comparison != "absolute_gap":
+        raise ValueError(f"unsupported surrogate gate comparison: {comparison}")
+    flagged = comparison_value > threshold
+    check.update(
+        {
+            "status": "flagged" if flagged else "pass",
+            "flagged": flagged,
+            "flag_reason": "gap_exceeds_threshold" if flagged else None,
+            "surrogate_minus_probe": signed_gap,
+            "absolute_gap": absolute_gap,
+            "comparison_value": comparison_value,
+        }
+    )
+    return check
+
+
+def workload_metric_value(
+    workload_metrics: object,
+    workload: str,
+    metric: str,
+) -> float | None:
+    """Return a finite workload metric, or None when unavailable."""
     if not isinstance(workload_metrics, dict):
         return None
     metrics = workload_metrics.get(workload)
     if not isinstance(metrics, dict):
         return None
-    value = metrics.get("token_hit_rate")
+    value = metrics.get(metric)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     numeric_value = float(value)
     return numeric_value if math.isfinite(numeric_value) else None
 
 
-def write_agentic_surrogate_probe_tripwire_report(
+def write_agentic_surrogate_probe_gate_report(
     path: Path,
-    tripwire: dict[str, Any],
+    gate: dict[str, Any],
 ) -> None:
-    """Write a compact human-readable agentic divergence tripwire report."""
+    """Write a compact human-readable agentic surrogate gate report."""
     lines = [
-        "# Agentic Surrogate-to-Probe Tripwire",
+        "# Agentic Surrogate-to-Probe Gate",
         "",
-        f"**Status: {str(tripwire['status']).upper()}**",
+        f"**Status: {str(gate['status']).upper()}**",
         "",
         (
-            "This check compares token hit rate on the non-quarantined agentic surrogate "
+            "This fail-closed gate compares aggregate, tail, admission, utilization, "
+            "eviction, and churn behavior on the non-quarantined agentic surrogate "
             "with the held-out agentic probe. The probe remains excluded from selection."
         ),
+        (
+            "Normalized churn is the absolute gap divided by the larger workload value "
+            f"or the {gate['checks']['cache_churn_per_1k']['scale_floor']:.0f} "
+            "evictions-per-1k scale floor."
+        ),
         "",
+        "| Metric | Comparison | Surrogate | Held-out probe | Absolute gap | "
+        "Gate value | Limit | Status |",
+        "|---|---|---:|---:|---:|---:|---:|---|",
     ]
-    if tripwire["absolute_gap"] is None:
+    for metric, check in gate["checks"].items():
         lines.append(
-            "The check failed closed because one or both required workload metrics were "
-            "missing or invalid."
+            f"| `{metric}` | `{check['comparison']}` | "
+            f"{format_gate_value(check['surrogate_value'])} | "
+            f"{format_gate_value(check['probe_value'])} | "
+            f"{format_gate_value(check['absolute_gap'])} | "
+            f"{format_gate_value(check['comparison_value'])} | "
+            f"{check['threshold']:.4f} | {str(check['status']).upper()} |"
         )
-    else:
-        lines.extend(
-            [
-                "| Surrogate | Held-out probe | Surrogate - probe | Absolute gap | Threshold |",
-                "|---:|---:|---:|---:|---:|",
-                (
-                    f"| {tripwire['surrogate_value']:.4f} | {tripwire['probe_value']:.4f} | "
-                    f"{tripwire['surrogate_minus_probe']:.4f} | "
-                    f"{tripwire['absolute_gap']:.4f} | {tripwire['threshold']:.4f} |"
-                ),
-                "",
-                str(tripwire["interpretation"]),
-            ]
-        )
-    lines.append("")
+    lines.extend(["", str(gate["interpretation"]), ""])
     path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def format_gate_value(value: object) -> str:
+    """Format one surrogate gate value for Markdown."""
+    if isinstance(value, float):
+        return f"{value:.4f}"
+    return "-"
 
 
 def promotion_check(passed: bool, candidate: object, incumbent: object) -> dict[str, Any]:
@@ -275,18 +377,18 @@ def workload_metric_non_regression(
     )
 
 
-def promotion_tripwire_check(candidate: dict[str, Any]) -> dict[str, Any]:
-    """Apply the existing agentic surrogate-to-probe tripwire to a candidate."""
+def promotion_surrogate_gate_check(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Apply the agentic surrogate-to-probe gate to a candidate."""
     workloads = {
         **candidate["selection"]["workload_metrics"],
         **candidate["probe"]["workload_metrics"],
     }
-    tripwire = agentic_surrogate_probe_tripwire(workloads)
+    gate = agentic_surrogate_probe_gate(workloads)
     return {
-        "passed": not tripwire["flagged"],
-        "candidate": tripwire.get("absolute_gap"),
-        "incumbent_or_limit": tripwire["threshold"],
-        "tripwire": tripwire,
+        "passed": not gate["flagged"],
+        "candidate": gate["failed_metric_count"],
+        "incumbent_or_limit": 0,
+        "gate": gate,
     }
 
 

@@ -3,7 +3,7 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Protocol
+from typing import Any, Literal, Optional, Protocol
 
 import yaml
 from pydantic import (
@@ -64,6 +64,14 @@ class SearchConfig(_StrictConfigModel):
     notes: str | None = None
 
 
+class FailureMemoryConfig(_StrictConfigModel):
+    """Controls whether evaluator failures carry across independent Levi runs."""
+
+    mode: Literal["run_only", "global"] = "run_only"
+    global_path: str = "runs/global_failure_feedback.jsonl"
+    max_global_events: PositiveInt = 1_000
+
+
 class WorkflowFileConfig(_StrictConfigModel):
     """Validated top-level schema for repository workflow YAML files."""
 
@@ -75,6 +83,7 @@ class WorkflowFileConfig(_StrictConfigModel):
     evaluator: EvaluatorRuntimeConfig = Field(default_factory=EvaluatorRuntimeConfig)
     problem: ProblemConfig = Field(default_factory=ProblemConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
+    failure_memory: FailureMemoryConfig = Field(default_factory=FailureMemoryConfig)
     init: dict[str, Any] = Field(default_factory=dict)
     cvt: dict[str, Any] = Field(default_factory=dict)
     behavior: dict[str, Any] = Field(default_factory=dict)
@@ -134,6 +143,7 @@ class LeviRunConfig(BaseModel):
     prompt_overrides: dict[str, Any] = Field(default_factory=dict)
     cascade: dict[str, Any] = Field(default_factory=dict)
     run_cost: dict[str, Any] = Field(default_factory=dict)
+    failure_memory: FailureMemoryConfig = Field(default_factory=FailureMemoryConfig)
     raw: dict[str, Any] = Field(default_factory=dict)
 
     def evolve_kwargs(self) -> dict[str, Any]:
@@ -247,6 +257,7 @@ class ConfigLoader:
             prompt_overrides=data.get("prompt_overrides", {}) or {},
             cascade=cascade,
             run_cost=data.get("run_cost", {}) or {},
+            failure_memory=data.get("failure_memory", {}) or {},
             raw=data,
         )
 

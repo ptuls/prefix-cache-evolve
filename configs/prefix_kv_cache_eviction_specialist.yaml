@@ -46,7 +46,7 @@ prompt:
   objectives:
     - "Reduce avoidable evictions and misses shortly after eviction."
     - "Improve raw behavior while admission and lifecycle callbacks remain frozen."
-    - "Preserve token hit, churn, aggregate probe, both probe-family hit rates, hidden score, and the agentic tripwire."
+    - "Preserve token hit, churn, aggregate probe, both probe-family hit rates, hidden score, and the agentic multi-metric surrogate gate."
     - "Keep the ranking function compact enough that the final composed policy can clear 650 effective AST nodes."
 
 evaluator:

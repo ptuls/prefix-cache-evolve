@@ -61,7 +61,27 @@ configuration.
 
 Saved evolution runs contain the configuration snapshot, workload manifest,
 resolved model identifiers, search seed, package versions, Git commit and dirty
-state, Levi snapshot, model cost, and candidate source.
+state, Levi snapshot, model cost, candidate source, exact seed source, and paths
+to active failure-feedback stores. The default `failure_memory.mode: run_only`
+keeps each Levi trial independent: its per-run JSONL is a complete audit trail
+and informs later iterations only within that run. Opt-in `mode: global` also
+reads and writes the configured global JSONL. Global memory contributes only
+stable categorized failures from compatible evaluator contracts, excludes
+transient timeouts, and limits prompt influence to the configured latest-event
+window.
+
+Each saved run also receives a deterministic, fail-closed agentic surrogate
+gate. It compares seven aggregate, tail, admission, utilization, eviction, and
+churn metrics against the held-out agentic probe without feeding probe values
+into selection.
+
+## Weak-Seed Rediscovery
+
+The normal search prompt and seed are optimized for incumbent refinement, so they
+cannot establish independent discoverability. The
+[incumbent rediscovery protocol](rediscovery.md) defines a neutral prompt, weak and
+intermediate starting conditions, repeated search seeds, and post-search selection,
+probe, hidden, complexity, and source-family adjudication.
 
 ## Bring Your Own Model
 

@@ -152,6 +152,23 @@ def _report_result(
     )
 
 
+def _agentic_gate_metrics(
+    token_hit_rate: float,
+    **overrides: float,
+) -> dict[str, float]:
+    metrics = {
+        "token_hit_rate": token_hit_rate,
+        "request_token_hit_rate_p10": 0.25,
+        "worst_quarter_token_hit_rate": 0.35,
+        "wasted_admission_token_rate": 0.10,
+        "policy_underfill_rate": 0.05,
+        "short_reuse_after_eviction_missed_token_rate": 0.02,
+        "cache_churn_per_1k": 100.0,
+    }
+    metrics.update(overrides)
+    return metrics
+
+
 def test_evaluator_accepts_injected_workload_and_simulator_dependencies() -> None:
     calls = []
 
@@ -881,11 +898,43 @@ def test_evaluate_source_minimal_policy(monkeypatch) -> None:
     )
     assert "train_workload_agentic_tool_workflows_token_hit_rate" in result.metrics
     assert "train_workload_agentic_tool_workflows_policy_underfill_rate" in result.metrics
+    assert (
+        "train_workload_agentic_tool_workflows_avoidable_admission_regret_token_rate"
+        in result.metrics
+    )
     assert "validation_workload_stochastic_serving_mix_token_hit_rate" in result.metrics
+    assert all(
+        "Primary diagnosis:" in feedback for feedback in result.metrics["feedback_per_example"]
+    )
     assert all(
         "probe/" not in feedback and "hidden/" not in feedback
         for feedback in result.metrics["feedback_per_example"]
     )
+
+
+def test_workload_mutation_diagnosis_distinguishes_policy_subsystems() -> None:
+    over_rejection = levi_evaluator._workload_mutation_diagnosis(
+        {
+            "token_hit_rate": 0.4,
+            "worst_quarter_token_hit_rate": 0.35,
+            "request_token_hit_rate_p10": 0.35,
+            "avoidable_rejection_regret_token_rate": 0.4,
+            "policy_underfill_rate": 0.2,
+        }
+    )
+    eviction = levi_evaluator._workload_mutation_diagnosis(
+        {
+            "token_hit_rate": 0.4,
+            "worst_quarter_token_hit_rate": 0.35,
+            "request_token_hit_rate_p10": 0.35,
+            "avoidable_eviction_rate": 0.5,
+            "short_reuse_after_eviction_missed_token_rate": 0.4,
+            "value_weighted_avoidable_eviction_regret_token_rate": 0.3,
+        }
+    )
+
+    assert over_rejection.startswith("over-rejection is the largest measured opportunity")
+    assert eviction.startswith("eviction choice is the largest measured opportunity")
 
 
 def test_evaluate_source_rejects_static_policy_violations(monkeypatch) -> None:
@@ -3646,47 +3695,70 @@ def test_write_baseline_plots_creates_svg_files(tmp_path, monkeypatch) -> None:
         assert "</svg>" in text
 
 
-def test_agentic_surrogate_probe_tripwire_passes_within_threshold() -> None:
-    tripwire = prefix_runner._agentic_surrogate_probe_tripwire(
+def test_agentic_surrogate_probe_gate_passes_when_all_metrics_are_within_limits() -> None:
+    gate = prefix_runner._agentic_surrogate_probe_gate(
         {
-            "train/agentic_tool_workflows": {"token_hit_rate": 0.48},
-            "probe/agent_trace_branching": {"token_hit_rate": 0.38},
-        },
-        threshold=0.12,
+            "train/agentic_tool_workflows": _agentic_gate_metrics(
+                0.48,
+                request_token_hit_rate_p10=0.30,
+                cache_churn_per_1k=160.0,
+            ),
+            "probe/agent_trace_branching": _agentic_gate_metrics(0.38),
+        }
     )
 
-    assert tripwire["status"] == "pass"
-    assert tripwire["flagged"] is False
-    assert tripwire["surrogate_minus_probe"] == pytest.approx(0.10)
-    assert tripwire["absolute_gap"] == pytest.approx(0.10)
-    assert tripwire["selection_score_excludes_probe"] is True
+    assert gate["status"] == "pass"
+    assert gate["flagged"] is False
+    assert gate["failed_metrics"] == []
+    assert gate["checks"]["token_hit_rate"]["absolute_gap"] == pytest.approx(0.10)
+    assert gate["checks"]["cache_churn_per_1k"]["comparison_value"] == pytest.approx(0.375)
+    assert gate["selection_score_excludes_probe"] is True
 
 
-def test_agentic_surrogate_probe_tripwire_flags_excessive_divergence() -> None:
-    tripwire = prefix_runner._agentic_surrogate_probe_tripwire(
+def test_agentic_surrogate_probe_gate_flags_excessive_token_hit_divergence() -> None:
+    gate = prefix_runner._agentic_surrogate_probe_gate(
         {
-            "train/agentic_tool_workflows": {"token_hit_rate": 0.60},
-            "probe/agent_trace_branching": {"token_hit_rate": 0.30},
-        },
-        threshold=0.12,
+            "train/agentic_tool_workflows": _agentic_gate_metrics(0.60),
+            "probe/agent_trace_branching": _agentic_gate_metrics(0.30),
+        }
     )
 
-    assert tripwire["status"] == "flagged"
-    assert tripwire["flagged"] is True
-    assert tripwire["flag_reason"] == "divergence_exceeds_threshold"
-    assert tripwire["surrogate_minus_probe"] == pytest.approx(0.30)
-    assert tripwire["absolute_gap"] == pytest.approx(0.30)
+    assert gate["status"] == "flagged"
+    assert gate["flagged"] is True
+    assert gate["flag_reason"] == "one_or_more_metric_gaps_exceed_threshold"
+    assert gate["failed_metrics"] == ["token_hit_rate"]
+    assert gate["checks"]["token_hit_rate"]["absolute_gap"] == pytest.approx(0.30)
 
 
-def test_agentic_surrogate_probe_tripwire_fails_closed_without_both_metrics() -> None:
-    tripwire = prefix_runner._agentic_surrogate_probe_tripwire(
+def test_agentic_surrogate_probe_gate_flags_non_hit_divergence() -> None:
+    gate = prefix_runner._agentic_surrogate_probe_gate(
+        {
+            "train/agentic_tool_workflows": _agentic_gate_metrics(
+                0.48,
+                wasted_admission_token_rate=0.50,
+            ),
+            "probe/agent_trace_branching": _agentic_gate_metrics(
+                0.38,
+                wasted_admission_token_rate=0.10,
+            ),
+        }
+    )
+
+    assert gate["status"] == "flagged"
+    assert gate["checks"]["token_hit_rate"]["status"] == "pass"
+    assert gate["failed_metrics"] == ["wasted_admission_token_rate"]
+
+
+def test_agentic_surrogate_probe_gate_fails_closed_without_all_metrics() -> None:
+    gate = prefix_runner._agentic_surrogate_probe_gate(
         {"train/agentic_tool_workflows": {"token_hit_rate": 0.48}},
     )
 
-    assert tripwire["status"] == "flagged"
-    assert tripwire["flagged"] is True
-    assert tripwire["flag_reason"] == "missing_or_invalid_metric"
-    assert tripwire["absolute_gap"] is None
+    assert gate["status"] == "flagged"
+    assert gate["flagged"] is True
+    assert gate["flag_reason"] == "missing_or_invalid_metric"
+    assert "token_hit_rate" in gate["missing_metrics"]
+    assert gate["checks"]["token_hit_rate"]["absolute_gap"] is None
 
 
 def test_save_run_artifacts_persists_best_program_and_metadata(tmp_path, monkeypatch) -> None:
@@ -3751,8 +3823,8 @@ def test_save_run_artifacts_persists_best_program_and_metadata(tmp_path, monkeyp
         artifacts={
             "split_metrics": {"validation": {"token_hit_rate": 0.5}},
             "workload_metrics": {
-                "train/agentic_tool_workflows": {"token_hit_rate": 0.48},
-                "probe/agent_trace_branching": {"token_hit_rate": 0.38},
+                "train/agentic_tool_workflows": _agentic_gate_metrics(0.48),
+                "probe/agent_trace_branching": _agentic_gate_metrics(0.38),
             },
         },
         metadata={"levi_runtime_seconds": 4.0},
@@ -3766,6 +3838,7 @@ def test_save_run_artifacts_persists_best_program_and_metadata(tmp_path, monkeyp
         encoding="utf-8",
     )
     result.metadata["levi_paradigm_candidates_dir"] = str(paradigm_candidates_dir.parent)
+    seed_source = "def build_candidate():\n    return 'seed'\n"
 
     run_dir = save_run_artifacts(
         result,
@@ -3773,12 +3846,14 @@ def test_save_run_artifacts_persists_best_program_and_metadata(tmp_path, monkeyp
         iterations=3,
         config_label="unit-config",
         seed_label="artifacts/source-run",
+        seed_source=seed_source,
         config_snapshot=config_snapshot,
         timestamp=datetime(2026, 6, 2, 1, 2, 3, tzinfo=UTC),
     )
 
     assert run_dir == tmp_path / "20260602T010203Z"
     assert "def build_candidate" in (run_dir / "best_program.py").read_text(encoding="utf-8")
+    assert (run_dir / "seed_program.py").read_text(encoding="utf-8") == seed_source
     assert '"combined_score": 12.5' in (run_dir / "metrics.json").read_text(encoding="utf-8")
     assert '"config": "unit-config"' in (run_dir / "run_summary.json").read_text(encoding="utf-8")
     assert '"seed_program": "artifacts/source-run"' in (run_dir / "run_summary.json").read_text(
@@ -3789,16 +3864,14 @@ def test_save_run_artifacts_persists_best_program_and_metadata(tmp_path, monkeyp
     )
     workload_manifest = json.loads((run_dir / "workload_manifest.json").read_text(encoding="utf-8"))
     assert len(workload_manifest["panel_sha256"]) == 64
-    tripwire = json.loads(
-        (run_dir / "agentic_surrogate_probe_tripwire.json").read_text(encoding="utf-8")
-    )
-    assert tripwire["status"] == "pass"
-    assert tripwire["absolute_gap"] == pytest.approx(0.10)
-    assert "Status: PASS" in (run_dir / "agentic_surrogate_probe_tripwire.md").read_text(
+    gate = json.loads((run_dir / "agentic_surrogate_probe_gate.json").read_text(encoding="utf-8"))
+    assert gate["status"] == "pass"
+    assert gate["checks"]["token_hit_rate"]["absolute_gap"] == pytest.approx(0.10)
+    assert "Status: PASS" in (run_dir / "agentic_surrogate_probe_gate.md").read_text(
         encoding="utf-8"
     )
     run_summary = json.loads((run_dir / "run_summary.json").read_text(encoding="utf-8"))
-    assert run_summary["agentic_surrogate_probe_tripwire"]["status"] == "pass"
+    assert run_summary["agentic_surrogate_probe_gate"]["status"] == "pass"
     assert run_summary["repository"] == {"commit": "abc123", "dirty": True}
     assert (run_dir / "config_snapshot.yaml").read_text(
         encoding="utf-8"
@@ -3926,13 +3999,13 @@ def test_specialist_promotion_adjudication_fails_over_complexity_limit(
                     }
                 },
                 "workload_metrics": {
-                    "train/agentic_tool_workflows": {"token_hit_rate": 0.48},
+                    "train/agentic_tool_workflows": _agentic_gate_metrics(0.48),
                 },
             },
             "probe": {
                 "combined_score": score,
                 "workload_metrics": {
-                    "probe/agent_trace_branching": {"token_hit_rate": 0.40},
+                    "probe/agent_trace_branching": _agentic_gate_metrics(0.40),
                     "probe/cyclic_working_set_pressure": {"token_hit_rate": 0.80},
                 },
             },
@@ -3997,13 +4070,13 @@ def test_eviction_only_promotion_adjudication_composes_complete_candidate(
                     }
                 },
                 "workload_metrics": {
-                    "train/agentic_tool_workflows": {"token_hit_rate": 0.50},
+                    "train/agentic_tool_workflows": _agentic_gate_metrics(0.50),
                 },
             },
             "probe": {
                 "combined_score": score,
                 "workload_metrics": {
-                    "probe/agent_trace_branching": {"token_hit_rate": 0.40},
+                    "probe/agent_trace_branching": _agentic_gate_metrics(0.40),
                     "probe/cyclic_working_set_pressure": {"token_hit_rate": 0.80},
                 },
             },

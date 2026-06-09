@@ -9,6 +9,8 @@ The documentation is split by purpose:
 - `results/` contains generated measurements and focused analysis summaries.
 - `reproducibility.md` documents installation, model-provider configuration,
   replay expectations, and publication metadata.
+- `rediscovery.md` defines the neutral weak-seed experiment used to distinguish
+  independent discovery from incumbent-conditioned refinement.
 
 Keep chronological additions and detailed failed-run analysis in the research
 log. Update the technical report only when the current method, supported claims,

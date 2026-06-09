@@ -13,6 +13,7 @@ from prefix_cache_evolve.problems.prefix_kv_cache.runner import main as runner_m
 from prefix_cache_evolve.tools.ablate_structured import main as ablate_main
 from prefix_cache_evolve.tools.analyze_eviction import main as eviction_main
 from prefix_cache_evolve.tools.analyze_reasoning_kv import main as reasoning_main
+from prefix_cache_evolve.tools.analyze_rediscovery import main as rediscovery_main
 from prefix_cache_evolve.tools.analyze_regret import main as regret_main
 from prefix_cache_evolve.tools.tune_compact import main as tune_main
 
@@ -32,6 +33,7 @@ _COMMANDS: tuple[tuple[str, click.Command], ...] = (
     ("ablate", ablate_main),
     ("eviction", eviction_main),
     ("reasoning", reasoning_main),
+    ("rediscovery", rediscovery_main),
     ("regret", regret_main),
     ("tune", tune_main),
     ("plot", plot_main),
@@ -58,6 +60,7 @@ def test_runner_show_config_does_not_start_evolution() -> None:
     assert result.exit_code == 0
     assert '"iterations": 25' in result.output
     assert '"search_seed"' in result.output
+    assert '"mode": "run_only"' in result.output
 
 
 @pytest.mark.parametrize(

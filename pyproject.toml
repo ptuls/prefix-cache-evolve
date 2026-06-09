@@ -60,6 +60,7 @@ repository = "https://github.com/ptuls/prefix-cache-evolve"
 prefix-cache-evolve = "prefix_cache_evolve.problems.prefix_kv_cache.runner:main"
 prefix-cache-ablate-structured = "prefix_cache_evolve.tools.ablate_structured:main"
 prefix-cache-analyze-eviction = "prefix_cache_evolve.tools.analyze_eviction:main"
+prefix-cache-analyze-rediscovery = "prefix_cache_evolve.tools.analyze_rediscovery:main"
 prefix-cache-analyze-regret = "prefix_cache_evolve.tools.analyze_regret:main"
 prefix-cache-analyze-reasoning-kv = "prefix_cache_evolve.tools.analyze_reasoning_kv:main"
 prefix-cache-lab = "prefix_cache_evolve.problems.prefix_kv_cache.lab:main"
@@ -91,6 +92,7 @@ packages = ["src/prefix_cache_evolve"]
 "configs/prefix_kv_cache.yaml" = "prefix_cache_evolve/configs/prefix_kv_cache.yaml"
 "configs/prefix_kv_cache_discovery.yaml" = "prefix_cache_evolve/configs/prefix_kv_cache_discovery.yaml"
 "configs/prefix_kv_cache_eviction_specialist.yaml" = "prefix_cache_evolve/configs/prefix_kv_cache_eviction_specialist.yaml"
+"configs/prefix_kv_cache_rediscovery.yaml" = "prefix_cache_evolve/configs/prefix_kv_cache_rediscovery.yaml"
 "configs/prefix_kv_trace_schema.json" = "prefix_cache_evolve/configs/prefix_kv_trace_schema.json"
 
 [tool.pytest.ini_options]

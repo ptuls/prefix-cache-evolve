@@ -47,7 +47,7 @@ from .specialist import (
 )
 from .trace_replay import calibrate_anonymized_trace, load_anonymized_trace
 from .utilities import (
-    agentic_surrogate_probe_tripwire as _agentic_surrogate_probe_tripwire,
+    agentic_surrogate_probe_gate as _agentic_surrogate_probe_gate,
 )
 from .utilities import (
     capacity_blocks_for_token_tiers as _capacity_blocks_for_token_tiers,
@@ -72,7 +72,7 @@ from .utilities import (
     promotion_check as _promotion_check,
 )
 from .utilities import (
-    promotion_tripwire_check as _promotion_tripwire_check,
+    promotion_surrogate_gate_check as _promotion_surrogate_gate_check,
 )
 from .utilities import (
     raw_selection_improvement as _raw_selection_improvement,
@@ -87,7 +87,7 @@ from .utilities import (
     workload_metric_non_regression as _workload_metric_non_regression,
 )
 from .utilities import (
-    write_agentic_surrogate_probe_tripwire_report as _write_agentic_surrogate_probe_tripwire_report,
+    write_agentic_surrogate_probe_gate_report as _write_agentic_surrogate_probe_gate_report,
 )
 from .utilities import (
     write_generated_mutation_report as _write_generated_mutation_report,
@@ -376,12 +376,14 @@ def save_run_artifacts(
         or ""
     )
     (run_dir / "best_program.py").write_text(str(best_program), encoding="utf-8")
+    if seed_source is not None:
+        (run_dir / "seed_program.py").write_text(seed_source, encoding="utf-8")
 
     metrics = getattr(result, "metrics", {}) or {}
     artifacts = getattr(result, "artifacts", {}) or {}
     metadata = getattr(result, "metadata", {}) or {}
     workload_metrics = artifacts.get("workload_metrics") if isinstance(artifacts, dict) else None
-    agentic_tripwire = _agentic_surrogate_probe_tripwire(workload_metrics)
+    agentic_gate = _agentic_surrogate_probe_gate(workload_metrics)
     config_snapshot_name = None
     if config_snapshot is not None and config_snapshot.is_file():
         config_snapshot_name = "config_snapshot.yaml"
@@ -401,24 +403,26 @@ def save_run_artifacts(
         "archive_size": getattr(result, "archive_size", None),
         "runtime_seconds": getattr(result, "runtime_seconds", None),
         "repository": _repository_state(),
-        "agentic_surrogate_probe_tripwire": {
-            key: agentic_tripwire[key]
+        "agentic_surrogate_probe_gate": {
+            key: agentic_gate[key]
             for key in (
                 "status",
                 "flagged",
                 "flag_reason",
-                "absolute_gap",
-                "threshold",
+                "checked_metric_count",
+                "failed_metric_count",
+                "failed_metrics",
+                "missing_metrics",
             )
         },
     }
     _write_json(run_dir / "metrics.json", metrics)
     _write_json(run_dir / "artifacts.json", artifacts)
     _write_json(run_dir / "metadata.json", metadata)
-    _write_json(run_dir / "agentic_surrogate_probe_tripwire.json", agentic_tripwire)
-    _write_agentic_surrogate_probe_tripwire_report(
-        run_dir / "agentic_surrogate_probe_tripwire.md",
-        agentic_tripwire,
+    _write_json(run_dir / "agentic_surrogate_probe_gate.json", agentic_gate)
+    _write_agentic_surrogate_probe_gate_report(
+        run_dir / "agentic_surrogate_probe_gate.md",
+        agentic_gate,
     )
     workload_manifest = build_workload_manifest(report_config or _artifact_report_config())
     _write_json(run_dir / "workload_manifest.json", workload_manifest)
@@ -672,7 +676,7 @@ def _persist_specialist_promotion_adjudication(
                 incumbent,
                 panel="hidden",
             ),
-            "agentic_surrogate_probe_tripwire": _promotion_tripwire_check(candidate),
+            "agentic_surrogate_probe_gate": _promotion_surrogate_gate_check(candidate),
         }
         eligible = all(check["passed"] for check in checks.values())
         payload = {
@@ -1550,6 +1554,7 @@ def _show_resolved_config(
             "model_request_seeds": True,
             "bit_exact_remote_search_guaranteed": False,
         },
+        "failure_memory": workflow.failure_memory.model_dump(),
         "pipeline": workflow.pipeline,
         "evaluator": {
             "workload_seeds": list(evaluator.seeds),

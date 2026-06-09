@@ -110,8 +110,9 @@ next-use oracle and ahead of all deployable credibility baselines.  It scores
 \(77.230\), compared with \(97.074\) for the reporting-only oracle and \(70.362\) for
 TinyLFU-LRU.  A subsequent production-oriented search on the operative \(16\)-token
 verifier promoted a \(572\)-node policy scoring \(65.649\), ahead of TinyLFU-LRU at
-\(63.548\).  It also passes the held-out agentic tripwire, scores \(3.064\) on the
-hidden panel versus \(-2.789\) for TinyLFU-LRU, and retains substantially lower churn.
+\(63.548\).  It also passes the held-out multi-metric agentic surrogate gate, scores
+\(3.064\) on the hidden panel versus \(-2.789\) for TinyLFU-LRU, and retains
+substantially lower churn.
 However, a post-promotion geometry sweep shows that this result is specific to
 16-token blocks: the previous incumbent remains materially stronger at 8 tokens.
 Its apparent charged-probe
@@ -1423,6 +1424,10 @@ agentic-surrogate hit and underfill, and stochastic-mix hit rate. \\
 mutation feedback & Every retained parent exposes the agentic surrogate,
 stochastic-serving target, and up to three additional weak-workload diagnostics to
 normal mutation workers. \\
+post-search agentic gate & A fail-closed seven-metric surrogate-to-probe gate checks
+aggregate hit, request-tail hit, worst-quarter hit, admission waste, underfill,
+short-reuse eviction misses, and normalized churn.  The held-out probe remains
+excluded from selection. \\
 candidate guardrails & The general lane evaluates modestly over-cap candidates as
 exploration-only and requests a dedicated simplification mutation; promotion remains
 capped at 650 effective AST nodes.  The function-only eviction-specialist lane
@@ -1431,6 +1436,13 @@ the final composed policy.  Rejected source patterns still fail before simulatio
 \bottomrule
 \end{tabularx}
 \end{center}
+
+The gate's absolute-gap limits are \(0.12\) for aggregate token hit, \(0.15\) for
+request-tail hit, \(0.20\) for worst-quarter hit and admission waste, \(0.16\) for
+underfill, and \(0.10\) for short-reuse misses after eviction.  Churn uses
+\(\lvert s-p\rvert/\max(\lvert s\rvert,\lvert p\rvert,100)\leq 0.75\).  These initial
+limits are a conservative drift alarm calibrated to preserve accepted historical runs,
+not a search objective or a claim that the thresholds are optimal.
 
 \subsection{Search-operator evidence}
 
@@ -1796,11 +1808,11 @@ reviewed alongside the validation scalar.
 \subsection{Current production-oriented result}
 
 On the operative 16-token verifier, the promoted 572-node policy scores \(65.649\),
-ahead of TinyLFU-LRU at \(63.548\).  It passes the held-out agentic tripwire with a
-\(0.0918\) surrogate-to-probe gap, scores \(3.064\) on the hidden panel versus
-\(-2.789\) for TinyLFU-LRU, and retains substantially lower churn.  The result supports
-two-stage search: measured over-cap exploration can expose useful structure, but a
-separate simplification phase and fail-closed adjudication are required before
+ahead of TinyLFU-LRU at \(63.548\).  It passes all seven checks in the held-out
+multi-metric agentic surrogate gate, scores \(3.064\) on the hidden panel versus
+\(-2.789\) for TinyLFU-LRU, and retains substantially lower churn.  The result
+supports two-stage search: measured over-cap exploration can expose useful structure,
+but a separate simplification phase and fail-closed adjudication are required before
 promotion.
 
 \subsection{Discovery result and mechanism}
@@ -2344,9 +2356,10 @@ run-type-specific artifacts:
   was launched from a config file;
   \item \filepath{workload_manifest.json}: deterministic stream summaries and panel
   fingerprint for the operative report configuration;
-  \item \filepath{agentic_surrogate_probe_tripwire.json} and
-  \filepath{agentic_surrogate_probe_tripwire.md}: automatic pass/flag comparison of
-  agentic surrogate and held-out-probe token hit rate;
+  \item \filepath{agentic_surrogate_probe_gate.json} and
+  \filepath{agentic_surrogate_probe_gate.md}: fail-closed multi-metric comparison of
+  agentic surrogate and held-out-probe aggregate, tail, cache-economics, and churn
+  behavior;
   \item \filepath{promotion_adjudication.json} and
   \filepath{promotion_adjudication.md}: fail-closed composed complete-policy
   adjudication for specialist runs;

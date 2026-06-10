@@ -112,6 +112,10 @@ TinyLFU-LRU.  A subsequent production-oriented search on the operative \(16\)-to
 verifier promoted a \(572\)-node policy scoring \(65.649\), ahead of TinyLFU-LRU at
 \(63.548\).  It also passes the held-out agentic tripwire, scores \(3.064\) on the
 hidden panel versus \(-2.789\) for TinyLFU-LRU, and retains substantially lower churn.
+This was not a sub-\$5 one-shot discovery.  The production search and its required
+simplification stage cost \$5.070 together; the retained lineage from the compact seed
+cost \$21.981, and the documented pre-promotion research program cost at least
+\$44.845 in recorded model API charges.
 However, a post-promotion geometry sweep shows that this result is specific to
 16-token blocks: the previous incumbent remains materially stronger at 8 tokens.
 Its apparent charged-probe
@@ -1476,6 +1480,61 @@ to the weakest validation workloads.  Levi samples up to three of those diagnost
 into each normal mutation prompt.  Initialization and paradigm-shift prompts still use
 their separate prompt builders and do not yet receive this parent-specific feedback.
 
+\subsection{Verifier engineering and constraint taxonomy}
+
+The verifier is not passive measurement infrastructure; it defines the effective
+optimization problem.  Building a useful verifier required substantially more than a
+scalar score.  It required deterministic replay, a strict candidate-visible schema,
+decision-level cache-economics audits, workload--capacity--seed decompositions,
+violation-specific repair messages, weak-workload diagnostics, source-based
+complexity accounting, and quarantined adjudication panels.  These diagnostics provide
+the generator with fine-grained credit assignment: they identify whether a proposal
+failed because of admission waste, victim choice, churn, underfill, tail service,
+complexity, or an invalid implementation.  Without that decomposition, search receives
+only a discontinuous ``better or worse'' signal and tends to repeat structurally
+similar mistakes.
+
+Constraints should be classified by what a violation means, rather than making every
+undesirable property an immediate rejection:
+
+\begin{center}
+\footnotesize
+\begin{tabularx}{\textwidth}{@{}
+  >{\raggedright\arraybackslash}p{0.19\textwidth}
+  >{\raggedright\arraybackslash}p{0.31\textwidth}
+  >{\raggedright\arraybackslash}X@{}}
+\toprule
+\textbf{Class} & \textbf{Examples} & \textbf{Search treatment} \\
+\midrule
+Hard feasibility and trust &
+Valid Python and entry point; documented callbacks and fields; no future information
+or hidden-label access; deterministic execution; legal simulator-owned transitions &
+Reject before or during evaluation.  Violations make the measurement invalid, unsafe,
+or non-comparable. \\
+Soft performance and resource terms &
+Hit rate, recompute cost, churn, wasted admission, avoidable eviction, underfill,
+tail service, fairness, and effective source complexity &
+Expose as metrics and penalties.  These are tradeoffs, so near-feasible candidates
+retain a useful optimization gradient. \\
+Staged promotion constraints &
+The final 650-node deployability limit and non-regression on quarantined probe,
+hidden, and tripwire panels &
+Permit bounded exploration beyond the final limit, charge the excess, request an
+explicit simplification mutation, then enforce the hard gate on the composed policy
+before promotion. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+The distinction is operational.  Making every target hard discards informative
+stepping stones and turns small threshold violations into flat rejection.  Making
+everything soft permits cheating, invalid measurements, and candidates that cannot be
+deployed.  The practical rule is: use hard constraints for semantic validity, trust
+boundaries, safety, and final production invariants; use soft constraints for
+quantities whose tradeoffs should be optimized; and use staged constraints when an
+over-limit proposal can contain a useful mechanism that a dedicated simplification
+step may preserve.
+
 \subsection{Experimental record}
 
 Historical searches used several verifier revisions, so their scalar scores are not
@@ -1485,6 +1544,54 @@ and exact source plus non-seed decompositions are required to understand failed 
 The full run chronology, costs, turning points, and early coefficient-tuning record are
 preserved in \filepath{docs/research_log.tex}; this report retains only current methods
 and evidence-backed conclusions.
+
+\subsection{Cost accounting and iteration velocity}
+
+Run cost must be reported at the scope of the claim.  The \(16\)-token production
+search alone cost \$4.133, but its over-cap winner was not deployable.  The required
+98-evaluation simplification lineage cost another \$0.937, so the direct final-stage
+cost was \$5.070 for 397 evaluations and approximately 65.0 summed run-minutes.
+Claiming that the best algorithm cost less than \$5 would therefore omit a necessary
+stage even before accounting for the incumbent and lessons that seeded that search.
+
+\begin{center}
+\footnotesize
+\begin{tabularx}{\textwidth}{@{}
+  >{\raggedright\arraybackslash}p{0.15\textwidth}
+  >{\raggedright\arraybackslash}X
+  rrr@{}}
+\toprule
+\textbf{Scope} & \textbf{Included stages} & \textbf{Evals} &
+\textbf{API cost} & \textbf{Run time} \\
+\midrule
+Final stage &
+Production search and dedicated simplification &
+397 & \$5.070 & 65.0 min \\
+Retained lineage &
+Six discovery-verifier runs, production search, and simplification &
+1,505 & \$21.981 & 221.7 min \\
+Pre-promotion record &
+Old-verifier iterations, structured searches, retained lineage, and both
+eviction-specialist stages &
+2,989 & \(\geq\)\$44.845 & \(\geq\)389.6 min \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+These are recorded model API charges, not total research cost.  The tally excludes
+deterministic coefficient sweeps, simulator CPU time, report generation, human
+analysis and composition, and experiments without reliable retained cost metadata.
+The post-promotion weak-seed rediscovery run is also excluded.  Exact component values
+and artifact sources are listed in
+\filepath{docs/results/search_cost_tally.md}.
+
+The stronger productivity result is \important{iteration velocity rather than
+one-shot cheapness}.  Within this project, fine-grained diagnostics, persisted
+candidates, explicit simplification, and automatic adjudication made new hypotheses
+quick to formulate and falsify.  Failed searches did not merely consume budget: they
+changed the candidate contract, archive dimensions, complexity treatment, and next
+experiment.  The resulting system shortened the loop from observation to a testable
+follow-up, but the cumulative cost must remain attached to the final algorithm.
 
 \subsection{Coefficient sweep}
 
@@ -1801,7 +1908,9 @@ ahead of TinyLFU-LRU at \(63.548\).  It passes the held-out agentic tripwire wit
 \(-2.789\) for TinyLFU-LRU, and retains substantially lower churn.  The result supports
 two-stage search: measured over-cap exploration can expose useful structure, but a
 separate simplification phase and fail-closed adjudication are required before
-promotion.
+promotion.  The two required runs cost \$5.070 together; the broader retained lineage
+cost \$21.981.  These figures should not be collapsed into the \$4.133 production-run
+cost.
 
 \subsection{Discovery result and mechanism}
 
@@ -1973,6 +2082,13 @@ rather than a conclusion.
 \subsection{Evolution and search-process principles}
 
 \begin{enumerate}
+  \item \textbf{Measure discovery by learning velocity, but report cumulative cost.}
+  The current policy emerged through discovery, targeted diagnostics, specialist
+  experiments, over-cap exploration, and simplification.  The useful capability was
+  rapid conversion of each result into a sharper experiment, not a sub-\$5 one-shot
+  search.  Cost claims must include every required stage and clearly distinguish a
+  final run, a retained lineage, and the broader research program.
+
   \item \textbf{Start from a strong incumbent and preserve budget for iteration.}  The
   first nominal 100-evaluation run spent its budget on broad initialization.  Reducing
   diverse seeds and initializing from the compact incumbent produced more useful
@@ -1996,8 +2112,24 @@ rather than a conclusion.
   and promotion caps remain separate.}  Opaque callable evaluation cannot distinguish
   a concise formula from a large defensive implementation.  Source-based, concave,
   unbounded complexity correctly breaks raw near-ties and discourages dead machinery.
-  A higher exploration cap can expose useful structure, but final promotion should
-  retain a stricter deployability limit.
+  The final deployability cap should not be applied as the proposal-stage boundary:
+  bounded over-cap exploration can expose useful structure, after which a dedicated
+  simplification operator must recover a candidate under the strict promotion limit.
+
+  \item \textbf{Hard and soft constraints serve different optimization roles.}
+  Syntax, trust-boundary compliance, executable contracts, and final deployability are
+  hard because violating them invalidates or prevents use of the result.  Cache
+  economics, service quality, robustness, and exploration-stage complexity are soft
+  because they are competing objectives with informative near misses.  Treating every
+  target as a hard gate removes gradient; treating every invariant as a penalty admits
+  invalid or undeployable winners.
+
+  \item \textbf{Verifier engineering is part of the search algorithm.}  Deterministic
+  replay and a scalar objective are necessary but insufficient.  Decision audits,
+  workload-level decompositions, structured contract failures, and bounded
+  parent-specific diagnostics give mutations actionable credit assignment.  The
+  effort required to construct and validate those signals is a first-class part of
+  the discovery cost.
 
   \item \textbf{The candidate contract is part of the search algorithm.}  Earlier
   candidates invented unsupported lifecycle callbacks, object-identity state, guessed
@@ -2378,6 +2510,10 @@ The strongest evolved policies use compact pressure-aware admission with bounded
 structural and recurrence evidence.  The successful search process also depends on
 fine-grained evaluator feedback, specialist archive dimensions, explicit
 simplification, exact-source complexity, and quarantined probe and hidden panels.
+Its main research-productivity lesson is that instrumented source evolution can make
+the propose--test--diagnose--simplify loop substantially faster inside a project.
+That speed produced lessons and follow-up experiments quickly; it did not make the
+cumulative discovery program a sub-\$5 exercise.
 Current evidence supports these design principles, but production-trace transfer,
 shared decode-capacity control, and geometry-robust promotion remain open.
 
@@ -2502,9 +2638,9 @@ victim set has high value spread and the ranker chooses an expensive leaf.
     crossed replay: realized hit, churn, tails, and score};
 
   \node[audit] (deployability) at (19.5,-5.45) {
-    \textbf{Promotion constraint}\\
-    \(\pi\in\Pi_\kappa,\ \operatorname{cx}(\pi)\le650\)\\
-    behavioral headroom \(\neq\) deployable winner};
+    \textbf{Staged constraints}\\
+    soft charge \(+\) bounded over-cap search\\
+    simplify, then hard promotion at \(\operatorname{cx}(\pi)\le650\)};
 
   \draw[arrow] (state) -- (admission);
   \draw[arrow] (state) -- (eviction);
@@ -2522,8 +2658,8 @@ state induces two distinct error opportunities: threshold classification for an
 incoming block and ranking among legal victims.  Selective admission is always active;
 additional eviction sophistication is gated by victim multiplicity and estimated value
 spread.  Local future-occurrence regret diagnoses the error class, crossed replay
-measures realized trajectory effects, and the complexity gate determines whether a
-behavioral improvement is deployable.}
+measures realized trajectory effects, while staged complexity treatment preserves
+over-cap discoveries without relaxing the final deployability requirement.}
 \label{fig:regime-conditional-mathematical-model}
 \end{figure}
 
@@ -2669,6 +2805,59 @@ capacities, and seeds:
 Here \(M\) is the metric vector from the deterministic simulator and \(\Psi_\theta\) is
 the aggregation formula that blends mean performance, weak-workload performance,
 worst-seed behavior, cache-economics charges, and service-quality penalties.
+
+More generally, let \(h_i(\pi)\le0\) denote hard feasibility constraints and let
+\(\ell_j(\pi)\ge0\) denote soft violation magnitudes.  Hard constraints include the
+candidate contract, information boundary, execution limits, and simulator legality.
+Soft terms include cache-economics losses and robustness deficits; source complexity
+is charged separately.  Let \(U_\theta(\pi)\) denote the uncharged serving utility
+aggregated from the validation panel.  The search problem is therefore
+\begin{align}
+  \Pi_{\mathrm{hard}}
+    &=\{\pi:h_i(\pi)\le0,\ i=1,\ldots,m\},\\
+  \pi_{\mathrm{search}}
+    &\in\arg\max_{\substack{\pi\in\Pi_{\mathrm{hard}}\\
+                            \operatorname{cx}(\pi)\le\kappa_{\mathrm{explore}}}}
+      \left[
+        U_\theta(\pi)
+        -\sum_{j=1}^{n}\lambda_j\ell_j(\pi)
+        -0.065\operatorname{cx}(\pi)^{0.75}
+      \right],
+  \label{eq:hard-soft-search}
+\end{align}
+where \(\kappa_{\mathrm{explore}}>\kappa\) is a bounded outer guard rather than the
+production limit.  The outer guard prevents runaway proposals; it does not force every
+useful intermediate representation to satisfy the final cap.
+
+For an over-cap candidate, a simplification operator \(\mathcal S\) searches for a
+behaviorally equivalent or improved descendant.  Let
+\(\mathcal N_{\mathrm{delete}}(\pi)\) denote deletion-oriented and algebraic
+simplifications of \(\pi\):
+\begin{equation}
+  \mathcal S(\pi)
+  \in\arg\max_{\pi'\in\mathcal N_{\mathrm{delete}}(\pi)}
+  \left[
+    U_\theta(\pi')-\sum_j\lambda_j\ell_j(\pi')
+    -0.065\operatorname{cx}(\pi')^{0.75}
+  \right]
+  \quad\text{subject to}\quad
+  \pi'\in\Pi_{\mathrm{hard}},
+  \operatorname{cx}(\pi')\le\kappa.
+  \label{eq:simplification-operator}
+\end{equation}
+Promotion then applies hard production and adjudication gates:
+\begin{equation}
+  \Pi_{\mathrm{promote}}=
+  \left\{\pi\in\Pi_{\mathrm{hard}}:
+    \operatorname{cx}(\pi)\le650,
+    Q_k(\pi)\ge Q_k(\pi_0)-\epsilon_k\ \forall k
+  \right\},
+  \label{eq:promotion-class}
+\end{equation}
+where \(Q_k\) are the quarantined probe, hidden, and tripwire criteria and \(\pi_0\) is
+the incumbent.  These \(Q_k\) values adjudicate promotion but are not returned as
+mutation targets.  This separation preserves their evidentiary role while allowing
+soft validation feedback to guide search.
 
 A clairvoyant but still legal offline comparator can be defined by dynamic programming
 on an additive surrogate reward \(g_\theta\):

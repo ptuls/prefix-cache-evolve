@@ -1052,6 +1052,25 @@ allow measured over-cap proposals to expose useful structure, then let search pe
 explicit simplification and adjudicate all resulting elites rather than automatically
 promoting the scalar winner.
 
+The associated cost claim must include both stages.  The production run cost
+\$4.133, and the required simplification run cost \$0.937, for a direct final-stage
+total of \$5.070 across 397 evaluations.  Including the six retained
+discovery-verifier runs that produced the seed and search-process changes raises the
+retained lineage to \$21.981 across 1,505 evaluations.  Adding the documented
+old-verifier, structured-policy, and two eviction-specialist stages yields a
+pre-promotion research total of at least \$44.845 across 2,989 evaluations.  This is
+still a lower bound because deterministic sweeps, local simulator compute, manual
+analysis, and unretained experiments are not priced.  The auditable breakdown is
+retained in \filepath{docs/results/search_cost_tally.md}.
+
+The practical gain was therefore not one-shot cheapness.  The workflow made the
+research loop faster: a failed candidate could be decomposed into behavior,
+complexity, and generalization effects; a useful fragment could seed a specialist or
+simplification stage; and the resulting lesson could become a falsifiable follow-up
+without rebuilding the experimental harness.  That iteration velocity is a central
+result of the project, while cumulative cost remains the honest accounting unit for
+the promoted algorithm.
+
 A fixed-block-count geometry sweep then tested both incumbents at 24, 48, 96, and
 128 blocks.  Jointly scoring those four tiers, the new policy improves the 16-token
 score from \(64.702\) to \(66.710\), but lowers the 8-token score from \(74.068\) to
@@ -1146,13 +1165,27 @@ next bottleneck in the search system itself:
   \item then make generated source executable and diagnosable;
   \item then preserve enough artifacts to understand failure;
   \item then improve generator feedback and archive diversity;
-  \item finally separate specialist exploration from strict deployable promotion.
+  \item then separate hard feasibility constraints from soft optimization pressure;
+  \item finally separate bounded over-cap exploration and simplification from strict
+  deployable promotion.
 \end{enumerate}
 
 The project is therefore best understood not as one successful evolution run, but as a
 co-evolution of policy, verifier, generator contract, and experimental workflow.  The
 promoted policy is the visible result; the larger engineering contribution is the
 machinery required to make that result interpretable and reproducible.
+
+In particular, verifier engineering was a first-class share of the work.  A scalar
+score could rank completed candidates, but it could not explain whether a mutation
+failed through admission waste, victim choice, churn, underfill, service tails,
+complexity, or an invalid contract.  Decision audits, groupwise decompositions, exact
+source accounting, and violation-specific feedback supplied that missing credit
+assignment.  The constraint design evolved with the diagnostics: syntax, trust
+boundaries, and final deployability remained hard; competing cache-economics and
+service objectives remained soft; and complexity became staged, with a bounded
+over-cap exploration region followed by explicit simplification and a hard promotion
+gate.  This avoided both extremes of rejecting useful stepping stones and accepting
+an impressive but undeployable policy.
 
 \section{Negative Results and Rejected Evolutionary Solutions}
 \label{app:negative-results}

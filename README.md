@@ -63,6 +63,10 @@ The main result is methodological: selective pressure-aware admission,
 fine-grained evaluator feedback, specialist archive dimensions, and explicit
 simplification produced useful compact policies, while richer structured and
 eviction-specialist policies failed complexity or cross-panel promotion gates.
+The search treats semantic validity and final deployability as hard constraints,
+cache economics and service quality as soft objectives, and complexity as staged:
+bounded over-cap proposals may be explored, but must be simplified below the hard
+promotion cap.
 
 See the current [technical report](docs/technical_report.tex), supplementary
 [research log](docs/research_log.tex), generated [result summaries](docs/results/),

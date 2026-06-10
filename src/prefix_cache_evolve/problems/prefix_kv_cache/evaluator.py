@@ -475,6 +475,8 @@ def _evaluate_isolated(
             complexity,
             splits,
             timeout_seconds=config.timeout_s,
+            memory_limit_bytes=config.max_memory_bytes,
+            cpu_limit_seconds=config.timeout_s,
         )
     except TimeoutError as exc:
         return _error_result(

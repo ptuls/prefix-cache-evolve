@@ -20,6 +20,7 @@ from prefix_cache_evolve.problems.prefix_kv_cache.pressure_aware_incumbent impor
 )
 from prefix_cache_evolve.problems.prefix_kv_cache.reproducibility import (
     build_workload_manifest,
+    stable_workload_manifest_payload,
 )
 
 _DISCOVERY_INCUMBENT_PATH = Path(
@@ -104,6 +105,24 @@ def test_discovery_panel_matches_committed_workload_fingerprint() -> None:
     assert generated["panel_sha256"] == committed["panel_sha256"]
     assert generated["panel_sha256"] == (
         "4607782d231560f5d51c5f0347a789b7b82a7e8ff4d78ec5f1adb576c68d2c8f"
+    )
+
+
+def test_stable_manifest_payload_ignores_environment_metadata() -> None:
+    manifest = {
+        "schema": "v1",
+        "panel_sha256": "panel",
+        "evaluation": {"stream_count": 1},
+        "streams": [{"request_stream_sha256": "stream"}],
+        "generator": {"python_version": "3.11.9", "source_file": "old.py"},
+    }
+    regenerated = {
+        **manifest,
+        "generator": {"python_version": "3.12.3", "source_file": "workloads.py"},
+    }
+
+    assert stable_workload_manifest_payload(manifest) == stable_workload_manifest_payload(
+        regenerated
     )
 
 

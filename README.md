@@ -161,7 +161,7 @@ production trace contributes to that score. Its reproducibility inputs are all
 committed:
 
 - Workload generator:
-  [`prefix_kv_cache.py`](src/prefix_cache_evolve/evaluators/prefix_kv_cache.py)
+  [`workloads.py`](src/prefix_cache_evolve/evaluators/workloads.py)
 - Exact historical evaluator settings:
   [`prefix_kv_cache_discovery.yaml`](configs/prefix_kv_cache_discovery.yaml)
 - Per-stream summaries and SHA-256 fingerprints:
@@ -174,14 +174,14 @@ panel fingerprint
 `4607782d231560f5d51c5f0347a789b7b82a7e8ff4d78ec5f1adb576c68d2c8f`.
 It also records the CPython version and workload-generator source hash; the
 repository's committed `uv.lock` pins dependency resolution.
-Recreate it and the headline comparison with:
+Recreate it and verify the environment-independent panel fields with:
 
 ```bash
 .venv/bin/prefix-cache-evolve \
   --workload-manifest \
   --config configs/prefix_kv_cache_discovery.yaml \
-  --workload-manifest-output /tmp/discovery_workload_manifest.json
-diff -u docs/results/discovery_workload_manifest.json /tmp/discovery_workload_manifest.json
+  --workload-manifest-output /tmp/discovery_workload_manifest.json \
+  --workload-manifest-reference docs/results/discovery_workload_manifest.json
 
 .venv/bin/prefix-cache-evolve \
   --baseline-report \
@@ -238,7 +238,7 @@ are rejected. Uppercase literal constants, `__all__`, and
 Python 3.11 or newer is required.
 
 ```bash
-# Install the pinned development and evolution environment.
+# Install the pinned development environment without Levi.
 uv sync --frozen --group dev
 
 uv run pytest -q
@@ -258,10 +258,18 @@ uv run prefix-cache-evolve \
   src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py
 ```
 
-For evaluator-only use, `uv sync --frozen --no-default-groups` avoids the
-Git-hosted Levi dependency. For evolution without development tools, use `uv
-sync --frozen --no-default-groups --extra evolution`. The equivalent shortcuts
-are `make setup`, `make setup-evolution`, and `make setup-dev`.
+The `dev` group contains tests, Ruff, and mypy but intentionally excludes the
+Git-hosted Levi dependency. For evolution, use `uv sync --frozen --group dev
+--extra evolution`, or omit development tools with `uv sync --frozen
+--no-default-groups --extra evolution`. The equivalent shortcuts are `make
+setup`, `make setup-evolution`, and `make setup-dev`.
+
+Candidate execution normally uses a separate forked process, when nested
+forking is available, with wall-clock and CPU limits plus an address-space
+limit on Linux. This is defense in depth, not a security sandbox: candidate
+code still inherits host access such as the
+filesystem, environment, and network. Run untrusted evolution inside an
+OS/container sandbox with the repository and verifier mounted read-only.
 
 Evolution defaults to the production incumbent as its seed; use
 `--seed-program` to override it. Inspect all effective model, worker, evaluator,

@@ -672,6 +672,7 @@ def _stochastic_serving_mix_workload(
         "oneoff": _adversarial_unique_prompts(count, block_size, rng),
     }
     source_indices = {source_name: 0 for source_name in source_requests}
+    regimes: tuple[tuple[tuple[str, float], ...], ...]
     if shifted:
         regimes = (
             (
@@ -737,7 +738,9 @@ def _stochastic_serving_mix_workload(
         if request_id:
             arrival_step += rng.choices(arrival_gaps, weights=arrival_gap_weights, k=1)[0]
         regime_index = min(2, request_id * len(regimes) // max(1, count))
-        choices, weights = zip(*regimes[regime_index], strict=True)
+        regime = regimes[regime_index]
+        choices = tuple(choice for choice, _ in regime)
+        weights = tuple(weight for _, weight in regime)
         if remaining_burst <= 0:
             active_source = rng.choices(choices, weights=weights, k=1)[0]
             if rng.random() < burst_probability:

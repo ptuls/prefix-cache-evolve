@@ -38,7 +38,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "levi @ git+https://github.com/ttanv/levi.git",
+  "mypy>=1.15,<2",
   "pytest>=8.0,<9",
   "ruff>=0.11,<0.16",
 ]
@@ -48,7 +48,7 @@ evolution = [
 
 [dependency-groups]
 dev = [
-  "levi @ git+https://github.com/ttanv/levi.git",
+  "mypy>=1.15,<2",
   "pytest>=8.0,<9",
   "ruff>=0.11,<0.16",
 ]
@@ -95,6 +95,12 @@ packages = ["src/prefix_cache_evolve"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/prefix_cache_evolve/evaluators"]
+ignore_missing_imports = true
+show_error_codes = true
 
 [tool.ruff]
 line-length = 100

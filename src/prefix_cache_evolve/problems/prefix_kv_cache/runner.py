@@ -39,7 +39,12 @@ from .configuration import (
     prefix_kv_config_environment,
 )
 from .production_incumbent import build_candidate
-from .reproducibility import build_workload_manifest, file_sha256, request_stream_sha256
+from .reproducibility import (
+    build_workload_manifest,
+    file_sha256,
+    request_stream_sha256,
+    stable_workload_manifest_payload,
+)
 from .specialist import (
     candidate_evaluator,
     candidate_exported_names,
@@ -949,6 +954,7 @@ def replay_trace_report(
 def write_workload_manifest_report(
     output_path: Path,
     *,
+    reference_path: Path | None = None,
     quick: bool = False,
     capacity_blocks: int | None = None,
     capacity_sweep_blocks: tuple[int, ...] = (),
@@ -967,6 +973,13 @@ def write_workload_manifest_report(
     _write_json(output_path, payload)
     print(f"workload_manifest={output_path}")
     print(f"panel_sha256={payload['panel_sha256']}")
+    if reference_path is not None:
+        reference = json.loads(reference_path.read_text(encoding="utf-8"))
+        if stable_workload_manifest_payload(payload) != stable_workload_manifest_payload(reference):
+            raise click.ClickException(
+                f"workload manifest differs from stable reference fields in {reference_path}"
+            )
+        print(f"workload_manifest_reference=verified:{reference_path}")
     return payload
 
 
@@ -1355,6 +1368,14 @@ def _score_weight_sensitivity_rows(
     help="JSON output for --workload-manifest.",
 )
 @click.option(
+    "--workload-manifest-reference",
+    type=click.Path(path_type=Path, exists=True, dir_okay=False),
+    help=(
+        "Verify panel SHA, evaluation settings, and ordered streams against a committed "
+        "manifest while ignoring environment metadata."
+    ),
+)
+@click.option(
     "--sensitivity-report",
     is_flag=True,
     help="Rescore fixed full-panel trials under one-at-a-time weight changes.",
@@ -1433,6 +1454,7 @@ def main(**kwargs: Any) -> None:
     if args.workload_manifest:
         write_workload_manifest_report(
             args.workload_manifest_output,
+            reference_path=args.workload_manifest_reference,
             quick=args.quick or args.workload_preset == "small",
             capacity_blocks=args.capacity_blocks,
             capacity_sweep_blocks=capacity_sweep_blocks,
@@ -1685,6 +1707,8 @@ def _evaluate_candidate_program(
             form_aware=config.form_aware_complexity,
         ),
         timeout_seconds=config.timeout_s,
+        memory_limit_bytes=config.max_memory_bytes,
+        cpu_limit_seconds=config.timeout_s,
     )
 
 
@@ -1720,6 +1744,8 @@ def _evaluate_replay_candidate_program(
             form_aware=config.form_aware_complexity,
         ),
         timeout_seconds=config.timeout_s,
+        memory_limit_bytes=config.max_memory_bytes,
+        cpu_limit_seconds=config.timeout_s,
     )
 
 

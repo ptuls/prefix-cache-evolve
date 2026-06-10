@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import math
 import multiprocessing
+import os
 import sys
 import traceback
 from dataclasses import dataclass
@@ -12,7 +13,13 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable, Generic, Sequence, TypeVar
 
+try:
+    import resource
+except ImportError:  # pragma: no cover - Windows does not provide resource
+    resource = None  # type: ignore[assignment]
+
 ResultT = TypeVar("ResultT")
+_PROCESS_MEMORY_HEADROOM_BYTES = 256 * 1024 * 1024
 
 
 def score_to_reward(score: float) -> float:
@@ -24,9 +31,11 @@ def run_with_timeout(
     func: Callable[..., ResultT],
     *args,
     timeout_seconds: float,
+    memory_limit_bytes: int | None = None,
+    cpu_limit_seconds: float | None = None,
     **kwargs,
 ) -> ResultT:
-    """Executes ``func`` with a wall-clock timeout."""
+    """Execute ``func`` in a forked worker with wall-clock and OS resource limits."""
     if multiprocessing.current_process().daemon:
         # Pool workers cannot create child processes. Their parent pool is
         # responsible for enforcing its evaluation timeout.
@@ -40,7 +49,14 @@ def run_with_timeout(
     receive_conn, send_conn = context.Pipe(duplex=False)
     process = context.Process(
         target=_run_in_subprocess,
-        args=(send_conn, func, args, kwargs),
+        args=(
+            send_conn,
+            func,
+            args,
+            kwargs,
+            memory_limit_bytes,
+            cpu_limit_seconds or timeout_seconds,
+        ),
     )
     process.start()
     send_conn.close()
@@ -70,9 +86,15 @@ def _run_in_subprocess(
     func: Callable[..., ResultT],
     args: tuple,
     kwargs: dict,
+    memory_limit_bytes: int | None,
+    cpu_limit_seconds: float | None,
 ) -> None:
     """Runs one evaluation and sends either its result or raised exception."""
     try:
+        _apply_resource_limits(
+            memory_limit_bytes=memory_limit_bytes,
+            cpu_limit_seconds=cpu_limit_seconds,
+        )
         send_conn.send(("result", func(*args, **kwargs)))
     except BaseException as exc:  # pragma: no cover - exercised through parent process
         try:
@@ -88,6 +110,50 @@ def _run_in_subprocess(
             )
     finally:
         send_conn.close()
+
+
+def _apply_resource_limits(
+    *,
+    memory_limit_bytes: int | None,
+    cpu_limit_seconds: float | None,
+) -> None:
+    """Apply best-effort POSIX limits inside an isolated evaluation worker."""
+    if resource is None:
+        return
+    if cpu_limit_seconds is not None:
+        cpu_soft = max(1, math.ceil(cpu_limit_seconds))
+        _set_resource_limit(resource.RLIMIT_CPU, cpu_soft, cpu_soft + 1)
+    if memory_limit_bytes is not None:
+        current_virtual_bytes = _current_virtual_memory_bytes()
+        if current_virtual_bytes is not None:
+            address_space_limit = (
+                current_virtual_bytes + _PROCESS_MEMORY_HEADROOM_BYTES + memory_limit_bytes
+            )
+            _set_resource_limit(
+                resource.RLIMIT_AS,
+                address_space_limit,
+                address_space_limit,
+            )
+
+
+def _current_virtual_memory_bytes() -> int | None:
+    """Return current Linux virtual memory size, if procfs is available."""
+    try:
+        statm = Path("/proc/self/statm").read_text(encoding="ascii").split()
+        return int(statm[0]) * os.sysconf("SC_PAGE_SIZE")
+    except (FileNotFoundError, OSError, ValueError, IndexError):
+        return None
+
+
+def _set_resource_limit(resource_id: int, soft_limit: int, hard_limit: int) -> None:
+    """Lower one resource limit without attempting to raise an inherited hard cap."""
+    if resource is None:
+        return
+    _, inherited_hard = resource.getrlimit(resource_id)
+    if inherited_hard != resource.RLIM_INFINITY:
+        hard_limit = min(hard_limit, inherited_hard)
+        soft_limit = min(soft_limit, hard_limit)
+    resource.setrlimit(resource_id, (soft_limit, hard_limit))
 
 
 def _stop_process(process) -> None:
@@ -231,6 +297,7 @@ class EvaluationEntryPoint(Generic[ResultT]):
                 evaluator,
                 factory,
                 timeout_seconds=self.timeout_seconds,
+                cpu_limit_seconds=self.timeout_seconds,
             )
         except TimeoutError as exc:
             artifacts = {

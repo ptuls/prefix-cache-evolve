@@ -14,14 +14,15 @@ make setup
 # Evolution support through Levi.
 make setup-evolution
 
-# Tests, formatter, and evolution support.
+# Tests, formatter, and type checker; no Git-hosted Levi dependency.
 make setup-dev
 make check
 ```
 
 Equivalent commands are `uv sync --frozen --no-default-groups`, `uv sync
 --frozen --no-default-groups --extra evolution`, and `uv sync --frozen --group
-dev`.
+dev`. To run the complete suite including Levi adapter tests, combine the last
+two as `uv sync --frozen --group dev --extra evolution`.
 
 ## Seeded Components
 

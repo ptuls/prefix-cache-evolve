@@ -1430,8 +1430,17 @@ def test_evaluate_factory_uses_configured_timeout(monkeypatch) -> None:
     )
     monkeypatch.setattr(levi_evaluator, "DEFAULT_CONFIG", config)
 
-    def fake_run_with_timeout(func, *args, timeout_seconds, **kwargs):
+    def fake_run_with_timeout(
+        func,
+        *args,
+        timeout_seconds,
+        memory_limit_bytes=None,
+        cpu_limit_seconds=None,
+        **kwargs,
+    ):
         captured["timeout_seconds"] = timeout_seconds
+        captured["memory_limit_bytes"] = memory_limit_bytes
+        captured["cpu_limit_seconds"] = cpu_limit_seconds
         return func(*args, **kwargs)
 
     monkeypatch.setattr(levi_evaluator, "run_with_timeout", fake_run_with_timeout)
@@ -1440,6 +1449,8 @@ def test_evaluate_factory_uses_configured_timeout(monkeypatch) -> None:
 
     assert result.metrics["success"] is True
     assert captured["timeout_seconds"] == 0.25
+    assert captured["memory_limit_bytes"] == config.max_memory_bytes
+    assert captured["cpu_limit_seconds"] == 0.25
 
 
 def test_evaluate_source_times_out_during_module_loading(monkeypatch) -> None:

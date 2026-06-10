@@ -30,11 +30,11 @@
     "workload_token_granularity": 8
   },
   "generator": {
-    "module": "prefix_cache_evolve.evaluators.prefix_kv_cache",
+    "module": "prefix_cache_evolve.evaluators.workloads",
     "python_implementation": "CPython",
     "python_version": "3.11.9",
-    "source_file": "prefix_kv_cache.py",
-    "source_sha256": "38968074f144d73e4a0d0cc24ca42b09931d595657cf8f7be7e5c7a446cb7a00"
+    "source_file": "workloads.py",
+    "source_sha256": "30156514b5aa79a9415e12936fc32f0bc020b9d9599c11f74e96cf3da7dba5f1"
   },
   "panel_sha256": "4607782d231560f5d51c5f0347a789b7b82a7e8ff4d78ec5f1adb576c68d2c8f",
   "schema": "prefix-kv-cache-workload-manifest-v1",

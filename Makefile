@@ -25,4 +25,5 @@ format:
 
 check:
 	$(UV) run ruff check .
+	$(UV) run mypy
 	$(UV) run pytest -q

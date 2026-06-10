@@ -156,6 +156,25 @@ def _window_mean(values: Iterable[float]) -> float:
     return sum(values) / len(values) if values else 0.0
 
 
+def _flatten_scoring_settings(value: object) -> object:
+    """Flatten a nested scoring mapping into evaluator settings."""
+    if not isinstance(value, Mapping):
+        return value
+    values = dict(value)
+    scoring = values.pop("scoring", None)
+    if scoring is None:
+        return values
+    if not isinstance(scoring, Mapping):
+        raise ValueError("scoring must be a mapping")
+    duplicates = sorted(set(values).intersection(scoring))
+    if duplicates:
+        raise ValueError(
+            "scoring fields must not also appear at the settings root: " + ", ".join(duplicates)
+        )
+    values.update(scoring)
+    return values
+
+
 @dataclass
 class WorkloadConfig:
     """Configures one workload family inside one split."""
@@ -267,21 +286,7 @@ class EvaluatorConfig(BaseModel):
     @classmethod
     def _flatten_scoring_settings(cls, value: object) -> object:
         """Accept the YAML scoring subsection while retaining a flat runtime API."""
-        if not isinstance(value, Mapping):
-            return value
-        values = dict(value)
-        scoring = values.pop("scoring", None)
-        if scoring is None:
-            return values
-        if not isinstance(scoring, Mapping):
-            raise ValueError("scoring must be a mapping")
-        duplicates = sorted(set(values).intersection(scoring))
-        if duplicates:
-            raise ValueError(
-                "scoring fields must not also appear at the settings root: " + ", ".join(duplicates)
-            )
-        values.update(scoring)
-        return values
+        return _flatten_scoring_settings(value)
 
     @model_validator(mode="after")
     def _validate_tripwire_channels(self) -> EvaluatorConfig:
@@ -304,7 +309,7 @@ class EvaluatorConfig(BaseModel):
 
     def with_updates(self, **updates: object) -> EvaluatorConfig:
         """Return a validated copy with the supplied settings overlaid."""
-        normalized = type(self)._flatten_scoring_settings(updates)
+        normalized = _flatten_scoring_settings(updates)
         if not isinstance(normalized, Mapping):
             raise TypeError("evaluator config updates must be a mapping")
         return type(self).model_validate({**self.model_dump(), **dict(normalized)})
@@ -1852,7 +1857,7 @@ class PrefixKVCacheSimulator:
                 )
                 if parent_hash is not None:
                     self.blocks[parent_hash].known_children.add(prefix_hash)
-                    ancestor_hash = parent_hash
+                    ancestor_hash: int | None = parent_hash
                     while ancestor_hash is not None:
                         self._descendant_counts[ancestor_hash] = (
                             self._descendant_counts.get(ancestor_hash, 0) + 1

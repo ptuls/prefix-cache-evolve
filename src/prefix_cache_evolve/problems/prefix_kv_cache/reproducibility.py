@@ -8,7 +8,7 @@ import json
 import platform
 from collections import Counter
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable, Mapping
 
 from prefix_cache_evolve.evaluators.prefix_kv_cache import (
     EvaluatorConfig,
@@ -107,6 +107,16 @@ def request_stream_sha256(requests: Iterable[WorkloadRequest]) -> str:
         digest.update(_canonical_json(payload))
         digest.update(b"\n")
     return digest.hexdigest()
+
+
+def stable_workload_manifest_payload(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the environment-independent fields used for reproducibility checks."""
+    return {
+        "schema": manifest.get("schema"),
+        "panel_sha256": manifest.get("panel_sha256"),
+        "evaluation": manifest.get("evaluation"),
+        "streams": manifest.get("streams"),
+    }
 
 
 def file_sha256(path: Path) -> str:

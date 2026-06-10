@@ -1,6 +1,7 @@
 """Regression tests for the Levi workflow adapter."""
 
 import asyncio
+import importlib.util
 import json
 import pickle
 import random
@@ -23,6 +24,11 @@ from prefix_cache_evolve.workflow.execution import (
     _enable_levi_reproducibility_support,
     _module_name_from_package_path,
     _persist_levi_paradigm_candidate_capture,
+)
+
+requires_levi = pytest.mark.skipif(
+    importlib.util.find_spec("levi") is None,
+    reason="Levi is installed only with the evolution extra",
 )
 
 
@@ -189,6 +195,7 @@ def test_levi_score_function_forwards_structured_repair_feedback() -> None:
     }
 
 
+@requires_levi
 def test_levi_code_adapter_accepts_failure_feedback() -> None:
     from levi.artifacts.code import CodeAdapter
     from levi.core import Program
@@ -217,6 +224,7 @@ def test_levi_code_adapter_accepts_failure_feedback() -> None:
     assert prompt.index("## Evaluator Feedback") < prompt.index("## Output")
 
 
+@requires_levi
 def test_levi_duplicate_init_behaviors_fall_back_to_distinct_uniform_centroids(monkeypatch) -> None:
     from levi.behavior import BehaviorExtractor
     from levi.pool.cvt_map_elites import CVTMAPElitesPool
@@ -240,6 +248,7 @@ def test_levi_duplicate_init_behaviors_fall_back_to_distinct_uniform_centroids(m
     assert np.array_equal(pool._maxs, np.ones(1))
 
 
+@requires_levi
 def test_compact_paradigm_shift_override_reaches_levi_prompt() -> None:
     from levi.artifacts.code import CodeAdapter
     from levi.config import BudgetConfig, LeviConfig
@@ -276,6 +285,7 @@ def test_configured_paradigm_max_tokens_prefers_paradigm_budget() -> None:
     assert _configured_paradigm_max_tokens(config) == 12_000
 
 
+@requires_levi
 def test_production_config_resolves_reasoning_paradigm_budget_and_model() -> None:
     config = ConfigLoader().load(Path("configs/prefix_kv_cache.yaml"))
 
@@ -283,6 +293,7 @@ def test_production_config_resolves_reasoning_paradigm_budget_and_model() -> Non
     assert _configured_paradigm_model_names(config) == frozenset({"openai/gpt-5.5"})
 
 
+@requires_levi
 def test_configured_paradigm_models_prefer_explicit_heavy_models() -> None:
     config = SimpleNamespace(
         model=None,
@@ -303,6 +314,7 @@ def test_configured_paradigm_models_prefer_explicit_heavy_models() -> None:
     )
 
 
+@requires_levi
 def test_configured_paradigm_models_mirror_levi_empty_heavy_model_fallback() -> None:
     config = SimpleNamespace(
         model=None,
@@ -314,6 +326,7 @@ def test_configured_paradigm_models_mirror_levi_empty_heavy_model_fallback() -> 
     assert _configured_paradigm_model_names(config) == frozenset({"openai/default-paradigm"})
 
 
+@requires_levi
 def test_levi_reasoning_calls_use_configured_token_budget(monkeypatch) -> None:
     from levi.pipeline.state import PipelineState
 
@@ -362,6 +375,7 @@ def test_levi_reasoning_calls_use_configured_token_budget(monkeypatch) -> None:
     assert calls[0]["reasoning_effort"] == "medium"
 
 
+@requires_levi
 def test_levi_paradigm_model_without_reasoning_effort_uses_configured_budget(
     monkeypatch,
 ) -> None:
@@ -385,6 +399,7 @@ def test_levi_paradigm_model_without_reasoning_effort_uses_configured_budget(
     assert calls == [12_000]
 
 
+@requires_levi
 def test_levi_mutation_calls_keep_requested_token_budget(monkeypatch) -> None:
     from levi.pipeline.state import PipelineState
 
@@ -413,6 +428,7 @@ def test_levi_mutation_calls_keep_requested_token_budget(monkeypatch) -> None:
     assert calls == [4_096]
 
 
+@requires_levi
 def test_levi_native_or_nonlegacy_paradigm_budget_is_preserved(monkeypatch) -> None:
     from levi.pipeline.state import PipelineState
 
@@ -434,6 +450,7 @@ def test_levi_native_or_nonlegacy_paradigm_budget_is_preserved(monkeypatch) -> N
     assert calls == [16_000]
 
 
+@requires_levi
 def test_levi_disabled_reasoning_still_uses_configured_output_budget(monkeypatch) -> None:
     from levi.pipeline.state import PipelineState
 
@@ -462,6 +479,7 @@ def test_levi_disabled_reasoning_still_uses_configured_output_budget(monkeypatch
     assert calls == [12_000]
 
 
+@requires_levi
 def test_levi_reproducibility_seeds_selection_and_model_requests(monkeypatch) -> None:
     from levi.pipeline.state import PipelineState
 
@@ -487,6 +505,7 @@ def test_levi_reproducibility_seeds_selection_and_model_requests(monkeypatch) ->
     assert all(call["drop_params"] is True for call in calls)
 
 
+@requires_levi
 def test_levi_request_defaults_resolve_api_key_without_recording_it(monkeypatch) -> None:
     from levi.pipeline.state import PipelineState
 
@@ -619,6 +638,7 @@ def evaluate_source(source):
     )
 
 
+@requires_levi
 def test_levi_runner_records_generated_snapshot_path(tmp_path, monkeypatch) -> None:
     captured = {}
     program_path = tmp_path / "program.py"
@@ -680,6 +700,7 @@ def test_levi_runner_records_generated_snapshot_path(tmp_path, monkeypatch) -> N
     assert result.metadata["runtime"]["packages"]["numpy"]
 
 
+@requires_levi
 def test_levi_runner_prefers_configured_function_signature(tmp_path, monkeypatch) -> None:
     captured = {}
     program_path = tmp_path / "program.py"

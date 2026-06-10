@@ -25,13 +25,24 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --frozen --group dev
+        run: uv sync --frozen --group dev --extra evolution
 
       - name: Check formatting
         run: uv run ruff format --check .
 
       - name: Lint
         run: uv run ruff check .
+
+      - name: Type check evaluators
+        run: uv run mypy
+
+      - name: Verify discovery workload manifest
+        run: >-
+          uv run prefix-cache-evolve
+          --workload-manifest
+          --workload-manifest-output /tmp/discovery_workload_manifest.json
+          --workload-manifest-reference docs/results/discovery_workload_manifest.json
+          --config configs/prefix_kv_cache_discovery.yaml
 
       - name: Test
         run: uv run pytest -q

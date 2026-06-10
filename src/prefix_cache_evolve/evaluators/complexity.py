@@ -19,7 +19,7 @@ def scoring_fn_complexity(source: str, *, form_aware: bool = False) -> int:
 
     ignored_top_level_functions = {"build_candidate", "candidate_factory", "run_demo"}
     total = 0
-    implementation_roots = []
+    implementation_roots: list[ast.AST] = []
     for index, node in enumerate(tree.body):
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             continue
@@ -56,7 +56,7 @@ def _nested_implementation_complexity(node: ast.AST) -> int:
 
 def _nested_implementation_roots(node: ast.AST) -> list[ast.AST]:
     """Return policy implementations nested inside an ignored factory wrapper."""
-    roots = []
+    roots: list[ast.AST] = []
     for child in ast.iter_child_nodes(node):
         if isinstance(child, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
             roots.append(child)
@@ -67,7 +67,7 @@ def _nested_implementation_roots(node: ast.AST) -> list[ast.AST]:
 
 def _implementation_roots(node: ast.AST) -> list[ast.AST]:
     """Return definitions and lambdas nested in one charged module statement."""
-    roots = []
+    roots: list[ast.AST] = []
     for child in ast.iter_child_nodes(node):
         if isinstance(child, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
             roots.append(child)
@@ -95,6 +95,8 @@ def _is_interface_assignment(node: ast.stmt) -> bool:
     if len(names) != len(targets):
         return False
     if names == ["__all__"]:
+        if node.value is None:
+            return False
         try:
             value = ast.literal_eval(node.value)
         except (ValueError, TypeError):
@@ -130,16 +132,20 @@ def _provided_primitive_credit(
 
     primitive_bindings: dict[str, int] = {}
     for root in implementation_roots:
-        for node in ast.walk(root):
-            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+        for candidate_node in ast.walk(root):
+            if not isinstance(candidate_node, (ast.Assign, ast.AnnAssign)):
                 continue
-            value = node.value
+            value = candidate_node.value
             if not isinstance(value, ast.Call):
                 continue
             constructor_credit = constructor_credits.get(_called_name(value.func) or "")
             if constructor_credit is None:
                 continue
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            targets = (
+                candidate_node.targets
+                if isinstance(candidate_node, ast.Assign)
+                else [candidate_node.target]
+            )
             for target in targets:
                 key = _expression_key(target)
                 if key is not None:
@@ -148,21 +154,24 @@ def _provided_primitive_credit(
     credit = 0
     primitive_methods = {"observe", "observe_vector", "values", "combine"}
     for root in implementation_roots:
-        for node in ast.walk(root):
-            if not isinstance(node, ast.Call):
+        for candidate_node in ast.walk(root):
+            if not isinstance(candidate_node, ast.Call):
                 continue
-            called_name = _called_name(node.func)
+            called_name = _called_name(candidate_node.func)
             if called_name in constructor_credits:
                 credit += constructor_credits[called_name]
                 continue
             if called_name in function_credits:
                 credit += function_credits[called_name]
                 continue
-            if not isinstance(node.func, ast.Attribute):
+            if not isinstance(candidate_node.func, ast.Attribute):
                 continue
-            if node.func.attr not in primitive_methods:
+            if candidate_node.func.attr not in primitive_methods:
                 continue
-            credit += primitive_bindings.get(_expression_key(node.func.value) or "", 0)
+            credit += primitive_bindings.get(
+                _expression_key(candidate_node.func.value) or "",
+                0,
+            )
     return credit
 
 

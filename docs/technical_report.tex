@@ -1028,9 +1028,17 @@ wrapper.
 
 \subsection{Invalid candidates, isolation, and memory}
 
-Candidate evaluation runs in an isolated worker with the operative YAML timeout of
-90 seconds.  Candidate memory is monitored with \code{tracemalloc}; the default peak
-limit is 64 MiB.
+Candidate evaluation normally runs in a forked worker, when nested forking is
+available, with the operative YAML wall-clock timeout of 90 seconds and a
+matching POSIX CPU limit.  Candidate Python allocations
+are monitored with \code{tracemalloc}; the default peak limit is 64 MiB.  On Linux,
+the worker also receives an \code{RLIMIT\_AS} ceiling equal to inherited virtual
+memory plus fixed evaluator headroom and the configured candidate budget.
+
+This boundary is resource-limited process isolation, not a complete security sandbox.
+The child still inherits host filesystem, environment, and network access.  Untrusted
+model-generated programs therefore require a separate OS or container sandbox with
+the repository and verifier mounted read-only.
 
 Any positive invalid fraction bypasses normal scoring:
 

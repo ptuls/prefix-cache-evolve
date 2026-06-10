@@ -761,7 +761,7 @@ There were four distinct thresholds of readiness:
   no hidden production prompt content was required.
 
   \item \textbf{Candidate scores were technically valid.}  Generated Python had to be
-  loaded from source, executed in an isolated worker, checked for time and memory
+  loaded from source, executed in a resource-limited worker, checked for time and memory
   limits, and evaluated under a stable candidate-visible schema.  A score from an
   opaque callable was insufficient because the complexity of the exact proposed source
   is part of the objective.
@@ -776,8 +776,7 @@ There were four distinct thresholds of readiness:
 The practical bootstrap path therefore became:
 
 \begin{lstlisting}[style=shell]
-.venv/bin/python -m pip install -e '.[dev]'
-uv pip install 'levi @ git+https://github.com/ttanv/levi.git'
+.venv/bin/python -m pip install -e '.[dev,evolution]'
 .venv/bin/pytest -q
 .venv/bin/prefix-cache-evolve --iterations 20
 \end{lstlisting}
@@ -841,7 +840,8 @@ for evolution. \\
 \addlinespace
 Generated code could hang, fail, or grow state without bound &
 One bad proposal could consume a worker or make results incomparable. &
-Run candidate evaluation in an isolated worker with timeout, memory monitoring,
+Run candidate evaluation in a resource-limited worker with wall-clock and CPU limits,
+Linux address-space limiting, Python memory monitoring,
 structured invalid results, and a score below representative valid policies. \\
 \addlinespace
 Levi's scalar result hid diagnostic evidence &

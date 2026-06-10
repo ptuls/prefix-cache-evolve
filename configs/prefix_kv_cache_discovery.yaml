@@ -1,4 +1,5 @@
-# Exact evaluator settings for the historical 77.230 discovery result.
+# Exact evaluator settings for the historical discovery panel. The unchanged policy
+# scores 77.113 under hardened complexity accounting (77.230 with the original counter).
 #
 # This intentionally contains evaluator settings only. It reproduces the reported
 # synthetic request panel and scoring, not the nondeterministic LLM-guided search.

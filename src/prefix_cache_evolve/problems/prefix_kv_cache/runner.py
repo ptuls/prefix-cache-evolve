@@ -38,7 +38,7 @@ from .configuration import (
     load_evaluator_config,
     prefix_kv_config_environment,
 )
-from .pressure_aware_incumbent import build_candidate
+from .production_incumbent import build_candidate
 from .reproducibility import build_workload_manifest, file_sha256, request_stream_sha256
 from .specialist import (
     candidate_evaluator,
@@ -105,7 +105,7 @@ from .utilities import (
 if TYPE_CHECKING:
     from prefix_cache_evolve.workflow.execution import LeviRunner
 
-_DEFAULT_SEED_PATH = Path(__file__).parent / "pressure_aware_incumbent.py"
+_DEFAULT_SEED_PATH = Path(__file__).parent / "production_incumbent.py"
 _EVICTION_SPECIALIST_SEED_PATH = Path(__file__).parent / "seeds" / "eviction_specialist.py"
 DEFAULT_SEED_SOURCE = ProgramSource(_DEFAULT_SEED_PATH.read_text(encoding="utf-8"))
 _EVALUATOR_PATH = Path(__file__).parent / "evaluator.py"

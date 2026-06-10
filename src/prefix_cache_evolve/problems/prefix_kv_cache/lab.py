@@ -25,7 +25,7 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import (
     build_workload,
 )
 from prefix_cache_evolve.evaluators.telemetry import RequestSnapshot
-from prefix_cache_evolve.problems.prefix_kv_cache.pressure_aware_incumbent import (
+from prefix_cache_evolve.problems.prefix_kv_cache.production_incumbent import (
     build_candidate,
 )
 

@@ -107,7 +107,7 @@ remaining state of the art into a prioritized simulator roadmap.
 On the historical discovery-run \(8\)-token, \(48/96\)-block, agentic-aware verifier,
 the promoted incumbent ranks second in the full reporting panel, behind the constrained
 next-use oracle and ahead of all deployable credibility baselines.  It scores
-\(77.230\), compared with \(97.074\) for the reporting-only oracle and \(70.362\) for
+\(77.113\), compared with \(97.074\) for the reporting-only oracle and \(70.362\) for
 TinyLFU-LRU.  A subsequent production-oriented search on the operative \(16\)-token
 verifier promoted a \(572\)-node policy scoring \(65.649\), ahead of TinyLFU-LRU at
 \(63.548\).  It passes both held-out per-family tripwires: the agentic gap is
@@ -262,8 +262,11 @@ Adapter between Levi's \code{evolve_code} API and the repository's evaluator res
 format. \\
 \filepath{src/prefix_cache_evolve/workflow/configuration.py} &
 Pydantic-validated YAML loading and conversion into arguments forwarded to Levi. \\
+\filepath{src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py} &
+Current promoted deployable policy discovered by the production-oriented search. \\
 \filepath{src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py} &
-Current promoted deployable policy discovered by the 300-evaluation compact search. \\
+Historical discovery policy used for the reproducible \(77.113\) hardened-accounting
+result, originally reported as \(77.230\). \\
 \filepath{src/prefix_cache_evolve/problems/prefix_kv_cache/compact_seed.py} &
 Prior compact incumbent retained as a small alternate evolution seed. \\
 \filepath{scripts/tune_prefix_kv_compact.py} &
@@ -973,9 +976,13 @@ strong.
 
 \subsection{Complexity accounting}
 
-Legacy complexity is the number of Python AST nodes in candidate implementation classes
-and functions.  Thin factory wrappers named \code{build_candidate},
-\code{candidate_factory}, or \code{run_demo} are ignored, but nested implementations
+Raw complexity counts Python AST nodes in every executable module-level subtree, not
+only direct class and function definitions.  This includes uppercase constants,
+condition wrappers, expression statements, and lambda bodies.  Imports, the module
+docstring, a literal \code{\_\_all\_\_}, and the direct
+\code{candidate\_factory = build\_candidate} interface alias are excluded.  Thin
+factory wrappers named \code{build\_candidate}, \code{candidate\_factory}, or
+\code{run\_demo} are otherwise ignored, but nested classes, functions, and lambdas
 inside them are counted.  A syntax error receives complexity 10,000 before failing
 loading.
 
@@ -1008,6 +1015,16 @@ richer eviction ideas can be measured.  Search ranks raw behavior before complex
 preventing deletion alone from appearing as progress.  Final promotion retains 650 as
 the deployable-source limit.  Thus the evaluation safeguards control pathological
 growth, while the promotion limit controls deployability.
+
+The promotion gate is paired with fail-closed source validation.  Candidate modules
+may import only \code{math} and the documented
+\code{prefix\_cache\_evolve.problems.prefix\_kv\_cache.primitives} symbols.
+Executable top-level wrappers, nonliteral module state, decorators, dynamic execution
+or compilation, reflective builtins, dunder access, broad exception handlers, and
+future-knowledge fields are rejected before loading.  These restrictions prevent a
+candidate from laundering implementation code through syntax that receives little or
+no complexity charge, or from importing a repository baseline as a nominally tiny
+wrapper.
 
 \subsection{Invalid candidates, isolation, and memory}
 
@@ -1461,6 +1478,8 @@ explicitly warns candidates:
   \item only \code{on_request_start}, \code{on_cache_hit}, and \code{on_cache_miss}
   fire as lifecycle callbacks;
   \item \code{id(block)} and guessed attributes are invalid state keys;
+  \item dynamic execution, introspection, decorators, dunder access, and imports
+  outside \code{math} plus the documented primitive module are rejected;
   \item future-reuse fields are unavailable to deployable candidates;
   \item recurrence, gap-moment, subtree, and regime context fields are online-only;
   \item canonical bounded multi-timescale primitives are available but optional;
@@ -1923,13 +1942,16 @@ cost.
 \subsection{Discovery result and mechanism}
 
 On the historical 8-token discovery verifier, the pressure-aware incumbent scores
-\(77.230\), compared with \(70.362\) for TinyLFU-LRU and \(97.074\) for the
+\(77.113\), compared with \(70.362\) for TinyLFU-LRU and \(97.074\) for the
 reporting-only future-reuse oracle.  Its main discovered mechanism is selective
 admission under sustained pressure: low-evidence and low-priority suffixes are
 throttled before they create churn, while recurrence-backed deep branches can still be
 retained.  Exact ablation shows that the final priority-aware pressure term is
 load-bearing; its apparent charged-probe regression is entirely complexity accounting,
 while raw probe behavior improves.
+The same policy behavior was originally reported as \(77.230\).  Hardening the
+complexity counter raises effective complexity from 636 to 648 by charging the three
+module constants, reducing only the complexity-derived score term.
 
 \subsection{Transfer and specialist evidence}
 
@@ -2377,7 +2399,7 @@ Under the operative verifier and workload configuration:
 .venv/bin/python -m prefix_cache_evolve.problems.prefix_kv_cache.runner \
   --baseline-report \
   --candidate-program \
-  src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py
+  src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py
 \end{lstlisting}
 
 \subsection{Reproduce the historical discovery result and workload panel}
@@ -2401,22 +2423,22 @@ Under the operative verifier and workload configuration:
 .venv/bin/python -m prefix_cache_evolve.problems.prefix_kv_cache.runner \
   --probe-report \
   --candidate-program \
-  src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py
+  src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py
 
 .venv/bin/python -m prefix_cache_evolve.problems.prefix_kv_cache.runner \
   --hidden-report \
   --candidate-program \
-  src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py
+  src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py
 \end{lstlisting}
 
-\subsection{Run a new evolution from the pressure-aware incumbent}
+\subsection{Run a new evolution from the production incumbent}
 
 \begin{lstlisting}[style=shell]
 .venv/bin/python -m prefix_cache_evolve.problems.prefix_kv_cache.runner \
   --iterations 300 \
   --config configs/prefix_kv_cache.yaml \
   --seed-program \
-  src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py
+  src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py
 \end{lstlisting}
 
 \subsection{Run eviction-specialist exploration}

@@ -43,6 +43,28 @@ _SANITIZED_REQUEST_FIELDS = {
     "prompt_tokens",
     "request_type",
 }
+_ALLOWED_PRIMITIVE_IMPORTS = {
+    "MultiTimescaleDecay",
+    "decay_vector",
+    "threshold_excess",
+}
+_DYNAMIC_BUILTINS = {
+    "__import__",
+    "breakpoint",
+    "compile",
+    "delattr",
+    "eval",
+    "exec",
+    "getattr",
+    "globals",
+    "id",
+    "input",
+    "locals",
+    "open",
+    "setattr",
+    "vars",
+}
+_PRIMITIVE_MODULE = "prefix_cache_evolve.problems.prefix_kv_cache.primitives"
 _WORKLOAD_FEEDBACK_KEYS = (
     "token_hit_rate",
     "block_hit_rate",
@@ -180,15 +202,24 @@ def _candidate_source_violations(
         for node in ast.walk(tree)
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
     }
-    for node in tree.body:
+    for index, node in enumerate(tree.body):
+        violations.extend(_top_level_source_violations(node, index))
         if isinstance(node, ast.Import):
             for alias in node.names:
                 name = alias.asname or alias.name.split(".", maxsplit=1)[0]
                 imported_names[name] = alias.name
+                if alias.name != "math":
+                    violations.append(f"import from unsupported module {alias.name}")
         elif isinstance(node, ast.ImportFrom) and node.module != "__future__":
             for alias in node.names:
                 name = alias.asname or alias.name
                 imported_names[name] = alias.name
+            violations.extend(_import_from_violations(node))
+        elif isinstance(node, ast.ImportFrom):
+            if node.module != "__future__" or tuple(alias.name for alias in node.names) != (
+                "annotations",
+            ):
+                violations.append("only from __future__ import annotations is allowed")
 
     for name, imported_from in imported_names.items():
         if name == "*":
@@ -200,15 +231,34 @@ def _candidate_source_violations(
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if node.name in _UNSUPPORTED_CALLBACKS:
                 violations.append(f"unsupported callback {node.name}")
+            if node.decorator_list:
+                violations.append("decorators are not allowed in candidate code")
+        elif isinstance(node, ast.ClassDef):
+            if node.decorator_list:
+                violations.append("decorators are not allowed in candidate code")
         elif isinstance(node, ast.Attribute) and node.attr in _FUTURE_REUSE_FIELDS:
             violations.append(f"future-knowledge field {node.attr} is not deployable")
         elif isinstance(node, ast.Attribute) and node.attr in _SANITIZED_REQUEST_FIELDS:
             violations.append(f"sanitized request field {node.attr} is not a policy signal")
+        elif isinstance(node, ast.Attribute) and _is_dunder_name(node.attr):
+            violations.append(f"dunder attribute {node.attr} is not allowed")
+        elif (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Load)
+            and _is_dunder_name(node.id)
+        ):
+            violations.append(f"dunder name {node.id} is not allowed")
+        elif (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Load)
+            and node.id in _DYNAMIC_BUILTINS
+        ):
+            violations.append(f"{node.id}() is not allowed in candidate code")
         elif isinstance(node, ast.ExceptHandler) and _is_broad_exception_handler(node):
             violations.append("broad exception handlers are not allowed")
         elif isinstance(node, ast.Call):
             called_name = _called_name(node.func)
-            if called_name in {"getattr", "id"}:
+            if called_name in _DYNAMIC_BUILTINS:
                 violations.append(f"{called_name}() is not allowed in candidate code")
             elif called_name == "MultiTimescaleDecay":
                 violations.extend(_multi_timescale_decay_violations(node))
@@ -216,6 +266,66 @@ def _candidate_source_violations(
                 violations.extend(_threshold_excess_violations(node))
 
     return tuple(dict.fromkeys(violations))
+
+
+def _top_level_source_violations(node: ast.stmt, index: int) -> tuple[str, ...]:
+    """Return violations of the fail-closed candidate module grammar."""
+    if isinstance(node, (ast.Import, ast.ImportFrom, ast.ClassDef, ast.FunctionDef)):
+        return ()
+    if (
+        index == 0
+        and isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    ):
+        return ()
+    if isinstance(node, (ast.Assign, ast.AnnAssign)):
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        names = [target.id for target in targets if isinstance(target, ast.Name)]
+        if len(names) != len(targets):
+            return ("top-level assignments must target simple names",)
+        if names == ["candidate_factory"]:
+            if isinstance(node.value, ast.Name) and node.value.id == "build_candidate":
+                return ()
+            return ("candidate_factory must be a direct alias of build_candidate",)
+        if names == ["__all__"]:
+            try:
+                value = ast.literal_eval(node.value)
+            except (ValueError, TypeError):
+                return ("__all__ must be a literal sequence",)
+            if not isinstance(value, (list, tuple)) or not all(
+                isinstance(item, str) for item in value
+            ):
+                return ("__all__ must be a literal sequence of names",)
+            return ()
+        if not names or any(not name.isupper() for name in names):
+            return ("top-level assignments must define uppercase literal constants",)
+        try:
+            ast.literal_eval(node.value)
+        except (ValueError, TypeError):
+            return ("top-level constants must use literal values",)
+        return ()
+    return (f"unsupported top-level statement {type(node).__name__}",)
+
+
+def _import_from_violations(node: ast.ImportFrom) -> tuple[str, ...]:
+    """Return violations for one non-future from-import."""
+    if node.level:
+        return ("relative imports are not allowed in candidate code",)
+    if node.module == "math":
+        return ()
+    if node.module != _PRIMITIVE_MODULE:
+        return (f"import from unsupported module {node.module}",)
+    violations = []
+    for alias in node.names:
+        if alias.name not in _ALLOWED_PRIMITIVE_IMPORTS:
+            violations.append(f"unsupported primitive import {alias.name}")
+    return tuple(violations)
+
+
+def _is_dunder_name(name: str) -> bool:
+    """Return whether a loaded name accesses Python implementation internals."""
+    return len(name) > 4 and name.startswith("__") and name.endswith("__")
 
 
 def _static_repair_feedback(
@@ -266,10 +376,12 @@ def _static_repair_feedback(
             repairs.append(
                 f"Remove {field}; it is deliberately scrubbed before candidate callbacks."
             )
-        elif violation == "getattr() is not allowed in candidate code":
-            repairs.append("Replace getattr() with direct access to one documented field.")
-        elif violation == "id() is not allowed in candidate code":
-            repairs.append("Replace id(block) with block.prefix_hash or block.block_id.")
+        elif violation.endswith("() is not allowed in candidate code"):
+            repairs.append("Remove the dynamic or introspective builtin call.")
+        elif violation.startswith("import from unsupported module "):
+            repairs.append("Remove the import; candidate code may import only math and primitives.")
+        elif violation.startswith("unsupported primitive import "):
+            repairs.append("Import only documented helpers from the policy primitives module.")
         elif violation == "broad exception handlers are not allowed":
             repairs.append("Remove the broad try/except and use the documented contract directly.")
         elif violation == "star imports are not allowed":

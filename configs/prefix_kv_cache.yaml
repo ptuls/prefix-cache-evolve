@@ -117,10 +117,14 @@ prompt:
     exploration-only and its next mutation must be a dedicated simplification
     pass that preserves measured behavior while deleting at least the reported
     excess. Do not add broad exception handlers, future-reuse references,
-    schema fallbacks, unused imports, or speculative state. Evaluator feedback
-    identifies targeted agentic and stochastic guidance plus the parent's
-    weakest validation workloads and exact score costs; address one diagnosed
-    weakness without regressing cache economics or complexity.
+    schema fallbacks, unused imports, dynamic execution, introspection, decorators,
+    or speculative state. Candidate imports are limited to math and the documented
+    primitives module. Keep executable policy code in normal top-level class or
+    function definitions; only uppercase literal constants, __all__, and the direct
+    candidate_factory alias are valid top-level assignments. Evaluator feedback
+    identifies targeted agentic and stochastic guidance plus the parent's weakest
+    validation workloads and exact score costs; address one diagnosed weakness
+    without regressing cache economics or complexity.
   objectives:
     - "Maximize mean validation workload score while keeping the weakest workload competitive."
     - "Keep p95 deterministic latency and churn low."

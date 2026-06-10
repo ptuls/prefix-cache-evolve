@@ -25,7 +25,7 @@ The candidate clears the deployable credibility baselines in this capacity sweep
 | Rank | Policy | Group | Combined score | Capacity 48 token hit | Capacity 96 token hit | Worst-quarter hit | Request p10 hit | Token-wtd admission waste | Admission token utility | Avoidable eviction | Priority-burst weighted hit | Priority-noise token hit | Policy underfill | Churn per 1k |
 |---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | 1 | `oracle_future_reuse` | reporting-only/future-knowledge | 97.074 | 0.683 | 0.745 | 0.548 | 0.326 | 0.017 | 13.164 | 0.000 | 0.780 | 0.602 | 0.141 | 43.9 |
-| 2 | `candidate` | deployable | 77.230 | 0.674 | 0.687 | 0.521 | 0.324 | 0.407 | 8.143 | 0.074 | 0.766 | 0.596 | 0.070 | 92.7 |
+| 2 | `candidate` | deployable | 77.113 | 0.674 | 0.687 | 0.521 | 0.324 | 0.407 | 8.143 | 0.074 | 0.766 | 0.596 | 0.070 | 92.7 |
 | 3 | `tinylfu_lru` | deployable | 70.362 | 0.618 | 0.690 | 0.457 | 0.299 | 0.357 | 8.062 | 0.108 | 0.722 | 0.575 | 0.112 | 161.1 |
 | 4 | `future_reuse_heuristic` | reporting-only/future-knowledge | 69.857 | 0.669 | 0.740 | 0.542 | 0.323 | 0.706 | 2.440 | 0.005 | 0.776 | 0.602 | 0.000 | 1197.3 |
 | 5 | `prefix_anchor` | deployable | 60.199 | 0.639 | 0.724 | 0.507 | 0.321 | 0.705 | 2.298 | 0.110 | 0.735 | 0.578 | 0.000 | 1363.3 |
@@ -81,8 +81,9 @@ These recurrence-heavy families are evaluated and reported but excluded from the
 
 ## Notes
 
-- Candidate `scoring_fn_complexity` in this report is `636`; the combined score includes that penalty.
-- Candidate score breakdown: mean workload `75.009`, minimum-workload contribution `20.341`, churn cost `1.391`, underfill cost `0.835`, fairness cost `7.663`, and complexity cost `8.232`.
+- Candidate `scoring_fn_complexity` in this report is `648`; the combined score includes that penalty.
+- Candidate score breakdown: mean workload `75.009`, minimum-workload contribution `20.341`, churn cost `1.391`, underfill cost `0.835`, fairness cost `7.663`, and complexity cost `8.348`.
+- The policy behavior is unchanged from the original `77.230` report. The `0.116` score reduction comes entirely from charging module constants that the previous counter ignored.
 - `policy_underfill_rate` is policy bypass multiplied by unused mean capacity. It penalizes deliberate bypass while cache space remains idle, without charging natural underfill when the policy admits every miss.
 - `future_reuse_heuristic` and `oracle_future_reuse` use simulator-provided future knowledge and are not deployable. The former is count-weighted; the latter is a Belady-style next-use oracle constrained by the simulator's leaf-only eviction model.
 - `tinylfu_lru` admits only shallow or repeated blocks, so it often trades lower hit rate for lower churn.
@@ -91,4 +92,4 @@ These recurrence-heavy families are evaluated and reported but excluded from the
 - `prefix_anchor` is a deployable structural anchor baseline; `prefix_fanout` is a simpler descendant-count protection baseline.
 - Priority-burst weighted hit is reported from `priority_burst_recovery`; priority-noise token hit checks the opposite failure mode, where high priority does not imply reuse.
 - Request p10, worst-quarter hit, token-weighted admission waste, admission token utility, and avoidable eviction are aggregated across the validation panel.
-- This report uses `request_count=96`, seeds `(11, 23, 37)`, and capacity sweep `(48, 96)`.
+- This report uses `request_count=96`, seeds `(11, 23, 37)`, block size `8`, block-capacity sweep `(48, 96)`, token-capacity sweep `(384, 768)`, and canonical synthetic workload token granularity `8`.

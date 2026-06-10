@@ -4,6 +4,11 @@
 > 48/96-block discovery verifier. The operative production-oriented verifier
 > now uses 16-token blocks and 24/48-block tiers; see
 > [`block_size_robustness.md`](block_size_robustness.md).
+>
+> The `77.230` score and `636` complexity below record the original promotion
+> decision under the pre-hardening counter. The unchanged policy now scores
+> `77.113` at complexity `648`; the difference is entirely the newly charged
+> module constants.
 
 The promoted deployable incumbent is the exact winner from the retained historical
 discovery search:

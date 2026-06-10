@@ -19,7 +19,7 @@ from prefix_cache_evolve.evaluators.baselines import (
 from prefix_cache_evolve.evaluators.complexity import scoring_fn_complexity
 from prefix_cache_evolve.evaluators.prefix_kv_cache import PrefixKVCacheEvaluator
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import load_evaluator_config
-from prefix_cache_evolve.problems.prefix_kv_cache.pressure_aware_incumbent import (
+from prefix_cache_evolve.problems.prefix_kv_cache.production_incumbent import (
     build_candidate,
 )
 
@@ -28,9 +28,7 @@ _DEFAULT_CAPACITIES = (24, 48, 96, 128)
 _DEFAULT_CONFIG = Path("configs/prefix_kv_cache.yaml")
 _DEFAULT_OUTPUT = Path("docs/results/baseline_geometry_sweep.json")
 _INCUMBENT_NAME = "evolved_incumbent"
-_INCUMBENT_PATH = Path(
-    "src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py"
-)
+_INCUMBENT_PATH = Path("src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py")
 
 
 @dataclass(frozen=True)

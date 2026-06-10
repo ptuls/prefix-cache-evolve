@@ -20,7 +20,13 @@ def scoring_fn_complexity(source: str, *, form_aware: bool = False) -> int:
     ignored_top_level_functions = {"build_candidate", "candidate_factory", "run_demo"}
     total = 0
     implementation_roots = []
-    for node in tree.body:
+    for index, node in enumerate(tree.body):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            continue
+        if _is_module_docstring(node, index):
+            continue
+        if _is_interface_assignment(node):
+            continue
         if isinstance(node, ast.ClassDef):
             total += sum(1 for _ in ast.walk(node))
             implementation_roots.append(node)
@@ -32,6 +38,9 @@ def scoring_fn_complexity(source: str, *, form_aware: bool = False) -> int:
             else:
                 total += sum(1 for _ in ast.walk(node))
                 implementation_roots.append(node)
+        else:
+            total += sum(1 for _ in ast.walk(node))
+            implementation_roots.extend(_implementation_roots(node))
     if not form_aware or total == 0:
         return total
     primitive_credit = _provided_primitive_credit(tree, implementation_roots)
@@ -49,11 +58,53 @@ def _nested_implementation_roots(node: ast.AST) -> list[ast.AST]:
     """Return policy implementations nested inside an ignored factory wrapper."""
     roots = []
     for child in ast.iter_child_nodes(node):
-        if isinstance(child, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+        if isinstance(child, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
             roots.append(child)
         else:
             roots.extend(_nested_implementation_roots(child))
     return roots
+
+
+def _implementation_roots(node: ast.AST) -> list[ast.AST]:
+    """Return definitions and lambdas nested in one charged module statement."""
+    roots = []
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            roots.append(child)
+        else:
+            roots.extend(_implementation_roots(child))
+    return roots
+
+
+def _is_module_docstring(node: ast.stmt, index: int) -> bool:
+    """Return whether a statement is the module docstring."""
+    return (
+        index == 0
+        and isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    )
+
+
+def _is_interface_assignment(node: ast.stmt) -> bool:
+    """Return whether an assignment exposes metadata rather than policy logic."""
+    if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+        return False
+    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+    names = [target.id for target in targets if isinstance(target, ast.Name)]
+    if len(names) != len(targets):
+        return False
+    if names == ["__all__"]:
+        try:
+            value = ast.literal_eval(node.value)
+        except (ValueError, TypeError):
+            return False
+        return isinstance(value, (list, tuple)) and all(isinstance(item, str) for item in value)
+    return (
+        names == ["candidate_factory"]
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "build_candidate"
+    )
 
 
 def _provided_primitive_credit(

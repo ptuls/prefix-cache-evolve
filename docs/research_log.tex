@@ -74,6 +74,8 @@
 \newcommand{\important}[1]{\textbf{\color{navy}#1}}
 \newcommand{\risk}[1]{\textbf{\color{red}#1}}
 \newcommand{\good}[1]{\textbf{\color{green}#1}}
+\newcommand{\blocktag}[1]{\textbf{\color{navy}[#1-token blocks]}}
+\newcommand{\mixedblocktag}{\textbf{\color{navy}[mixed block sizes]}}
 
 \setlist[itemize]{leftmargin=1.35em,itemsep=0.25em,topsep=0.35em}
 \setlist[enumerate]{leftmargin=1.55em,itemsep=0.25em,topsep=0.35em}
@@ -111,11 +113,19 @@ negative results explain why the current workflow has its present trust boundari
 feedback channels, and promotion gates.  The main report cites only the conclusions
 that remain relevant to the current design.
 
+\important{Physical block-size key.}  Score-bearing sections are tagged
+\blocktag{8}, \blocktag{16}, or \mixedblocktag.  These tags identify the physical KV
+block size used by the simulator, not the workload token granularity.  The latter is
+8 tokens in the current 16-token configuration as well.  Scores carrying different
+physical-block tags are not directly comparable unless a geometry sweep explicitly
+evaluates both sizes under one panel.
+
 \section{Mutation-Operator Productivity}
 \label{sec:operator-productivity}
 
-The completed 500-budget function-only eviction-specialist run provides an unusually
-clear diagnostic of Levi's punctuated-equilibrium design.  The final snapshot of run
+\blocktag{16} The completed 500-budget function-only eviction-specialist run provides
+an unusually clear diagnostic of Levi's punctuated-equilibrium design.  The final
+snapshot of run
 \identifier{20260608_150431_280387} records 498 evaluations, four evaluation errors,
 twenty scored seed or initialization entries, and 474 scored post-initialization
 proposals.  Table~\ref{tab:operator-productivity} classifies those proposals by their
@@ -136,7 +146,8 @@ Direct GPT-5.5 paradigm shift & 13 & 5 & \(38.5\%\) & 3 & \(23.1\%\) \\
 \bottomrule
 \end{tabular}
 \caption{Operator productivity in the completed eviction-specialist run.
-``New best'' means a strict improvement in best score so far.}
+All scores use 16-token physical blocks. ``New best'' means a strict improvement in
+best score so far.}
 \label{tab:operator-productivity}
 \end{table}
 
@@ -163,8 +174,9 @@ to separate operator effects from model, prompt, parent, and search-stage effect
 
 \section{Early Run Chronology}
 
-The following run scores were produced under the verifier version active at the time.
-They are useful for search chronology but are \risk{not directly comparable} to the
+\blocktag{8} The following run scores were produced with 8-token physical blocks under
+the verifier version active at the time.  They are useful for search chronology but
+are \risk{not directly comparable} to the
 compact seed's \(74.321\) score under the discovery verifier because the capacity sweep,
 workload panel, and score terms were subsequently strengthened.
 
@@ -172,7 +184,7 @@ workload panel, and score terms were subsequently strengthened.
 \scriptsize
 \begin{tabularx}{\textwidth}{@{}lrrrrrX@{}}
 \toprule
-\textbf{Run ID} & \textbf{Evals} & \textbf{Score} & \textbf{Runtime} &
+\textbf{Run ID} & \textbf{Evals} & \textbf{Score (8 tok.)} & \textbf{Runtime} &
 \textbf{Cost} & \textbf{Archive} & \textbf{Interpretation} \\
 \midrule
 20260605T075913Z & 100 & 27.052 & 1454.4 s & \$2.173 & 50 &
@@ -210,18 +222,18 @@ caveat from the policy-quality result.
 
 \subsection{Historical discovery selection and reporting panel}
 
-The table in this subsection uses the retained \(8\)-token discovery verifier.  It
-documents the environment that produced the promoted policy; it is not the operative
-production-oriented ranking.  Under the current \(16\)-token default, TinyLFU-LRU leads
-the incumbent by \(0.791\) combined-score points, as summarized in the workload-model
-section and \filepath{docs/results/block_size_robustness.md}.
+\blocktag{8} The table in this subsection uses the retained \(8\)-token discovery
+verifier.  It documents the environment that produced the promoted policy; it is not
+the operative production-oriented ranking.  Under the current \(16\)-token default,
+TinyLFU-LRU leads the incumbent by \(0.791\) combined-score points, as summarized in
+the workload-model section and \filepath{docs/results/block_size_robustness.md}.
 
 \begin{center}
 \scriptsize
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{@{}lrrrrrrrrr@{}}
 \toprule
-\textbf{Policy} & \textbf{Score} & \textbf{Cap. 48} & \textbf{Cap. 96} &
+\textbf{Policy} & \textbf{Score (8 tok.)} & \textbf{Cap. 48} & \textbf{Cap. 96} &
 \textbf{Worst qtr.} & \textbf{Tok. waste} & \textbf{Utility} &
 \textbf{Avoid.} & \textbf{Underfill} & \textbf{Churn/1k} \\
 \midrule
@@ -279,7 +291,7 @@ Combined score & \(\mathbf{77.230}\) \\
 \subsection{Reasoning decode-KV robustness}
 \label{sec:reasoning-kv-robustness}
 
-The shared-capacity robustness panel evaluates all existing policies on
+\blocktag{16} The shared-capacity robustness panel evaluates all existing policies on
 \identifier{concurrent_long_generation}, \identifier{reasoning_burst},
 \identifier{reasoning_burst_shifted}, and \identifier{stochastic_serving_mix}.  It
 uses the operative 16-token blocks, capacities \((24,48)\), 96 requests per family,
@@ -320,8 +332,8 @@ separate prefix/decode budgets.  The complete panel is retained in
 
 \subsection{Held-out structure-generalization probe}
 
-The recurrence-heavy probe is reported but excluded from selection.  The promoted
-priority-aware pressure incumbent's token hit rates are \(0.376\) on
+\blocktag{8} The recurrence-heavy probe is reported but excluded from selection.  The
+promoted priority-aware pressure incumbent's token hit rates are \(0.376\) on
 \identifier{agent_trace_branching} and \(0.881\) on
 \identifier{cyclic_working_set_pressure}. Recurrence-gated depth relief raises the
 first value while the new term lowers agent-trace churn from \(57.3\) to \(55.6\) per
@@ -337,7 +349,7 @@ Stochastic serving mixes remain the clearest weakness.
 \subsection{Pressure-aware evolution chronology}
 \label{sec:pressure-aware-promotion}
 
-A nominal 300-evaluation search from the compact seed completed 298 recorded
+\blocktag{8} A nominal 300-evaluation search from the compact seed completed 298 recorded
 evaluations, cost \$2.781, and filled three archive cells.  The strongest GPT-5.5
 paradigm scored \(74.670\); a subsequent compact mutation refined its pressure-aware
 admission mechanism and reached \(76.069\). A focused follow-up separated agent-trace
@@ -352,7 +364,7 @@ depth relief reached \(76.630\).
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{lrrrrrrrrrrr}
 \toprule
-\textbf{Policy} & \textbf{Selection} & \textbf{Raw} & \textbf{Mean} &
+\textbf{Policy} & \textbf{Selection (8 tok.)} & \textbf{Raw} & \textbf{Mean} &
 \textbf{Min} & \textbf{Churn} & \textbf{Underfill} & \textbf{Cx} &
 \textbf{Probe} & \textbf{Agent} & \textbf{Cyclic} & \textbf{Hidden} \\
 \midrule
@@ -437,8 +449,8 @@ the result credible as improved search structure rather than probe leakage.
 \subsection{Eviction-specialist follow-up}
 \label{sec:eviction-specialist}
 
-The promoted incumbent has effective complexity 636, leaving only fourteen nodes below
-the original 650-node rejection threshold.  A diagnostic of six retained paradigm
+\blocktag{16} The promoted incumbent has effective complexity 636, leaving only
+fourteen nodes below the original 650-node rejection threshold.  A diagnostic of six retained paradigm
 candidates found that all six were rejected solely for effective complexity between
 669 and 739; four proposed richer eviction rankings.  Rescoring those four with the
 hard limit disabled showed that the cap was suppressing measurable alternatives, but
@@ -493,8 +505,8 @@ Full counts, split-level regret, and compact variants are retained in
 \subsection{Post-expansion evolution result}
 \label{sec:post-expansion}
 
-Run \filepath{artifacts/prefix_kv_cache_runs/20260606T000036Z} used the expanded
-observable surface, canonical multi-timescale primitive, form-aware complexity, and
+\blocktag{8} Run \filepath{artifacts/prefix_kv_cache_runs/20260606T000036Z} used the
+expanded observable surface, canonical multi-timescale primitive, form-aware complexity, and
 the quarantined probe under the previous \(24/48\)-block verifier.  A nominal
 100-evaluation budget produced 98 recorded evaluations, cost \$2.898, filled eight
 archive cells, and retained the compact seed at
@@ -512,7 +524,7 @@ complexity charge back to the selection score.
 \toprule
 \textbf{Policy} & \textbf{Mean} & \textbf{Min contribution} &
 \textbf{Churn cost} & \textbf{Fairness cost} & \textbf{Raw before cx} &
-\textbf{Effective cx} & \textbf{Cx cost} & \textbf{Combined} \\
+\textbf{Effective cx} & \textbf{Cx cost} & \textbf{Combined (8 tok.)} \\
 \midrule
 Compact incumbent & 68.642 & 13.685 & 10.283 & 7.663 & 64.381 & 473 & 6.593 & 57.788 \\
 Best expanded mutation & 65.346 & 14.300 & 7.754 & 7.663 & 64.229 & 1239 & 13.574 & 50.655 \\
@@ -580,8 +592,8 @@ persisted in
 \subsection{Structured ablation and repeated-search adjudication}
 \label{sec:structured-search}
 
-The next iteration converted the first expansion run's hand-rolled fast, slow,
-priority, and miss-decay dictionaries into a bounded canonical
+\blocktag{8} The next iteration converted the first expansion run's hand-rolled fast,
+slow, priority, and miss-decay dictionaries into a bounded canonical
 \code{MultiTimescaleDecay.observe_vector} representation.  Before another evolution
 run, a behavior-only full-panel ablation isolated which structural terms were carrying
 value.  Complexity is set to zero in this table so the rows compare behavior rather
@@ -627,7 +639,7 @@ validation and aggregate probe score for better hidden and agent-branching behav
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{lrrrrrrrr}
 \toprule
-\textbf{Policy} & \textbf{Combined} & \textbf{Raw before cx} &
+\textbf{Policy} & \textbf{Combined (8 tok.)} & \textbf{Raw before cx} &
 \textbf{Effective cx} & \textbf{Subsidy} & \textbf{Probe} &
 \textbf{Agent hit} & \textbf{Cyclic hit} & \textbf{Hidden} \\
 \midrule
@@ -650,7 +662,7 @@ an interesting but unselected functional form.
 \resizebox{\textwidth}{!}{%
 \begin{tabular}{lrrrrrrrrrr}
 \toprule
-\textbf{Run ID} & \textbf{Evals} & \textbf{Cost} & \textbf{Generated combined} &
+\textbf{Run ID} & \textbf{Evals} & \textbf{Cost} & \textbf{Generated combined (8 tok.)} &
 \textbf{Raw before cx} & \textbf{Cx} & \textbf{Subsidy} & \textbf{Probe} &
 \textbf{Agent hit} & \textbf{Cyclic hit} & \textbf{Hidden} \\
 \midrule
@@ -690,7 +702,7 @@ parent.  The ablation and repeated-run verdicts are persisted in
 
 \subsection{Hidden-panel diagnostic}
 
-A post-verifier-revision hidden diagnostic produced:
+\blocktag{8} A post-verifier-revision hidden diagnostic produced:
 
 \begin{center}
 \small
@@ -879,8 +891,8 @@ store shared across the whole run.
 
 \subsection{Run diary and turning points}
 
-Table~\ref{tab:journey-runs} records the retained discovery-verifier runs that most
-directly changed the system.  The earlier June 6 structured experiments used a prior
+\blocktag{8} Table~\ref{tab:journey-runs} records the retained discovery-verifier runs
+that most directly changed the system.  The earlier June 6 structured experiments used a prior
 verifier and are discussed separately below.
 
 \begin{table}[H]
@@ -930,7 +942,7 @@ The winner appeared at evaluation 81; targeted surrogate diagnostics and special
 dimensions produced the promoted policy. \\
 \bottomrule
 \end{tabularx}
-\caption{Retained discovery-verifier evolution journey.}
+\caption{Retained discovery-verifier evolution journey using 8-token physical blocks.}
 \label{tab:journey-runs}
 \end{table}
 
@@ -939,8 +951,8 @@ dimensions produced the promoted policy. \\
 \input{figures/incumbent_eval_trajectory.tex}
 \caption{Evaluation trajectory leading to the promoted incumbent.  Panel A concatenates
 the six retained discovery-verifier runs in Table~\ref{tab:journey-runs} and plots the
-global best score, so a flat segment means that additional evaluations did not improve
-the retained policy.  Panel B expands the final targeted run: gray and green points are
+global best 8-token score, so a flat segment means that additional evaluations did not
+improve the retained policy.  Panel B expands the final targeted run: gray and green points are
 successfully scored candidates, green points entered or replaced an archive cell,
 orange points are strict global-best jumps, red triangles are scored candidates below
 the displayed score range, and the outcome raster distinguishes scored, accepted, and
@@ -987,8 +999,8 @@ and late-run marginal value were still weak.
 
 \subsection{The structured-policy detour}
 
-The project also took a deliberate detour through richer state representations.  The
-observable surface was expanded with recurrence, subtree, and regime context, and a
+\blocktag{8} The project also took a deliberate detour through richer state
+representations.  The observable surface was expanded with recurrence, subtree, and regime context, and a
 bounded \code{MultiTimescaleDecay} primitive was added to make multi-timescale state
 available without unbounded dictionaries.
 
@@ -1019,7 +1031,8 @@ all four jobs was inefficient.
 
 \subsection{From the first gain to the promoted incumbent}
 
-The first clear discovery-verifier improvement was the \(76.069\) pressure-aware policy.
+\blocktag{8} The first clear discovery-verifier improvement was the \(76.069\)
+pressure-aware policy.
 It reduced churn by conditioning admission on sustained pressure rather than admitting
 every plausible suffix.  A subsequent run discovered a narrow persistent-pressure
 threshold term.  That term was not sufficient alone, but it was retained and composed
@@ -1044,8 +1057,8 @@ or promoted without adequate evidence.
 
 \subsection{Where the journey stands}
 
-The production full-policy lane has now crossed the 16-token TinyLFU-LRU target without
-hand-authoring the candidate.  Its 300-evaluation search first found a \(656\)-node,
+\blocktag{16} The production full-policy lane has now crossed the 16-token TinyLFU-LRU
+target without hand-authoring the candidate.  Its 300-evaluation search first found a \(656\)-node,
 \(64.779\)-score exploration winner.  A separate 100-evaluation simplification phase
 found a \(539\)-node top scorer at \(66.033\), but promotion correctly rejected it
 because its agentic surrogate-to-probe gap was \(0.1217\), just above the \(0.12\)
@@ -1075,7 +1088,7 @@ without rebuilding the experimental harness.  That iteration velocity is a centr
 result of the project, while cumulative cost remains the honest accounting unit for
 the promoted algorithm.
 
-A fixed-block-count geometry sweep then tested both incumbents at 24, 48, 96, and
+\mixedblocktag A fixed-block-count geometry sweep then tested both incumbents at 24, 48, 96, and
 128 blocks.  Jointly scoring those four tiers, the new policy improves the 16-token
 score from \(64.702\) to \(66.710\), but lowers the 8-token score from \(74.068\) to
 \(63.154\).  At 8 tokens it reduces churn but raises avoidable-rejection regret by
@@ -1087,7 +1100,7 @@ large enough that eviction pressure subsides.  Promotion is consequently scoped 
 selection.  Full results are retained in
 \filepath{docs/results/incumbent_geometry_sweep.md}.
 
-A second sweep held cache capacity fixed at 384 and 768 tokens while increasing
+\mixedblocktag A second sweep held cache capacity fixed at 384 and 768 tokens while increasing
 physical block size through 16, 24, 32, 48, and 64 tokens.  This falsified the
 simple hypothesis that the new admission policy benefits monotonically from coarser
 blocks.  The new incumbent's charged scores were \(65.649\), \(3.006\),
@@ -1100,7 +1113,7 @@ of the tested coarse range; further crossover work should concentrate between 8 
 24 tokens.  The complete table is retained in
 \filepath{docs/results/block_granularity_sweep.md}.
 
-A follow-up increased block capacity to 24, 48, 96, and 128 entries for every coarse
+\mixedblocktag A follow-up increased block capacity to 24, 48, 96, and 128 entries for every coarse
 block size.  Capacity restored the 24-token aggregate hit rate to \(0.667\) and
 request p10 to \(0.262\) at 128 blocks, but its joint score remained \(21.653\)
 versus \(66.710\) at 16 tokens.  The fairness cost rose from \(7.749\) to \(21.996\),
@@ -1109,7 +1122,7 @@ families retained exactly zero token hit irrespective of the larger capacity.  T
 curves largely saturated by 96 blocks.  More entries therefore relieve pressure but
 cannot recover reuse boundaries lost inside coarse blocks.
 
-TinyLFU-LRU was then evaluated on the same four-capacity grid.  The evolved policy
+\mixedblocktag TinyLFU-LRU was then evaluated on the same four-capacity grid.  The evolved policy
 has higher token hit in every one of the 20 geometry cells.  At 16 tokens its
 four-capacity charged score is \(66.710\) versus \(66.559\) for TinyLFU-LRU, and
 its score before complexity is \(74.312\).  At 24 tokens it leads \(21.653\) to
@@ -1120,7 +1133,7 @@ pays \(7.603\) points.  Before that charge, the evolved policy still leads by
 reversal is a complexity result rather than better cache behavior; both policies
 remain operationally poor there.
 
-The benchmark's vLLM APC approximation is weaker throughout the same grid.  The
+\mixedblocktag The benchmark's vLLM APC approximation is weaker throughout the same grid.  The
 evolved incumbent leads its charged score by \(16.864\), \(12.052\), \(6.168\),
 \(25.054\), and \(24.300\) points at 16, 24, 32, 48, and 64 tokens,
 respectively, and has higher token hit in all 20 geometry cells.  APC's apparently
@@ -1129,7 +1142,7 @@ underfill rises from roughly \(0.17\)--\(0.23\) at 16 tokens to
 \(0.81\)--\(0.84\) at 64 tokens.  Coarse full-block admission therefore loses
 reusable prefix boundaries even more severely than the evolved selective policy.
 
-The final geometry sweep covered every registered baseline.  Plain LFU narrowly
+\mixedblocktag The final geometry sweep covered every registered baseline.  Plain LFU narrowly
 leads the 16-token charged ranking, \(66.807\) to \(66.710\), but the evolved
 policy scores \(74.312\) before its \(7.603\)-point complexity charge.  Their
 validation token hit rates are effectively tied, \(0.6107\) and \(0.6109\), while
@@ -1203,6 +1216,9 @@ policy was not promoted; useful fragments may still be retained and composed int
 later incumbent.
 
 \subsection{Representative generated policy families}
+
+\blocktag{8} Every score in this table comes from the 8-token discovery or
+pre-discovery verifier lineage.
 
 \begin{center}
 \footnotesize
@@ -1278,26 +1294,26 @@ adjudication is retained in \filepath{docs/results/three_run_adjudication.md}.
 \subsection{Controlled attempts that failed adjudication}
 
 \begin{itemize}
-  \item \textbf{Broad explicit recurrence state was harmful.}  Removing recurrence
+  \item \blocktag{8} \textbf{Broad explicit recurrence state was harmful.}  Removing recurrence
   terms from the structured seed improved raw selection from \(62.178\) to \(63.762\),
   reduced churn cost from \(9.256\) to \(7.198\), and improved aggregate probe from
   \(35.654\) to \(41.373\).  Recurrence was useful only after it was narrowed to a
   gate that relaxes the compact policy's categorical deep-block penalty.
-  \item \textbf{Priority-only decay overfit validation.}  It improved charged
+  \item \blocktag{8} \textbf{Priority-only decay overfit validation.}  It improved charged
   validation selection from \(57.788\) to \(58.247\), but probe fell from \(40.303\) to
   \(31.787\) and hidden score fell from \(-18.616\) to \(-19.128\).  Both-decay state
   was retained because it generalized better and had better cache economics.
-  \item \textbf{Primitive adoption did not solve policy bloat.}  After the prompt and
+  \item \blocktag{8} \textbf{Primitive adoption did not solve policy bloat.}  After the prompt and
   seed made \code{MultiTimescaleDecay.observe_vector} discoverable, all 24 archived
   elites across three structured searches used it.  Generated policies still expanded
   to \(1198\)--\(1429\) effective nodes and none cleared charged validation plus
   probe/hidden adjudication.
-  \item \textbf{Direct target-family gains were not sufficient.}  Both the
+  \item \blocktag{8} \textbf{Direct target-family gains were not sufficient.}  Both the
   post-expansion mutation and the strongest structured mutation improved
   agent-branching hit.  Their aggregate probe behavior deteriorated because cyclic
   performance, churn, waste, or complexity moved in the wrong direction.  Individual
   family hit rates therefore remain diagnostics rather than promotion criteria.
-  \item \textbf{The compact eviction-weight graft was a complexity mirage.}  The
+  \item \blocktag{16} \textbf{The compact eviction-weight graft was a complexity mirage.}  The
   apparent charged winner from run \identifier{20260608T040632Z} increased eviction
   age, recurrence-protection, and priority-protection coefficients.  Grafting only
   those weights into the unchanged incumbent improved aggregate probe from \(55.336\)
@@ -1340,34 +1356,34 @@ shapes:
 Some unsuccessful runs diagnose the search process rather than a policy idea:
 
 \begin{itemize}
-  \item A June 7 discovery-verifier 30-evaluation snapshot produced elites with
+  \item \blocktag{8} A June 7 discovery-verifier 30-evaluation snapshot produced elites with
   \(0.674\)--\(0.683\) validation token hit versus the incumbent's \(0.665\), but only
   \(48.1\)--\(53.9\) combined score versus \(74.321\).  Their
   \(0.655\)--\(0.729\) token-weighted admission waste, \(746.7\)--\(1256.5\) churn per
   thousand requests, and \(1544\)--\(1972\) effective complexity corroborate the
   cache-economics principle but do not establish a new ranking result.
-  \item Two 98-evaluation searches retained the seed from evaluation 1 and then stayed
+  \item \blocktag{8} Two 98-evaluation searches retained the seed from evaluation 1 and then stayed
   flat for 97 evaluations.  A 298-evaluation one-cluster run last improved at
   evaluation 189 and stayed flat for its final 109 evaluations.  The convergence
   evidence did not justify a same-configuration 3000-evaluation continuation.
-  \item The preceding 298-evaluation diversified run occupied one archive cell, reported
+  \item \blocktag{8} The preceding 298-evaluation diversified run occupied one archive cell, reported
   254 generation errors, and initialized four identical centroids.  Punctuated
   equilibrium therefore never activated.  This is evidence of collapsed initialization
   diversity, not evidence that the policy family was exhausted; the workflow now
   falls back when learned centroids are degenerate.
-  \item The retained June 8 298-evaluation run repaired archive coverage to ten cells and
+  \item \blocktag{8} The retained June 8 298-evaluation run repaired archive coverage to ten cells and
   discovered the \(77.230\) priority-aware pressure incumbent at evaluation 81.  It
   still recorded 237 generation or static-check errors, and the final 217 evaluations
   did not improve the winner.  Search validity and diversity improved, but generator
   compliance and late-run marginal value remain weak.
-  \item The completed 500-budget function-only eviction run filled all sixteen archive
+  \item \blocktag{16} The completed 500-budget function-only eviction run filled all sixteen archive
   cells and improved raw specialist score from \(70.989\) to \(72.091\), but its best
   ranking function composed to a \(1{,}011\)-node policy.  Narrowing the candidate
   surface exposed measurable eviction progress without making the result deployable.
   A one-coefficient descendant reweight retained \(0.168\) raw selection points at the
   incumbent's 636-node complexity, but its \(0.006\) hidden-score loss still failed the
   fail-closed promotion rule.
-  \item Adding shared prefix/decode capacity initially revealed a verifier bug: total
+  \item \blocktag{16} Adding shared prefix/decode capacity initially revealed a verifier bug: total
   occupancy allowed decode KV to mask prefix-policy underfill.  Restricting underfill
   to prefix occupancy restored the intended score semantics.  The corrected full panel
   then showed that the incumbent narrowly leads deployable eviction policies under

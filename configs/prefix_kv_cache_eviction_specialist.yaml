@@ -138,4 +138,6 @@ search:
   notes: >
     Search score excludes the complexity charge. Require a real raw behavioral
     improvement, then simplify only as needed for the composed policy to pass
-    final promotion.
+    final promotion. Specialist source may import only math and documented policy
+    primitives; dynamic execution, introspection, decorators, and nonliteral
+    module state are rejected before evaluation.

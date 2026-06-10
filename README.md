@@ -32,9 +32,11 @@ cache-geometry sweeps, trace replay, and controlled ablations.
 ## Answers So Far
 
 - **Program evolution can find competitive deployable policies.** On the
-  historical discovery verifier, the previous promoted policy scored `77.230`, ahead of
+  historical discovery verifier, the previous promoted policy now scores `77.113`
+  under hardened complexity accounting, ahead of
   [TinyLFU-LRU](https://arxiv.org/pdf/1512.00727) at `70.362`, the [vLLM APC-style](https://docs.vllm.ai/en/latest/features/automatic_prefix_caching/) approximation at `60.178`, and LRU
-  at `51.186`.
+  at `51.186`. It was originally reported as `77.230` before module constants
+  were included in the complexity charge.
 - **Admission pressure and online structural context have been more useful than
   broad recurrence machinery.** Decayed pressure sharply reduced churn; broad
   explicit recurrence terms hurt, while a narrow recurrence-backed exception
@@ -56,7 +58,8 @@ cache-geometry sweeps, trace replay, and controlled ablations.
 The current production-oriented 16-token policy scores `65.649`, ahead of
 TinyLFU-LRU at `63.548`, while passing both held-out per-family tripwires and
 retaining substantially lower churn. The historical 8-token discovery policy
-scores `77.230`, but the production policy does not transfer unchanged to that
+scores `77.113` under the hardened counter, but the production policy does not
+transfer unchanged to that
 finer geometry.
 
 The main result is methodological: selective pressure-aware admission,
@@ -153,7 +156,7 @@ runs record the resolved model identifiers, search seed, package versions, Git
 revision and dirty state, config snapshot, and workload manifest. See the
 [reproducibility and model-provider guide](docs/reproducibility.md).
 
-The `77.230` headline result uses synthetic traffic only. No private or external
+The hardened `77.113` headline result uses synthetic traffic only. No private or external
 production trace contributes to that score. Its reproducibility inputs are all
 committed:
 
@@ -223,6 +226,13 @@ Only the three documented lifecycle callbacks fire. Admission occurs when
 with the highest eviction score. Candidate code cannot mutate simulator-owned
 cache state or access future reuse.
 
+With static source rejection enabled, candidate modules may import only `math`
+and documented names from the policy primitives module. Executable policy code
+must use ordinary top-level classes or functions; dynamic execution,
+introspection, decorators, dunder access, and executable module-level wrappers
+are rejected. Uppercase literal constants, `__all__`, and
+`candidate_factory = build_candidate` remain valid module assignments.
+
 ## Quick Start
 
 Python 3.11 or newer is required.
@@ -241,11 +251,11 @@ uv run prefix-cache-lab
 # Fast smoke report. Do not use --quick for ranking decisions.
 uv run prefix-cache-evolve --baseline-report --quick
 
-# Full validation comparison for the pressure-aware incumbent.
+# Full validation comparison for the production incumbent.
 uv run prefix-cache-evolve \
   --baseline-report \
   --candidate-program \
-  src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py
+  src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py
 ```
 
 For evaluator-only use, `uv sync --frozen --no-default-groups` avoids the
@@ -253,7 +263,7 @@ Git-hosted Levi dependency. For evolution without development tools, use `uv
 sync --frozen --no-default-groups --extra evolution`. The equivalent shortcuts
 are `make setup`, `make setup-evolution`, and `make setup-dev`.
 
-Evolution defaults to the pressure-aware incumbent as its seed; use
+Evolution defaults to the production incumbent as its seed; use
 `--seed-program` to override it. Inspect all effective model, worker, evaluator,
 and seed settings without contacting a provider:
 
@@ -434,26 +444,26 @@ default comparisons because it duplicates `lru` under this model.
 .venv/bin/prefix-cache-evolve \
   --block-size-report \
   --candidate-program \
-  src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py \
+  src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py \
   --block-size-output docs/results/block_size_robustness.md
 
 # Quarantined recurrence/structure probe.
 .venv/bin/prefix-cache-evolve \
   --probe-report \
   --candidate-program \
-  src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py
+  src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py
 
 # Hidden panel for final adjudication only.
 .venv/bin/prefix-cache-evolve \
   --hidden-report \
   --candidate-program \
-  src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py
+  src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py
 
 # Score-weight sensitivity.
 .venv/bin/prefix-cache-evolve \
   --sensitivity-report \
   --candidate-program \
-  src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py
+  src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py
 
 # Structured policy ablation and compact coefficient tuning.
 .venv/bin/prefix-cache-ablate-structured
@@ -469,7 +479,7 @@ hidden prompt content. See
 .venv/bin/prefix-cache-evolve \
   --replay-trace trace.jsonl \
   --candidate-program \
-  src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py
+  src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py
 ```
 
 ## Repository Layout

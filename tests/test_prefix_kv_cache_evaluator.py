@@ -1249,6 +1249,178 @@ def test_static_policy_checks_reject_scrubbed_request_fields() -> None:
     assert "sanitized request field prompt_tokens is not a policy signal" in violations
 
 
+@pytest.mark.parametrize("builtin_name", ["exec", "eval", "compile", "vars"])
+def test_static_policy_checks_reject_dynamic_builtins(builtin_name: str) -> None:
+    config = EvaluatorConfig(reject_unsupported_source_patterns=True)
+    source = f"""
+class Policy:
+    def score_admission(self, block, now):
+        return {builtin_name}("0")
+"""
+
+    violations = levi_evaluator._candidate_source_violations(
+        source,
+        complexity=scoring_fn_complexity(source),
+        config=config,
+    )
+
+    assert f"{builtin_name}() is not allowed in candidate code" in violations
+
+
+def test_static_policy_checks_reject_aliased_dynamic_builtin() -> None:
+    config = EvaluatorConfig(reject_unsupported_source_patterns=True)
+    source = """
+class Policy:
+    def score_admission(self, block, now):
+        runner = exec
+        runner("pass")
+        return 0.0
+"""
+
+    violations = levi_evaluator._candidate_source_violations(
+        source,
+        complexity=scoring_fn_complexity(source),
+        config=config,
+    )
+
+    assert "exec() is not allowed in candidate code" in violations
+
+
+def test_evaluate_source_rejects_exec_laundering_end_to_end(monkeypatch) -> None:
+    monkeypatch.setattr(
+        levi_evaluator,
+        "DEFAULT_CONFIG",
+        EvaluatorConfig(
+            max_candidate_complexity=650,
+            reject_unsupported_source_patterns=True,
+        ),
+    )
+    source = 'exec("class Policy:\\n    pass")'
+
+    result = levi_evaluator.evaluate_source(source)
+
+    assert result.metrics["success"] is False
+    assert "exec() is not allowed in candidate code" in result.metrics["error"]
+    assert "unsupported top-level statement Expr" in result.metrics["error"]
+
+
+def test_static_policy_checks_reject_dunder_attribute_access() -> None:
+    config = EvaluatorConfig(reject_unsupported_source_patterns=True)
+    source = """
+class Policy:
+    def score_admission(self, block, now):
+        return block.__class__
+"""
+
+    violations = levi_evaluator._candidate_source_violations(
+        source,
+        complexity=scoring_fn_complexity(source),
+        config=config,
+    )
+
+    assert "dunder attribute __class__ is not allowed" in violations
+
+
+def test_static_policy_checks_reject_decorators() -> None:
+    config = EvaluatorConfig(reject_unsupported_source_patterns=True)
+    source = """
+def decorate(policy):
+    return policy
+
+@decorate
+class Policy:
+    pass
+"""
+
+    violations = levi_evaluator._candidate_source_violations(
+        source,
+        complexity=scoring_fn_complexity(source),
+        config=config,
+    )
+
+    assert "decorators are not allowed in candidate code" in violations
+
+
+def test_static_policy_checks_reject_unsupported_top_level_statements() -> None:
+    config = EvaluatorConfig(reject_unsupported_source_patterns=True)
+    source = """
+if True:
+    class Policy:
+        pass
+"""
+
+    violations = levi_evaluator._candidate_source_violations(
+        source,
+        complexity=scoring_fn_complexity(source),
+        config=config,
+    )
+
+    assert "unsupported top-level statement If" in violations
+
+
+def test_static_policy_checks_reject_nonliteral_module_lambda() -> None:
+    config = EvaluatorConfig(reject_unsupported_source_patterns=True)
+    source = "score = lambda block, now: block.depth"
+
+    violations = levi_evaluator._candidate_source_violations(
+        source,
+        complexity=scoring_fn_complexity(source),
+        config=config,
+    )
+
+    assert "top-level assignments must define uppercase literal constants" in violations
+
+
+def test_static_policy_checks_restrict_candidate_imports() -> None:
+    config = EvaluatorConfig(reject_unsupported_source_patterns=True)
+    source = """
+from prefix_cache_evolve.evaluators.baselines import baseline_tinylfu_lru
+
+def build_candidate(capacity_blocks, block_size_tokens, seed=None):
+    return baseline_tinylfu_lru(capacity_blocks, block_size_tokens, seed)
+"""
+
+    violations = levi_evaluator._candidate_source_violations(
+        source,
+        complexity=scoring_fn_complexity(source),
+        config=config,
+    )
+
+    assert "import from unsupported module prefix_cache_evolve.evaluators.baselines" in violations
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py",
+        "src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py",
+    ],
+)
+def test_committed_incumbents_pass_static_source_contract(path: str) -> None:
+    source = Path(path).read_text(encoding="utf-8")
+    complexity = scoring_fn_complexity(source, form_aware=True)
+    config = EvaluatorConfig(
+        max_candidate_complexity=650,
+        reject_unsupported_source_patterns=True,
+    )
+
+    assert levi_evaluator._candidate_source_violations(source, complexity, config) == ()
+
+
+def test_eviction_specialist_seed_passes_static_source_contract() -> None:
+    source = Path(
+        "src/prefix_cache_evolve/problems/prefix_kv_cache/seeds/eviction_specialist.py"
+    ).read_text(encoding="utf-8")
+    complexity = scoring_fn_complexity(source, form_aware=True)
+    config = EvaluatorConfig(
+        max_candidate_complexity=1000,
+        reject_unsupported_source_patterns=True,
+        candidate_policy_surface="eviction_only",
+    )
+
+    assert levi_evaluator._candidate_source_violations(source, complexity, config) == ()
+
+
 def test_evaluate_factory_uses_configured_timeout(monkeypatch) -> None:
     captured = {}
     config = EvaluatorConfig(
@@ -2004,6 +2176,32 @@ def build_candidate(capacity_blocks, block_size_tokens, seed=None):
 """
 
     assert scoring_fn_complexity(nested_policy) > 0
+
+
+def test_complexity_counts_policy_hidden_under_top_level_condition() -> None:
+    direct = """
+class Policy:
+    def score_admission(self, block, now):
+        return block.depth
+"""
+    wrapped = """
+if True:
+    class Policy:
+        def score_admission(self, block, now):
+            return block.depth
+"""
+
+    assert scoring_fn_complexity(wrapped) >= scoring_fn_complexity(direct)
+
+
+def test_complexity_counts_exec_and_module_lambda_bodies() -> None:
+    exec_source = 'exec("class Policy:\\n    pass")'
+    lambda_source = "SCORE = lambda block, now: block.depth + now"
+    disguised_all_source = "__all__ = lambda block, now: block.depth + now"
+
+    assert scoring_fn_complexity(exec_source) > 0
+    assert scoring_fn_complexity(lambda_source) > 0
+    assert scoring_fn_complexity(disguised_all_source) > 0
 
 
 def test_form_aware_complexity_subsidizes_only_canonical_primitives() -> None:
@@ -2809,7 +3007,7 @@ def test_demo_run_evolution_uses_function_only_seed_for_eviction_specialist(monk
     assert "def score_admission" not in captured["source"]
 
 
-def test_demo_run_evolution_defaults_to_pressure_aware_incumbent(monkeypatch) -> None:
+def test_demo_run_evolution_defaults_to_production_incumbent(monkeypatch) -> None:
     captured = {}
 
     class FakeWorkflow:
@@ -2825,7 +3023,7 @@ def test_demo_run_evolution_defaults_to_pressure_aware_incumbent(monkeypatch) ->
     prefix_runner.demo_run_evolution(iterations=1, quick=True, artifact_output=None)
 
     expected = Path(
-        "src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py"
+        "src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py"
     ).read_text(encoding="utf-8")
     assert captured["source"] == expected
 

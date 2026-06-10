@@ -252,6 +252,12 @@ class EvaluatorConfig(BaseModel):
     form_aware_complexity: bool = False
     max_candidate_complexity: PositiveInt | None = None
     promotion_max_candidate_complexity: PositiveInt | None = None
+    surrogate_probe_tripwire_thresholds: dict[str, NonNegativeFloat] = Field(
+        default_factory=lambda: {
+            "agentic_branching": 0.12,
+            "cyclic_working_set": 0.25,
+        }
+    )
     fixed_admission_policy: str | None = None
     candidate_policy_surface: Literal["full", "eviction_only"] = "full"
     search_score_mode: Literal["combined", "raw_before_complexity"] = "combined"
@@ -276,6 +282,25 @@ class EvaluatorConfig(BaseModel):
             )
         values.update(scoring)
         return values
+
+    @model_validator(mode="after")
+    def _validate_tripwire_channels(self) -> EvaluatorConfig:
+        """Require an explicit threshold for every supported tripwire channel."""
+        expected = {"agentic_branching", "cyclic_working_set"}
+        configured = set(self.surrogate_probe_tripwire_thresholds)
+        if configured != expected:
+            missing = sorted(expected - configured)
+            unknown = sorted(configured - expected)
+            details = []
+            if missing:
+                details.append("missing: " + ", ".join(missing))
+            if unknown:
+                details.append("unknown: " + ", ".join(unknown))
+            raise ValueError(
+                "surrogate_probe_tripwire_thresholds must configure exactly "
+                f"{sorted(expected)} ({'; '.join(details)})"
+            )
+        return self
 
     def with_updates(self, **updates: object) -> EvaluatorConfig:
         """Return a validated copy with the supplied settings overlaid."""

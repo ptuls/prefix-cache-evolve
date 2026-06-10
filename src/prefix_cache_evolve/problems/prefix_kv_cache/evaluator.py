@@ -50,7 +50,13 @@ _WORKLOAD_FEEDBACK_KEYS = (
     "request_token_hit_rate_p10",
     "wasted_admission_token_rate",
     "admission_token_utility",
+    "avoidable_admission_rate",
+    "avoidable_admission_regret_token_rate",
+    "avoidable_rejection_rate",
+    "avoidable_rejection_regret_token_rate",
     "avoidable_eviction_rate",
+    "value_weighted_avoidable_eviction_rate",
+    "value_weighted_avoidable_eviction_regret_token_rate",
     "short_reuse_after_eviction_missed_token_rate",
     "policy_underfill_rate",
     "cache_churn_per_1k",
@@ -671,6 +677,29 @@ def _workload_failure_feedback(
         request_p10 = _metric(values, "request_token_hit_rate_p10")
         waste = _metric(values, "wasted_admission_token_rate")
         avoidable = _metric(values, "avoidable_eviction_rate")
+        avoidable_admission = _metric(values, "avoidable_admission_rate")
+        avoidable_admission_regret = _metric(
+            values,
+            "avoidable_admission_regret_token_rate",
+        )
+        avoidable_rejection = _metric(values, "avoidable_rejection_rate")
+        avoidable_rejection_regret = _metric(
+            values,
+            "avoidable_rejection_regret_token_rate",
+        )
+        value_weighted_eviction = _metric(
+            values,
+            "value_weighted_avoidable_eviction_rate",
+        )
+        value_weighted_eviction_regret = _metric(
+            values,
+            "value_weighted_avoidable_eviction_regret_token_rate",
+        )
+        admission_regret = avoidable_admission_regret + avoidable_rejection_regret
+        regret_signal = _regret_signal(
+            admission_regret,
+            value_weighted_eviction_regret,
+        )
         churn = _metric(values, "cache_churn_per_1k")
         quality = max(
             0.0,
@@ -693,13 +722,27 @@ def _workload_failure_feedback(
                 f"block_hit={_metric(values, 'block_hit_rate'):.3f}, "
                 f"worst_quarter={worst_quarter:.3f}, "
                 f"request_p10={request_p10:.3f}, "
+                f"recompute_cost={_metric(values, 'recompute_cost'):.1f}. "
+                "Admission audit: "
+                f"avoidable_accept_rate={avoidable_admission:.3f}, "
+                f"avoidable_accept_regret_token_rate={avoidable_admission_regret:.4f}, "
+                f"avoidable_reject_rate={avoidable_rejection:.3f}, "
+                f"avoidable_reject_regret_token_rate={avoidable_rejection_regret:.4f}, "
                 f"waste={waste:.3f}, "
-                f"utility={_metric(values, 'admission_token_utility'):.3f}, "
+                f"utility={_metric(values, 'admission_token_utility'):.3f}. "
+                "Eviction audit: "
                 f"avoidable_eviction={avoidable:.3f}, "
+                f"value_weighted_avoidable_eviction_rate={value_weighted_eviction:.3f}, "
+                f"value_weighted_eviction_regret_token_rate="
+                f"{value_weighted_eviction_regret:.4f}, "
                 f"short_reuse_after_eviction="
-                f"{_metric(values, 'short_reuse_after_eviction_missed_token_rate'):.3f}, "
+                f"{_metric(values, 'short_reuse_after_eviction_missed_token_rate'):.3f}. "
+                "Cache economics: "
                 f"churn_per_1k={churn:.1f}, "
-                f"underfill={_metric(values, 'policy_underfill_rate'):.3f}. "
+                f"underfill={_metric(values, 'policy_underfill_rate'):.3f}, "
+                f"admission_regret_token_rate={admission_regret:.4f}, "
+                f"eviction_regret_token_rate={value_weighted_eviction_regret:.4f}, "
+                f"dominant_regret={regret_signal}. "
                 "Make one focused change that improves this workload without "
                 "worsening cache economics or complexity."
             ),
@@ -722,6 +765,18 @@ def _workload_failure_feedback(
         [quality for quality, _ in selected],
         [feedback for _, feedback in selected],
     )
+
+
+def _regret_signal(admission_regret: float, eviction_regret: float) -> str:
+    """Describe which measured decision surface contributes more regret."""
+    tolerance = 1e-12
+    if admission_regret <= tolerance and eviction_regret <= tolerance:
+        return "none_measured"
+    if admission_regret > eviction_regret + tolerance:
+        return "admission"
+    if eviction_regret > admission_regret + tolerance:
+        return "eviction"
+    return "balanced"
 
 
 def _metric(values: dict, key: str) -> float:

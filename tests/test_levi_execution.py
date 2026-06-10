@@ -15,10 +15,11 @@ from prefix_cache_evolve.workflow.configuration import ConfigLoader
 from prefix_cache_evolve.workflow.execution import (
     LeviRunner,
     LeviScoreFunction,
-    _configured_reasoning_max_tokens,
+    _configured_paradigm_max_tokens,
+    _configured_paradigm_model_names,
     _enable_levi_code_feedback_support,
     _enable_levi_degenerate_centroid_fallback,
-    _enable_levi_reasoning_completion_support,
+    _enable_levi_paradigm_completion_support,
     _enable_levi_reproducibility_support,
     _module_name_from_package_path,
     _persist_levi_paradigm_candidate_capture,
@@ -208,6 +209,8 @@ def test_levi_code_adapter_accepts_failure_feedback() -> None:
     )
 
     assert "## Evaluator Feedback" in prompt
+    assert "### Failure Cases With Measurements" in prompt
+    assert "Each item is an aggregate from one evaluated workload" in prompt
     assert "weak validation workload validation/agentic_replan" in prompt
     assert "## Preflight Repair Checks" in prompt
     assert "dedicated simplification mutation" in prompt
@@ -264,13 +267,51 @@ def test_compact_paradigm_shift_override_reaches_levi_prompt() -> None:
     assert "COMPLETELY DIFFERENT strategy" not in prompt
 
 
-def test_configured_reasoning_max_tokens_prefers_paradigm_budget() -> None:
+def test_configured_paradigm_max_tokens_prefers_paradigm_budget() -> None:
     config = SimpleNamespace(
         punctuated_equilibrium={"max_tokens": 12_000},
         pipeline={"max_tokens": 6_000},
     )
 
-    assert _configured_reasoning_max_tokens(config) == 12_000
+    assert _configured_paradigm_max_tokens(config) == 12_000
+
+
+def test_production_config_resolves_reasoning_paradigm_budget_and_model() -> None:
+    config = ConfigLoader().load(Path("configs/prefix_kv_cache.yaml"))
+
+    assert _configured_paradigm_max_tokens(config) == 12_000
+    assert _configured_paradigm_model_names(config) == frozenset({"openai/gpt-5.5"})
+
+
+def test_configured_paradigm_models_prefer_explicit_heavy_models() -> None:
+    config = SimpleNamespace(
+        model=None,
+        paradigm_model="openai/default-paradigm",
+        punctuated_equilibrium={
+            "heavy_models": [
+                "openai/reasoning-paradigm",
+                "anthropic/alternate-paradigm",
+            ]
+        },
+    )
+
+    assert _configured_paradigm_model_names(config) == frozenset(
+        {
+            "openai/reasoning-paradigm",
+            "anthropic/alternate-paradigm",
+        }
+    )
+
+
+def test_configured_paradigm_models_mirror_levi_empty_heavy_model_fallback() -> None:
+    config = SimpleNamespace(
+        model=None,
+        mutation_model="openai/mutation-model",
+        paradigm_model="openai/default-paradigm",
+        punctuated_equilibrium={"heavy_models": []},
+    )
+
+    assert _configured_paradigm_model_names(config) == frozenset({"openai/default-paradigm"})
 
 
 def test_levi_reasoning_calls_use_configured_token_budget(monkeypatch) -> None:
@@ -301,7 +342,10 @@ def test_levi_reasoning_calls_use_configured_token_budget(monkeypatch) -> None:
         return "response"
 
     monkeypatch.setattr(PipelineState, "acompletion", fake_acompletion)
-    _enable_levi_reasoning_completion_support(12_000)
+    _enable_levi_paradigm_completion_support(
+        12_000,
+        paradigm_model_names=frozenset({"openai/gpt-5.5"}),
+    )
     state = object.__new__(PipelineState)
 
     result = asyncio.run(
@@ -318,7 +362,9 @@ def test_levi_reasoning_calls_use_configured_token_budget(monkeypatch) -> None:
     assert calls[0]["reasoning_effort"] == "medium"
 
 
-def test_levi_non_reasoning_calls_keep_requested_token_budget(monkeypatch) -> None:
+def test_levi_paradigm_model_without_reasoning_effort_uses_configured_budget(
+    monkeypatch,
+) -> None:
     from levi.pipeline.state import PipelineState
 
     calls = []
@@ -328,12 +374,92 @@ def test_levi_non_reasoning_calls_keep_requested_token_budget(monkeypatch) -> No
         return "response"
 
     monkeypatch.setattr(PipelineState, "acompletion", fake_acompletion)
-    _enable_levi_reasoning_completion_support(12_000)
+    _enable_levi_paradigm_completion_support(
+        12_000,
+        paradigm_model_names=frozenset({"openai/gpt-5.5"}),
+    )
     state = object.__new__(PipelineState)
 
-    asyncio.run(state.acompletion("openai/gpt-5.4-mini", prompt="mutate", max_tokens=4_096))
+    asyncio.run(state.acompletion("openai/gpt-5.5", prompt="shift", max_tokens=4_096))
+
+    assert calls == [12_000]
+
+
+def test_levi_mutation_calls_keep_requested_token_budget(monkeypatch) -> None:
+    from levi.pipeline.state import PipelineState
+
+    calls = []
+
+    async def fake_acompletion(_self, _client_spec, *, max_tokens=None, **_kwargs):
+        calls.append(max_tokens)
+        return "response"
+
+    monkeypatch.setattr(PipelineState, "acompletion", fake_acompletion)
+    _enable_levi_paradigm_completion_support(
+        12_000,
+        paradigm_model_names=frozenset({"openai/gpt-5.5"}),
+    )
+    state = object.__new__(PipelineState)
+
+    asyncio.run(
+        state.acompletion(
+            "openai/gpt-5.4-mini",
+            prompt="mutate",
+            max_tokens=4_096,
+            reasoning_effort="medium",
+        )
+    )
 
     assert calls == [4_096]
+
+
+def test_levi_native_or_nonlegacy_paradigm_budget_is_preserved(monkeypatch) -> None:
+    from levi.pipeline.state import PipelineState
+
+    calls = []
+
+    async def fake_acompletion(_self, _client_spec, *, max_tokens=None, **_kwargs):
+        calls.append(max_tokens)
+        return "response"
+
+    monkeypatch.setattr(PipelineState, "acompletion", fake_acompletion)
+    _enable_levi_paradigm_completion_support(
+        12_000,
+        paradigm_model_names=frozenset({"openai/gpt-5.5"}),
+    )
+    state = object.__new__(PipelineState)
+
+    asyncio.run(state.acompletion("openai/gpt-5.5", prompt="shift", max_tokens=16_000))
+
+    assert calls == [16_000]
+
+
+def test_levi_disabled_reasoning_still_uses_configured_output_budget(monkeypatch) -> None:
+    from levi.pipeline.state import PipelineState
+
+    calls = []
+
+    async def fake_acompletion(_self, _client_spec, *, max_tokens=None, **_kwargs):
+        calls.append(max_tokens)
+        return "response"
+
+    monkeypatch.setattr(PipelineState, "acompletion", fake_acompletion)
+    _enable_levi_paradigm_completion_support(
+        12_000,
+        paradigm_model_names=frozenset({"openai/gpt-5.5"}),
+    )
+    state = object.__new__(PipelineState)
+
+    asyncio.run(
+        state.acompletion(
+            "openai/gpt-5.5",
+            prompt="shift",
+            max_tokens=4_096,
+            reasoning_effort="disabled",
+        )
+    )
+
+    assert calls == [12_000]
 
 
 def test_levi_reproducibility_seeds_selection_and_model_requests(monkeypatch) -> None:

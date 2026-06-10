@@ -46,7 +46,7 @@ prompt:
   objectives:
     - "Reduce avoidable evictions and misses shortly after eviction."
     - "Improve raw behavior while admission and lifecycle callbacks remain frozen."
-    - "Preserve token hit, churn, aggregate probe, both probe-family hit rates, hidden score, and the agentic tripwire."
+    - "Preserve token hit, churn, aggregate probe, both probe-family hit rates, hidden score, and every surrogate-to-probe tripwire channel."
     - "Keep the ranking function compact enough that the final composed policy can clear 650 effective AST nodes."
 
 evaluator:
@@ -125,6 +125,9 @@ problem:
     form_aware_complexity: true
     max_candidate_complexity: 1000
     promotion_max_candidate_complexity: 650
+    surrogate_probe_tripwire_thresholds:
+      agentic_branching: 0.12
+      cyclic_working_set: 0.25
     fixed_admission_policy: pressure_aware_incumbent
     candidate_policy_surface: eviction_only
     search_score_mode: raw_before_complexity

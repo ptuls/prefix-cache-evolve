@@ -415,9 +415,13 @@ mutation guidance and parent diversity, not the combined selection scalar;
 \identifier{agent_trace_branching} remains reporting-only.  The new low-priority
 pressure term is evidence that this guidance can produce a compact operational
 improvement rather than only a workload-specific hit-rate mutation. Every completed
-run also persists a fail-closed tripwire that flags an absolute token-hit-rate gap
-greater than \(0.12\) between the surrogate and held-out agentic probe.  This detects
-surrogate drift without feeding probe performance back into selection.
+run also persists fail-closed per-family tripwires.  The agentic channel flags an
+absolute token-hit-rate gap greater than \(0.12\) between
+\identifier{agentic_tool_workflows} and \identifier{agent_trace_branching}; the
+working-set channel flags a gap greater than \(0.25\) between
+\identifier{hotset_cold_scan} and \identifier{cyclic_working_set_pressure}.  This
+detects family-specific surrogate drift without feeding probe performance back into
+selection.
 
 The methodological finding is more important than the \(0.600\)-point charged gain.
 Earlier seed-locked searches optimized the combined scalar from one archive region and
@@ -457,7 +461,7 @@ Every saved specialist winner is composed back into the complete incumbent and
 evaluated as deployable source.  Promotion fails closed unless the composed candidate
 is at most 650 effective nodes, strictly improves raw selection behavior, and does not
 regress charged selection, validation eviction-regret metrics, aggregate probe, either
-probe-family token-hit rate, hidden score, or the agentic surrogate-to-probe tripwire.
+probe-family token-hit rate, hidden score, or any surrogate-to-probe tripwire channel.
 This prevents either admission regressions or deletion-only gains from winning the
 specialist lane.
 

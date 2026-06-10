@@ -100,8 +100,8 @@ prompt:
 
     The promoted production parent scores 65.649 on this 16-token verifier,
     ahead of TinyLFU-LRU at 63.548, with effective complexity 572. Preserve
-    that charged-score lead, the agentic surrogate-to-probe tripwire pass, and
-    the positive hidden-panel margin. A structured-admission plus LFU
+    that charged-score lead, the per-family surrogate-to-probe tripwire suite,
+    and the positive hidden-panel margin. A structured-admission plus LFU
     composition raises mean token hit but scores only 60.556 because its churn
     is too high. Preserve the parent's pressure-aware admission economics,
     bounded canonical decay state, and low turnover. Pure LRU leaves measurable
@@ -235,6 +235,9 @@ problem:
     max_memory_bytes: 67108864
     form_aware_complexity: true
     promotion_max_candidate_complexity: 650
+    surrogate_probe_tripwire_thresholds:
+      agentic_branching: 0.12
+      cyclic_working_set: 0.25
     reject_unsupported_source_patterns: true
     train_families:
       - shared_system_prompt

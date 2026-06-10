@@ -47,9 +47,6 @@ from .specialist import (
 )
 from .trace_replay import calibrate_anonymized_trace, load_anonymized_trace
 from .utilities import (
-    agentic_surrogate_probe_tripwire as _agentic_surrogate_probe_tripwire,
-)
-from .utilities import (
     capacity_blocks_for_token_tiers as _capacity_blocks_for_token_tiers,
 )
 from .utilities import (
@@ -84,6 +81,9 @@ from .utilities import (
     split_metric_non_regression as _split_metric_non_regression,
 )
 from .utilities import (
+    surrogate_probe_tripwire_suite as _surrogate_probe_tripwire_suite,
+)
+from .utilities import (
     workload_metric_non_regression as _workload_metric_non_regression,
 )
 from .utilities import (
@@ -97,6 +97,9 @@ from .utilities import (
 )
 from .utilities import (
     write_specialist_promotion_adjudication_report as _write_specialist_report,
+)
+from .utilities import (
+    write_surrogate_probe_tripwire_report as _write_surrogate_probe_tripwire_report,
 )
 
 if TYPE_CHECKING:
@@ -380,8 +383,15 @@ def save_run_artifacts(
     metrics = getattr(result, "metrics", {}) or {}
     artifacts = getattr(result, "artifacts", {}) or {}
     metadata = getattr(result, "metadata", {}) or {}
+    resolved_report_config = report_config or _artifact_report_config()
     workload_metrics = artifacts.get("workload_metrics") if isinstance(artifacts, dict) else None
-    agentic_tripwire = _agentic_surrogate_probe_tripwire(workload_metrics)
+    tripwire_thresholds = dict(resolved_report_config.surrogate_probe_tripwire_thresholds)
+    tripwire_suite = _surrogate_probe_tripwire_suite(
+        workload_metrics,
+        thresholds=tripwire_thresholds,
+    )
+    agentic_tripwire = dict(tripwire_suite["channels"]["agentic_branching"])
+    agentic_tripwire["schema"] = "prefix-kv-cache-agentic-surrogate-probe-tripwire-v1"
     config_snapshot_name = None
     if config_snapshot is not None and config_snapshot.is_file():
         config_snapshot_name = "config_snapshot.yaml"
@@ -411,6 +421,16 @@ def save_run_artifacts(
                 "threshold",
             )
         },
+        "surrogate_probe_tripwires": {
+            key: tripwire_suite[key]
+            for key in (
+                "status",
+                "flagged",
+                "flagged_channels",
+                "passed_channels",
+                "max_threshold_ratio",
+            )
+        },
     }
     _write_json(run_dir / "metrics.json", metrics)
     _write_json(run_dir / "artifacts.json", artifacts)
@@ -420,7 +440,12 @@ def save_run_artifacts(
         run_dir / "agentic_surrogate_probe_tripwire.md",
         agentic_tripwire,
     )
-    workload_manifest = build_workload_manifest(report_config or _artifact_report_config())
+    _write_json(run_dir / "surrogate_probe_tripwires.json", tripwire_suite)
+    _write_surrogate_probe_tripwire_report(
+        run_dir / "surrogate_probe_tripwires.md",
+        tripwire_suite,
+    )
+    workload_manifest = build_workload_manifest(resolved_report_config)
     _write_json(run_dir / "workload_manifest.json", workload_manifest)
     summary["workload_manifest"] = {
         "path": "workload_manifest.json",
@@ -433,11 +458,11 @@ def save_run_artifacts(
         run_dir,
         metadata=metadata,
         seed_source=seed_source,
-        config=report_config or _artifact_report_config(),
+        config=resolved_report_config,
     )
     promotion_adjudication = _persist_specialist_promotion_adjudication(
         run_dir,
-        config=report_config or _artifact_report_config(),
+        config=resolved_report_config,
     )
     if promotion_adjudication is not None:
         summary["promotion_adjudication"] = {
@@ -672,7 +697,10 @@ def _persist_specialist_promotion_adjudication(
                 incumbent,
                 panel="hidden",
             ),
-            "agentic_surrogate_probe_tripwire": _promotion_tripwire_check(candidate),
+            "surrogate_probe_tripwires": _promotion_tripwire_check(
+                candidate,
+                thresholds=dict(config.surrogate_probe_tripwire_thresholds),
+            ),
         }
         eligible = all(check["passed"] for check in checks.values())
         payload = {

@@ -61,6 +61,9 @@ from prefix_cache_evolve.problems.prefix_kv_cache.specialist import (
     eviction_only_source_violations,
     fixed_admission_factory,
 )
+from prefix_cache_evolve.problems.prefix_kv_cache.utilities import (
+    agentic_surrogate_probe_tripwire,
+)
 
 
 class AdmitAllLRU:
@@ -881,11 +884,50 @@ def test_evaluate_source_minimal_policy(monkeypatch) -> None:
     )
     assert "train_workload_agentic_tool_workflows_token_hit_rate" in result.metrics
     assert "train_workload_agentic_tool_workflows_policy_underfill_rate" in result.metrics
+    assert (
+        "train_workload_agentic_tool_workflows_avoidable_admission_regret_token_rate"
+        in result.metrics
+    )
+    assert (
+        "train_workload_agentic_tool_workflows_"
+        "value_weighted_avoidable_eviction_regret_token_rate" in result.metrics
+    )
     assert "validation_workload_stochastic_serving_mix_token_hit_rate" in result.metrics
+    assert all(
+        "Admission audit:" in feedback
+        and "Eviction audit:" in feedback
+        and "Cache economics:" in feedback
+        and "dominant_regret=" in feedback
+        for feedback in result.metrics["feedback_per_example"]
+    )
     assert all(
         "probe/" not in feedback and "hidden/" not in feedback
         for feedback in result.metrics["feedback_per_example"]
     )
+
+
+def test_workload_feedback_reports_measured_regret_side() -> None:
+    result = _report_result(0.5)
+    metrics = result.workload_metrics["validation/priority_burst_recovery"]
+    metrics.update(
+        {
+            "avoidable_admission_rate": 0.25,
+            "avoidable_admission_regret_token_rate": 0.03,
+            "avoidable_rejection_rate": 0.10,
+            "avoidable_rejection_regret_token_rate": 0.02,
+            "value_weighted_avoidable_eviction_rate": 0.20,
+            "value_weighted_avoidable_eviction_regret_token_rate": 0.01,
+        }
+    )
+
+    _, feedback = levi_evaluator._workload_failure_feedback(result)
+
+    diagnostic = next(item for item in feedback if "validation/priority_burst_recovery" in item)
+    assert "avoidable_accept_regret_token_rate=0.0300" in diagnostic
+    assert "avoidable_reject_regret_token_rate=0.0200" in diagnostic
+    assert "value_weighted_eviction_regret_token_rate=0.0100" in diagnostic
+    assert "admission_regret_token_rate=0.0500" in diagnostic
+    assert "dominant_regret=admission" in diagnostic
 
 
 def test_evaluate_source_rejects_static_policy_violations(monkeypatch) -> None:
@@ -2569,6 +2611,10 @@ def test_candidate_config_matches_default_verifier_panel_and_score_weights() -> 
     assert loaded.workload_token_granularity == 8
     assert loaded.max_candidate_complexity is None
     assert loaded.promotion_max_candidate_complexity == 650
+    assert loaded.surrogate_probe_tripwire_thresholds == {
+        "agentic_branching": 0.12,
+        "cyclic_working_set": 0.25,
+    }
     assert loaded.reject_unsupported_source_patterns is True
     for field in (
         "w_avg_tok",
@@ -2595,6 +2641,24 @@ def test_candidate_config_matches_default_verifier_panel_and_score_weights() -> 
         "invalid_surcharge",
     ):
         assert settings["scoring"][field] == getattr(default, field)
+
+
+def test_evaluator_config_rejects_incomplete_or_unknown_tripwire_channels() -> None:
+    with pytest.raises(ValueError, match=r"missing: cyclic_working_set"):
+        EvaluatorConfig(
+            surrogate_probe_tripwire_thresholds={
+                "agentic_branching": 0.12,
+            }
+        )
+
+    with pytest.raises(ValueError, match=r"unknown: unrelated_probe"):
+        EvaluatorConfig(
+            surrogate_probe_tripwire_thresholds={
+                "agentic_branching": 0.12,
+                "cyclic_working_set": 0.25,
+                "unrelated_probe": 0.10,
+            }
+        )
 
 
 def test_candidate_search_configuration_is_forwarded_to_levi() -> None:
@@ -2637,6 +2701,10 @@ def test_eviction_specialist_config_fixes_admission_and_separates_promotion_cap(
     assert evaluator_config.search_score_mode == "raw_before_complexity"
     assert evaluator_config.max_candidate_complexity == 1000
     assert evaluator_config.promotion_max_candidate_complexity == 650
+    assert evaluator_config.surrogate_probe_tripwire_thresholds == {
+        "agentic_branching": 0.12,
+        "cyclic_working_set": 0.25,
+    }
     assert evaluator_config.effective_capacity_blocks() == (24, 48)
     assert evaluator_config.effective_capacity_tokens() == (384, 768)
     assert {
@@ -3647,7 +3715,7 @@ def test_write_baseline_plots_creates_svg_files(tmp_path, monkeypatch) -> None:
 
 
 def test_agentic_surrogate_probe_tripwire_passes_within_threshold() -> None:
-    tripwire = prefix_runner._agentic_surrogate_probe_tripwire(
+    tripwire = agentic_surrogate_probe_tripwire(
         {
             "train/agentic_tool_workflows": {"token_hit_rate": 0.48},
             "probe/agent_trace_branching": {"token_hit_rate": 0.38},
@@ -3663,7 +3731,7 @@ def test_agentic_surrogate_probe_tripwire_passes_within_threshold() -> None:
 
 
 def test_agentic_surrogate_probe_tripwire_flags_excessive_divergence() -> None:
-    tripwire = prefix_runner._agentic_surrogate_probe_tripwire(
+    tripwire = agentic_surrogate_probe_tripwire(
         {
             "train/agentic_tool_workflows": {"token_hit_rate": 0.60},
             "probe/agent_trace_branching": {"token_hit_rate": 0.30},
@@ -3679,7 +3747,7 @@ def test_agentic_surrogate_probe_tripwire_flags_excessive_divergence() -> None:
 
 
 def test_agentic_surrogate_probe_tripwire_fails_closed_without_both_metrics() -> None:
-    tripwire = prefix_runner._agentic_surrogate_probe_tripwire(
+    tripwire = agentic_surrogate_probe_tripwire(
         {"train/agentic_tool_workflows": {"token_hit_rate": 0.48}},
     )
 
@@ -3687,6 +3755,76 @@ def test_agentic_surrogate_probe_tripwire_fails_closed_without_both_metrics() ->
     assert tripwire["flagged"] is True
     assert tripwire["flag_reason"] == "missing_or_invalid_metric"
     assert tripwire["absolute_gap"] is None
+
+
+def test_surrogate_probe_tripwire_suite_passes_all_configured_channels() -> None:
+    suite = prefix_runner._surrogate_probe_tripwire_suite(
+        {
+            "train/agentic_tool_workflows": {"token_hit_rate": 0.48},
+            "probe/agent_trace_branching": {"token_hit_rate": 0.38},
+            "validation/hotset_cold_scan": {"token_hit_rate": 0.64},
+            "probe/cyclic_working_set_pressure": {"token_hit_rate": 0.86},
+        }
+    )
+
+    assert suite["status"] == "pass"
+    assert suite["flagged"] is False
+    assert suite["flagged_channels"] == []
+    assert suite["passed_channels"] == ["agentic_branching", "cyclic_working_set"]
+    assert suite["channels"]["agentic_branching"]["absolute_gap"] == pytest.approx(0.10)
+    assert suite["channels"]["cyclic_working_set"]["absolute_gap"] == pytest.approx(0.22)
+    assert suite["max_threshold_ratio"] == pytest.approx(0.88)
+
+
+def test_surrogate_probe_tripwire_suite_flags_only_divergent_channel() -> None:
+    suite = prefix_runner._surrogate_probe_tripwire_suite(
+        {
+            "train/agentic_tool_workflows": {"token_hit_rate": 0.48},
+            "probe/agent_trace_branching": {"token_hit_rate": 0.38},
+            "validation/hotset_cold_scan": {"token_hit_rate": 0.70},
+            "probe/cyclic_working_set_pressure": {"token_hit_rate": 0.40},
+        }
+    )
+
+    assert suite["status"] == "flagged"
+    assert suite["flagged_channels"] == ["cyclic_working_set"]
+    assert suite["channels"]["agentic_branching"]["status"] == "pass"
+    assert suite["channels"]["cyclic_working_set"]["flag_reason"] == (
+        "divergence_exceeds_threshold"
+    )
+
+
+def test_surrogate_probe_tripwire_suite_fails_closed_for_missing_channel() -> None:
+    suite = prefix_runner._surrogate_probe_tripwire_suite(
+        {
+            "train/agentic_tool_workflows": {"token_hit_rate": 0.48},
+            "probe/agent_trace_branching": {"token_hit_rate": 0.38},
+        }
+    )
+
+    assert suite["status"] == "flagged"
+    assert suite["flagged_channels"] == ["cyclic_working_set"]
+    assert suite["channels"]["cyclic_working_set"]["flag_reason"] == ("missing_or_invalid_metric")
+
+
+def test_surrogate_probe_tripwire_suite_accepts_per_family_thresholds() -> None:
+    suite = prefix_runner._surrogate_probe_tripwire_suite(
+        {
+            "train/agentic_tool_workflows": {"token_hit_rate": 0.48},
+            "probe/agent_trace_branching": {"token_hit_rate": 0.38},
+            "validation/hotset_cold_scan": {"token_hit_rate": 0.64},
+            "probe/cyclic_working_set_pressure": {"token_hit_rate": 0.86},
+        },
+        thresholds={
+            "agentic_branching": 0.09,
+            "cyclic_working_set": 0.23,
+        },
+    )
+
+    assert suite["status"] == "flagged"
+    assert suite["flagged_channels"] == ["agentic_branching"]
+    assert suite["channels"]["agentic_branching"]["threshold"] == pytest.approx(0.09)
+    assert suite["channels"]["cyclic_working_set"]["threshold"] == pytest.approx(0.23)
 
 
 def test_save_run_artifacts_persists_best_program_and_metadata(tmp_path, monkeypatch) -> None:
@@ -3753,6 +3891,8 @@ def test_save_run_artifacts_persists_best_program_and_metadata(tmp_path, monkeyp
             "workload_metrics": {
                 "train/agentic_tool_workflows": {"token_hit_rate": 0.48},
                 "probe/agent_trace_branching": {"token_hit_rate": 0.38},
+                "validation/hotset_cold_scan": {"token_hit_rate": 0.64},
+                "probe/cyclic_working_set_pressure": {"token_hit_rate": 0.86},
             },
         },
         metadata={"levi_runtime_seconds": 4.0},
@@ -3799,6 +3939,15 @@ def test_save_run_artifacts_persists_best_program_and_metadata(tmp_path, monkeyp
     )
     run_summary = json.loads((run_dir / "run_summary.json").read_text(encoding="utf-8"))
     assert run_summary["agentic_surrogate_probe_tripwire"]["status"] == "pass"
+    assert run_summary["surrogate_probe_tripwires"]["status"] == "pass"
+    assert run_summary["surrogate_probe_tripwires"]["passed_channels"] == [
+        "agentic_branching",
+        "cyclic_working_set",
+    ]
+    assert (run_dir / "surrogate_probe_tripwires.json").is_file()
+    assert "cyclic_working_set" in (run_dir / "surrogate_probe_tripwires.md").read_text(
+        encoding="utf-8"
+    )
     assert run_summary["repository"] == {"commit": "abc123", "dirty": True}
     assert (run_dir / "config_snapshot.yaml").read_text(
         encoding="utf-8"
@@ -3927,6 +4076,7 @@ def test_specialist_promotion_adjudication_fails_over_complexity_limit(
                 },
                 "workload_metrics": {
                     "train/agentic_tool_workflows": {"token_hit_rate": 0.48},
+                    "validation/hotset_cold_scan": {"token_hit_rate": 0.64},
                 },
             },
             "probe": {
@@ -3998,6 +4148,7 @@ def test_eviction_only_promotion_adjudication_composes_complete_candidate(
                 },
                 "workload_metrics": {
                     "train/agentic_tool_workflows": {"token_hit_rate": 0.50},
+                    "validation/hotset_cold_scan": {"token_hit_rate": 0.64},
                 },
             },
             "probe": {

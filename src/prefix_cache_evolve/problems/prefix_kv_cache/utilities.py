@@ -12,6 +12,23 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import EvaluationResult
 AGENTIC_SURROGATE_WORKLOAD = "train/agentic_tool_workflows"
 AGENTIC_PROBE_WORKLOAD = "probe/agent_trace_branching"
 AGENTIC_SURROGATE_PROBE_DIVERGENCE_THRESHOLD = 0.12
+CYCLIC_SURROGATE_WORKLOAD = "validation/hotset_cold_scan"
+CYCLIC_PROBE_WORKLOAD = "probe/cyclic_working_set_pressure"
+CYCLIC_SURROGATE_PROBE_DIVERGENCE_THRESHOLD = 0.25
+SURROGATE_PROBE_TRIPWIRE_SPECS = (
+    {
+        "name": "agentic_branching",
+        "surrogate_workload": AGENTIC_SURROGATE_WORKLOAD,
+        "probe_workload": AGENTIC_PROBE_WORKLOAD,
+        "threshold": AGENTIC_SURROGATE_PROBE_DIVERGENCE_THRESHOLD,
+    },
+    {
+        "name": "cyclic_working_set",
+        "surrogate_workload": CYCLIC_SURROGATE_WORKLOAD,
+        "probe_workload": CYCLIC_PROBE_WORKLOAD,
+        "threshold": CYCLIC_SURROGATE_PROBE_DIVERGENCE_THRESHOLD,
+    },
+)
 
 
 def write_json(path: Path, payload: Any) -> None:
@@ -81,20 +98,41 @@ def agentic_surrogate_probe_tripwire(
     threshold: float = AGENTIC_SURROGATE_PROBE_DIVERGENCE_THRESHOLD,
 ) -> dict[str, Any]:
     """Flag excessive agentic surrogate-to-held-out-probe divergence."""
+    payload = surrogate_probe_tripwire(
+        workload_metrics,
+        name="agentic_branching",
+        surrogate_workload=AGENTIC_SURROGATE_WORKLOAD,
+        probe_workload=AGENTIC_PROBE_WORKLOAD,
+        threshold=threshold,
+    )
+    payload["schema"] = "prefix-kv-cache-agentic-surrogate-probe-tripwire-v1"
+    return payload
+
+
+def surrogate_probe_tripwire(
+    workload_metrics: object,
+    *,
+    name: str,
+    surrogate_workload: str,
+    probe_workload: str,
+    threshold: float,
+) -> dict[str, Any]:
+    """Flag excessive divergence for one non-quarantined-to-probe workload pair."""
     payload: dict[str, Any] = {
-        "schema": "prefix-kv-cache-agentic-surrogate-probe-tripwire-v1",
+        "schema": "prefix-kv-cache-surrogate-probe-tripwire-channel-v1",
+        "name": name,
         "selection_score_excludes_probe": True,
         "metric": "token_hit_rate",
-        "surrogate_workload": AGENTIC_SURROGATE_WORKLOAD,
-        "probe_workload": AGENTIC_PROBE_WORKLOAD,
+        "surrogate_workload": surrogate_workload,
+        "probe_workload": probe_workload,
         "surrogate_value": None,
         "probe_value": None,
         "surrogate_minus_probe": None,
         "absolute_gap": None,
         "threshold": threshold,
     }
-    surrogate_value = tripwire_metric_value(workload_metrics, AGENTIC_SURROGATE_WORKLOAD)
-    probe_value = tripwire_metric_value(workload_metrics, AGENTIC_PROBE_WORKLOAD)
+    surrogate_value = tripwire_metric_value(workload_metrics, surrogate_workload)
+    probe_value = tripwire_metric_value(workload_metrics, probe_workload)
     payload["surrogate_value"] = surrogate_value
     payload["probe_value"] = probe_value
     if surrogate_value is None or probe_value is None:
@@ -104,7 +142,7 @@ def agentic_surrogate_probe_tripwire(
                 "flagged": True,
                 "flag_reason": "missing_or_invalid_metric",
                 "interpretation": (
-                    "The tripwire could not compare both agentic workloads and failed closed."
+                    f"The {name} tripwire could not compare both workloads and failed closed."
                 ),
             }
         )
@@ -121,13 +159,48 @@ def agentic_surrogate_probe_tripwire(
             "surrogate_minus_probe": signed_gap,
             "absolute_gap": absolute_gap,
             "interpretation": (
-                "The surrogate and held-out agentic probe diverge beyond the allowed threshold."
+                f"The {name} surrogate and held-out probe diverge beyond the allowed threshold."
                 if flagged
-                else "The surrogate and held-out agentic probe remain within the allowed threshold."
+                else f"The {name} surrogate and held-out probe remain within the allowed threshold."
             ),
         }
     )
     return payload
+
+
+def surrogate_probe_tripwire_suite(
+    workload_metrics: object,
+    *,
+    thresholds: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    """Evaluate every configured surrogate-to-probe generalization channel."""
+    thresholds = thresholds or {}
+    channels = {
+        str(spec["name"]): surrogate_probe_tripwire(
+            workload_metrics,
+            name=str(spec["name"]),
+            surrogate_workload=str(spec["surrogate_workload"]),
+            probe_workload=str(spec["probe_workload"]),
+            threshold=float(thresholds.get(str(spec["name"]), spec["threshold"])),
+        )
+        for spec in SURROGATE_PROBE_TRIPWIRE_SPECS
+    }
+    flagged_channels = [name for name, channel in channels.items() if bool(channel["flagged"])]
+    valid_ratios = [
+        float(channel["absolute_gap"]) / float(channel["threshold"])
+        for channel in channels.values()
+        if channel["absolute_gap"] is not None and float(channel["threshold"]) > 0.0
+    ]
+    return {
+        "schema": "prefix-kv-cache-surrogate-probe-tripwire-suite-v1",
+        "selection_score_excludes_probe": True,
+        "status": "flagged" if flagged_channels else "pass",
+        "flagged": bool(flagged_channels),
+        "flagged_channels": flagged_channels,
+        "passed_channels": [name for name in channels if name not in flagged_channels],
+        "max_threshold_ratio": max(valid_ratios) if valid_ratios else None,
+        "channels": channels,
+    }
 
 
 def tripwire_metric_value(workload_metrics: object, workload: str) -> float | None:
@@ -180,6 +253,50 @@ def write_agentic_surrogate_probe_tripwire_report(
             ]
         )
     lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def write_surrogate_probe_tripwire_report(
+    path: Path,
+    suite: dict[str, Any],
+) -> None:
+    """Write a compact report for all surrogate-to-probe tripwire channels."""
+    lines = [
+        "# Surrogate-to-Probe Tripwire Suite",
+        "",
+        f"**Status: {str(suite['status']).upper()}**",
+        "",
+        (
+            "Each channel compares a non-quarantined workload with a related held-out "
+            "probe. Probe metrics remain excluded from selection and mutation feedback."
+        ),
+        "",
+        "| Channel | Surrogate | Probe | Absolute gap | Threshold | Status |",
+        "|---|---:|---:|---:|---:|---|",
+    ]
+    for name, channel in suite["channels"].items():
+        surrogate = channel["surrogate_value"]
+        probe = channel["probe_value"]
+        gap = channel["absolute_gap"]
+        lines.append(
+            f"| `{name}` | {format_promotion_value(surrogate)} | "
+            f"{format_promotion_value(probe)} | {format_promotion_value(gap)} | "
+            f"{float(channel['threshold']):.6f} | {channel['status']} |"
+        )
+    lines.extend(
+        [
+            "",
+            (
+                "Flagged channels: "
+                + (
+                    ", ".join(f"`{name}`" for name in suite["flagged_channels"])
+                    if suite["flagged_channels"]
+                    else "none"
+                )
+            ),
+            "",
+        ]
+    )
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -275,17 +392,21 @@ def workload_metric_non_regression(
     )
 
 
-def promotion_tripwire_check(candidate: dict[str, Any]) -> dict[str, Any]:
-    """Apply the existing agentic surrogate-to-probe tripwire to a candidate."""
+def promotion_tripwire_check(
+    candidate: dict[str, Any],
+    *,
+    thresholds: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    """Apply all surrogate-to-probe tripwires to a promotion candidate."""
     workloads = {
         **candidate["selection"]["workload_metrics"],
         **candidate["probe"]["workload_metrics"],
     }
-    tripwire = agentic_surrogate_probe_tripwire(workloads)
+    tripwire = surrogate_probe_tripwire_suite(workloads, thresholds=thresholds)
     return {
         "passed": not tripwire["flagged"],
-        "candidate": tripwire.get("absolute_gap"),
-        "incumbent_or_limit": tripwire["threshold"],
+        "candidate": tripwire.get("max_threshold_ratio"),
+        "incumbent_or_limit": 1.0,
         "tripwire": tripwire,
     }
 

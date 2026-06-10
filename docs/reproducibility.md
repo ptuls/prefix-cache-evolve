@@ -120,7 +120,17 @@ llm:
 
 search:
   seed: 17
+
+punctuated_equilibrium:
+  reasoning_effort: medium
+  max_tokens: 12000
 ```
+
+Set `punctuated_equilibrium.max_tokens` separately for reasoning-capable
+paradigm models. The repository compatibility layer overrides Levi's historical
+4,096-token paradigm-generation default only for the configured paradigm model.
+Mutation calls keep their own pipeline budget, and Levi versions that natively
+forward the configured paradigm budget bypass the compatibility override.
 
 Run `--show-config` before a paid search. It validates the YAML and prints the
 resolved model, endpoint, search seed, workload seeds, policy seed, capacities,

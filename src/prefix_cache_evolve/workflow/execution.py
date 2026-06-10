@@ -22,7 +22,8 @@ from prefix_cache_evolve.evaluator_entry import (
     load_candidate_factory_from_source,
 )
 
-_levi_reasoning_max_tokens: int | None = None
+_levi_paradigm_max_tokens: int | None = None
+_levi_paradigm_model_names: frozenset[str] = frozenset()
 _levi_paradigm_candidate_output_dir: Path | None = None
 _levi_search_seed = 0
 _levi_completion_index = 0
@@ -155,7 +156,12 @@ class LeviRunner:
 
         _enable_levi_code_feedback_support()
         _enable_levi_degenerate_centroid_fallback()
-        _enable_levi_reasoning_completion_support(_configured_reasoning_max_tokens(config))
+        paradigm_max_tokens = _configured_paradigm_max_tokens(config)
+        paradigm_model_names = _configured_paradigm_model_names(config)
+        _enable_levi_paradigm_completion_support(
+            paradigm_max_tokens,
+            paradigm_model_names=paradigm_model_names,
+        )
         search_seed = int(getattr(config, "search_seed", 0))
         _enable_levi_reproducibility_support(
             search_seed,
@@ -181,6 +187,7 @@ class LeviRunner:
             "search_seed": search_seed,
             "model": getattr(config, "model", None),
             "paradigm_model": getattr(config, "paradigm_model", None),
+            "paradigm_max_tokens": paradigm_max_tokens,
             "mutation_model": getattr(config, "mutation_model", None),
             "api_base": getattr(config, "api_base", None),
             "api_key_env": getattr(config, "api_key_env", None),
@@ -324,7 +331,13 @@ def _enable_levi_code_feedback_support() -> None:
         feedback_lines = [line.strip() for line in feedback or [] if line.strip()]
         if feedback_lines:
             sections.append(
-                "## Evaluator Feedback\n" + "\n".join(f"- {line}" for line in feedback_lines)
+                "## Evaluator Feedback\n"
+                "### Failure Cases With Measurements\n"
+                "Each item is an aggregate from one evaluated workload, not an isolated "
+                "anecdote. Use its outcome, admission-regret, eviction-regret, and cache-"
+                "economics measurements to select one causal change. Do not optimize every "
+                "metric at once or infer access to quarantined probe results.\n"
+                + "\n".join(f"- {line}" for line in feedback_lines)
             )
         sections.append(
             "## Preflight Repair Checks\n"
@@ -375,8 +388,8 @@ def _enable_levi_degenerate_centroid_fallback() -> None:
     CVTMAPElitesPool.set_centroids_from_data = set_centroids_with_fallback
 
 
-def _configured_reasoning_max_tokens(config: Any) -> int | None:
-    """Return the explicit paradigm reasoning budget, falling back to the pipeline budget."""
+def _configured_paradigm_max_tokens(config: Any) -> int | None:
+    """Return the paradigm output budget, falling back to the pipeline budget."""
     punctuated_equilibrium = getattr(config, "punctuated_equilibrium", {}) or {}
     pipeline = getattr(config, "pipeline", {}) or {}
     raw_value = punctuated_equilibrium.get("max_tokens")
@@ -389,20 +402,55 @@ def _configured_reasoning_max_tokens(config: Any) -> int | None:
     return max_tokens if max_tokens > 0 else None
 
 
-def _enable_levi_reasoning_completion_support(max_tokens: int | None) -> None:
-    """Prevent Levi's 4096-token PE cap from exhausting reasoning-model output."""
-    global _levi_reasoning_max_tokens
-    _levi_reasoning_max_tokens = max_tokens
-    if max_tokens is None:
+def _configured_paradigm_model_names(config: Any) -> frozenset[str]:
+    """Return model names that Levi may use for paradigm-shift generation."""
+    from levi.clients.base import client_name
+
+    punctuated_equilibrium = getattr(config, "punctuated_equilibrium", {}) or {}
+    configured_models = punctuated_equilibrium.get("heavy_models")
+    if not configured_models:
+        configured_models = (
+            getattr(config, "paradigm_model", None)
+            or getattr(config, "model", None)
+            or getattr(config, "mutation_model", None),
+        )
+    elif not isinstance(configured_models, (list, tuple)):
+        configured_models = (configured_models,)
+
+    return frozenset(
+        client_name(model)
+        for model in configured_models
+        if model is not None and client_name(model)
+    )
+
+
+def _enable_levi_paradigm_completion_support(
+    max_tokens: int | None,
+    *,
+    paradigm_model_names: frozenset[str],
+) -> None:
+    """Override Levi's legacy 4096-token cap for configured paradigm models.
+
+    Levi revisions without native ``punctuated_equilibrium.max_tokens`` support
+    hard-code 4096 on paradigm generation. The compatibility wrapper recognizes
+    only that legacy sentinel and only for configured paradigm models. Once Levi
+    forwards the configured value itself, the wrapper becomes a no-op.
+    """
+    global _levi_paradigm_max_tokens
+    global _levi_paradigm_model_names
+    _levi_paradigm_max_tokens = max_tokens
+    _levi_paradigm_model_names = paradigm_model_names
+    if max_tokens is None or not paradigm_model_names:
         return
 
+    from levi.clients.base import client_name
     from levi.pipeline.state import PipelineState
 
     original = PipelineState.acompletion
     if getattr(original, "_prefix_cache_evolve_reasoning_budget_patch", False):
         return
 
-    async def acompletion_with_reasoning_budget(
+    async def acompletion_with_paradigm_budget(
         self,
         client_spec,
         *,
@@ -412,11 +460,13 @@ def _enable_levi_reasoning_completion_support(max_tokens: int | None) -> None:
         timeout=None,
         **extras,
     ):
-        reasoning_effort = extras.get("reasoning_effort")
-        if reasoning_effort and reasoning_effort != "disabled":
-            configured_max = _levi_reasoning_max_tokens
-            if configured_max is not None:
-                max_tokens = max(configured_max, max_tokens or 0)
+        is_configured_paradigm_model = client_name(client_spec) in _levi_paradigm_model_names
+        if (
+            max_tokens == 4_096
+            and is_configured_paradigm_model
+            and _levi_paradigm_max_tokens is not None
+        ):
+            max_tokens = _levi_paradigm_max_tokens
         return await original(
             self,
             client_spec,
@@ -427,13 +477,13 @@ def _enable_levi_reasoning_completion_support(max_tokens: int | None) -> None:
             **extras,
         )
 
-    acompletion_with_reasoning_budget._prefix_cache_evolve_reasoning_budget_patch = True
-    acompletion_with_reasoning_budget._prefix_cache_evolve_seed_patch = getattr(
+    acompletion_with_paradigm_budget._prefix_cache_evolve_reasoning_budget_patch = True
+    acompletion_with_paradigm_budget._prefix_cache_evolve_seed_patch = getattr(
         original,
         "_prefix_cache_evolve_seed_patch",
         False,
     )
-    PipelineState.acompletion = acompletion_with_reasoning_budget
+    PipelineState.acompletion = acompletion_with_paradigm_budget
 
 
 def _enable_levi_reproducibility_support(

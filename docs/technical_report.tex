@@ -110,8 +110,10 @@ next-use oracle and ahead of all deployable credibility baselines.  It scores
 \(77.230\), compared with \(97.074\) for the reporting-only oracle and \(70.362\) for
 TinyLFU-LRU.  A subsequent production-oriented search on the operative \(16\)-token
 verifier promoted a \(572\)-node policy scoring \(65.649\), ahead of TinyLFU-LRU at
-\(63.548\).  It also passes the held-out agentic tripwire, scores \(3.064\) on the
-hidden panel versus \(-2.789\) for TinyLFU-LRU, and retains substantially lower churn.
+\(63.548\).  It passes both held-out per-family tripwires: the agentic gap is
+\(0.0918<0.12\), and the cyclic working-set gap is \(0.2198<0.25\).  It also scores
+\(3.064\) on the hidden panel versus \(-2.789\) for TinyLFU-LRU and retains
+substantially lower churn.
 This was not a sub-\$5 one-shot discovery.  The production search and its required
 simplification stage cost \$5.070 together; the retained lineage from the compact seed
 cost \$21.981, and the documented pre-promotion research program cost at least
@@ -1410,7 +1412,9 @@ reserved for paradigm shifts. \\
 sampler-model pairs & Four \code{gpt-5.4-mini} sampling configurations used by the
 pipeline. \\
 mutation max\_tokens & 6,000, forwarded through the normal mutation pipeline. \\
-paradigm max\_tokens & 12,000 for punctuated-equilibrium reasoning calls. \\
+paradigm max\_tokens & 12,000 for punctuated-equilibrium reasoning calls.  A
+model-specific compatibility layer replaces Levi's historical 4,096-token
+paradigm sentinel; mutation calls retain their own budget. \\
 n\_llm\_workers & 4. \\
 n\_eval\_processes & 2, derived from \code{parallel_evaluations}. \\
 eval\_timeout & 90 seconds for isolated candidate evaluation. \\
@@ -1427,6 +1431,9 @@ agentic-surrogate hit and underfill, and stochastic-mix hit rate. \\
 mutation feedback & Every retained parent exposes the agentic surrogate,
 stochastic-serving target, and up to three additional weak-workload diagnostics to
 normal mutation workers. \\
+promotion tripwires & Per-family token-hit divergence limits are 0.12 for
+agentic branching and 0.25 for cyclic working-set pressure.  Probe values remain
+quarantined from selection and mutation feedback. \\
 candidate guardrails & The general lane evaluates modestly over-cap candidates as
 exploration-only and requests a dedicated simplification mutation; promotion remains
 capped at 650 effective AST nodes.  The function-only eviction-specialist lane
@@ -1903,9 +1910,10 @@ reviewed alongside the validation scalar.
 \subsection{Current production-oriented result}
 
 On the operative 16-token verifier, the promoted 572-node policy scores \(65.649\),
-ahead of TinyLFU-LRU at \(63.548\).  It passes the held-out agentic tripwire with a
-\(0.0918\) surrogate-to-probe gap, scores \(3.064\) on the hidden panel versus
-\(-2.789\) for TinyLFU-LRU, and retains substantially lower churn.  The result supports
+ahead of TinyLFU-LRU at \(63.548\).  It passes the agentic tripwire with a \(0.0918\)
+gap against a \(0.12\) limit and the cyclic working-set tripwire with a \(0.2198\)
+gap against a \(0.25\) limit.  It scores \(3.064\) on the hidden panel versus
+\(-2.789\) for TinyLFU-LRU and retains substantially lower churn.  The result supports
 two-stage search: measured over-cap exploration can expose useful structure, but a
 separate simplification phase and fail-closed adjudication are required before
 promotion.  The two required runs cost \$5.070 together; the broader retained lineage
@@ -2476,9 +2484,10 @@ run-type-specific artifacts:
   was launched from a config file;
   \item \filepath{workload_manifest.json}: deterministic stream summaries and panel
   fingerprint for the operative report configuration;
-  \item \filepath{agentic_surrogate_probe_tripwire.json} and
-  \filepath{agentic_surrogate_probe_tripwire.md}: automatic pass/flag comparison of
-  agentic surrogate and held-out-probe token hit rate;
+  \item \filepath{surrogate_probe_tripwires.json} and
+  \filepath{surrogate_probe_tripwires.md}: fail-closed per-family comparisons for
+  agentic branching and cyclic working-set pressure; the legacy
+  \filepath{agentic_surrogate_probe_tripwire.*} files remain for compatibility;
   \item \filepath{promotion_adjudication.json} and
   \filepath{promotion_adjudication.md}: fail-closed composed complete-policy
   adjudication for specialist runs;

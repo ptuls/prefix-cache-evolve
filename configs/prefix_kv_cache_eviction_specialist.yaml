@@ -107,6 +107,7 @@ problem:
     Search function-only eviction-ranking improvements while composing frozen
     admission and callbacks from the stable pressure-aware incumbent.
   settings:
+    verifier_version: "1.0.0"
     capacity_blocks: 24
     capacity_sweep_blocks:
       - 24

@@ -1,9 +1,12 @@
-"""Tests for prefix KV-cache baseline registration."""
+"""Tests for prefix KV-cache baseline infrastructure."""
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
+from prefix_cache_evolve.evaluators.baseline_suite import BaselineSuiteEvaluator
 from prefix_cache_evolve.evaluators.baselines import (
     BASELINE_REGISTRY,
     BaselineRegistry,
@@ -12,6 +15,9 @@ from prefix_cache_evolve.evaluators.baselines import (
     baseline_sglang_radix_attention,
 )
 from prefix_cache_evolve.evaluators.contracts import PrefixBlockInfo
+from prefix_cache_evolve.evaluators.prefix_kv_cache import (
+    EvaluatorConfig,
+)
 from prefix_cache_evolve.evaluators.prefix_kv_cache import (
     PrefixBlockInfo as CompatiblePrefixBlockInfo,
 )
@@ -85,3 +91,32 @@ def test_sglang_radix_attention_matches_leaf_lru_contract() -> None:
 
 def test_evaluator_reexports_candidate_visible_contracts() -> None:
     assert CompatiblePrefixBlockInfo is PrefixBlockInfo
+
+
+def test_baseline_suite_configures_each_evaluator_from_capabilities() -> None:
+    calls = []
+
+    class Capabilities:
+        def requires_future_reuse(self, name):
+            return name == "oracle"
+
+    class Evaluator:
+        def __init__(self, config, *, splits, expose_future_reuse):
+            calls.append((splits, expose_future_reuse))
+
+        def __call__(self, factory):
+            return SimpleNamespace(factory=factory)
+
+    suite = BaselineSuiteEvaluator(
+        capabilities=Capabilities(),
+        evaluator_factory=Evaluator,
+    )
+
+    results = suite.evaluate(
+        EvaluatorConfig(),
+        {"lru": baseline_lru_blocks, "oracle": baseline_lru_blocks},
+        splits=("validation",),
+    )
+
+    assert set(results) == {"lru", "oracle"}
+    assert calls == [(("validation",), False), (("validation",), True)]

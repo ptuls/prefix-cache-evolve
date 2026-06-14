@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from prefix_cache_evolve.workflow.configuration import ConfigProvider
+from prefix_cache_evolve.workflow.config import ConfigProvider
 from prefix_cache_evolve.workflow.interfaces import Reporter, Runner
 from prefix_cache_evolve.workflow.program import ProgramSource, TemporaryProgramFile
 

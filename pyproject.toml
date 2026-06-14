@@ -58,12 +58,8 @@ repository = "https://github.com/ptuls/prefix-cache-evolve"
 
 [project.scripts]
 prefix-cache-evolve = "prefix_cache_evolve.problems.prefix_kv_cache.runner:main"
-prefix-cache-ablate-structured = "prefix_cache_evolve.tools.ablate_structured:main"
-prefix-cache-analyze-eviction = "prefix_cache_evolve.tools.analyze_eviction:main"
-prefix-cache-analyze-regret = "prefix_cache_evolve.tools.analyze_regret:main"
-prefix-cache-analyze-reasoning-kv = "prefix_cache_evolve.tools.analyze_reasoning_kv:main"
 prefix-cache-lab = "prefix_cache_evolve.problems.prefix_kv_cache.lab:main"
-prefix-cache-tune-compact = "prefix_cache_evolve.tools.tune_compact:main"
+prefix-cache-tools = "prefix_cache_evolve.tools.cli:main"
 
 [tool.hatch.metadata]
 allow-direct-references = true

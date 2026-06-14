@@ -172,6 +172,7 @@ behavior:
     - validation_wasted_admission_token_rate
     - validation_avoidable_eviction_rate
     - validation_short_reuse_after_eviction_missed_token_rate
+    - validation_shadow_price_tracking_rmse
     - train_workload_agentic_tool_workflows_token_hit_rate
     - train_workload_agentic_tool_workflows_policy_underfill_rate
     - validation_workload_stochastic_serving_mix_token_hit_rate
@@ -215,6 +216,7 @@ problem:
   description: >
     Search for adaptive prefix KV-cache scoring heuristics for LLM serving.
   settings:
+    verifier_version: "1.0.0"
     capacity_blocks: 24
     capacity_sweep_blocks:
       - 24

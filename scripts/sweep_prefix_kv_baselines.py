@@ -18,6 +18,10 @@ from prefix_cache_evolve.evaluators.baselines import (
 )
 from prefix_cache_evolve.evaluators.complexity import scoring_fn_complexity
 from prefix_cache_evolve.evaluators.prefix_kv_cache import PrefixKVCacheEvaluator
+from prefix_cache_evolve.evaluators.verifier import (
+    require_single_score_identity,
+    require_single_verifier_version,
+)
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import load_evaluator_config
 from prefix_cache_evolve.problems.prefix_kv_cache.production_incumbent import (
     build_candidate,
@@ -101,6 +105,9 @@ def _run_job(job: SweepJob) -> dict[str, Any]:
         for name, metrics in result.capacity_metrics.items()
     }
     return {
+        "verifier_version": result.verifier_version,
+        "evaluation_context_sha256": result.evaluation_context_sha256,
+        "panel_sha256": result.panel_sha256,
         "policy": job.policy,
         "group": group,
         "block_size_tokens": job.block_size_tokens,
@@ -175,7 +182,29 @@ def main(
         results = list(executor.map(_run_job, jobs))
 
     results.sort(key=lambda item: (item["block_size_tokens"], item["policy"]))
+    try:
+        verifier_version = require_single_verifier_version(
+            results,
+            context="geometry sweep",
+        )
+        identities = {
+            str(block_size): require_single_score_identity(
+                (result for result in results if result["block_size_tokens"] == block_size),
+                context=f"geometry sweep block size {block_size}",
+            )
+            for block_size in block_sizes
+        }
+    except ValueError as error:
+        raise click.ClickException(str(error)) from error
     payload = {
+        "verifier_version": verifier_version,
+        "evaluation_contexts": {
+            block_size: identity.evaluation_context_sha256
+            for block_size, identity in identities.items()
+        },
+        "panel_sha256s": {
+            block_size: identity.panel_sha256 for block_size, identity in identities.items()
+        },
         "generated_at": datetime.now(UTC).isoformat(),
         "config": str(config),
         "block_sizes": list(block_sizes),

@@ -17,6 +17,7 @@ from pydantic import (
     NonNegativeFloat,
     PositiveFloat,
     PositiveInt,
+    field_validator,
     model_validator,
 )
 
@@ -87,6 +88,11 @@ from prefix_cache_evolve.evaluators.contracts import (
 from prefix_cache_evolve.evaluators.contracts import (
     RequestInfo as RequestInfo,
 )
+from prefix_cache_evolve.evaluators.fingerprints import (
+    evaluation_context_sha256,
+    panel_sha256,
+    request_stream_fingerprint_record,
+)
 from prefix_cache_evolve.evaluators.scoring import (
     aggregate_by as _aggregate_by,
 )
@@ -125,6 +131,10 @@ from prefix_cache_evolve.evaluators.utilities import (
 from prefix_cache_evolve.evaluators.utilities import (
     window_token_hit_rates as _window_token_hit_rates,
 )
+from prefix_cache_evolve.evaluators.verifier import (
+    VERIFIER_VERSION,
+    VERIFIER_VERSION_PATTERN,
+)
 from prefix_cache_evolve.evaluators.workloads import WorkloadRequest, build_workload
 
 _HIGH_DESCENDANT_MIN_COUNT = 2
@@ -148,6 +158,28 @@ def _request_arrival_steps(requests: tuple[WorkloadRequest, ...]) -> tuple[int, 
         arrival_steps.append(arrival_step)
         previous_step = arrival_step
     return tuple(arrival_steps)
+
+
+def _correlation(left: list[float], right: list[float]) -> float:
+    """Return a finite Pearson correlation, or zero for a constant series."""
+    if len(left) != len(right) or len(left) < 2:
+        return 0.0
+    left_mean = mean(left)
+    right_mean = mean(right)
+    left_centered = [value - left_mean for value in left]
+    right_centered = [value - right_mean for value in right]
+    denominator = math.sqrt(
+        sum(value**2 for value in left_centered) * sum(value**2 for value in right_centered)
+    )
+    if denominator == 0.0:
+        return 0.0
+    return (
+        sum(
+            left_value * right_value
+            for left_value, right_value in zip(left_centered, right_centered, strict=True)
+        )
+        / denominator
+    )
 
 
 def _window_mean(values: Iterable[float]) -> float:
@@ -190,6 +222,7 @@ class EvaluatorConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, validate_default=True)
 
+    verifier_version: str = Field(default=VERIFIER_VERSION, pattern=VERIFIER_VERSION_PATTERN)
     capacity_blocks: PositiveInt = 24
     capacity_sweep_blocks: tuple[PositiveInt, ...] = ()
     block_size_tokens: PositiveInt = 16
@@ -279,8 +312,16 @@ class EvaluatorConfig(BaseModel):
     )
     fixed_admission_policy: str | None = None
     candidate_policy_surface: Literal["full", "eviction_only"] = "full"
-    search_score_mode: Literal["combined", "raw_before_complexity"] = "combined"
+    search_score_mode: Literal["combined", "raw_before_complexity", "robust_min"] = "combined"
+    search_guidance_families: tuple[str, ...] = ()
     reject_unsupported_source_patterns: bool = False
+
+    @field_validator("verifier_version")
+    @classmethod
+    def _require_implemented_verifier_version(cls, value: str) -> str:
+        if value != VERIFIER_VERSION:
+            raise ValueError(f"this checkout implements verifier {VERIFIER_VERSION}, not {value}")
+        return value
 
     @model_validator(mode="before")
     @classmethod
@@ -304,6 +345,30 @@ class EvaluatorConfig(BaseModel):
             raise ValueError(
                 "surrogate_probe_tripwire_thresholds must configure exactly "
                 f"{sorted(expected)} ({'; '.join(details)})"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_search_guidance(self) -> EvaluatorConfig:
+        """Require robust search guidance to use non-quarantined train families."""
+        guidance = set(self.search_guidance_families)
+        if self.search_score_mode != "robust_min":
+            if guidance:
+                raise ValueError("search_guidance_families requires search_score_mode='robust_min'")
+            return self
+        if not guidance:
+            raise ValueError("robust_min search requires at least one search guidance family")
+        unknown = guidance - set(self.train_families)
+        if unknown:
+            raise ValueError(
+                "search guidance families must be configured train families: "
+                + ", ".join(sorted(unknown))
+            )
+        quarantined = guidance & (set(self.probe_families) | set(self.hidden_families))
+        if quarantined:
+            raise ValueError(
+                "search guidance families must not be probe or hidden families: "
+                + ", ".join(sorted(quarantined))
             )
         return self
 
@@ -374,6 +439,7 @@ class TrialMetrics:
     workload: str
     seed: int
     capacity_blocks: int = 0
+    panel_sha256: str = ""
     block_hit_rate: float = 0.0
     token_hit_rate: float = 0.0
     priority_weighted_token_hit_rate: float = 0.0
@@ -404,6 +470,18 @@ class TrialMetrics:
     avoidable_rejection_rate: float = 0.0
     avoidable_rejection_regret_tokens: float = 0.0
     avoidable_rejection_regret_token_rate: float = 0.0
+    oracle_shadow_price_mean: float = 0.0
+    oracle_shadow_price_stddev: float = 0.0
+    oracle_shadow_price_change_mean: float = 0.0
+    oracle_shadow_price_change_p95: float = 0.0
+    shadow_price_score_scale: float = 0.0
+    shadow_price_tracking_rmse: float = 0.0
+    shadow_price_tracking_mae: float = 0.0
+    shadow_price_tracking_bias: float = 0.0
+    fast_shadow_price_decision_fraction: float = 0.0
+    fast_shadow_price_regret_share: float = 0.0
+    fast_shadow_price_regret_lift: float = 0.0
+    shadow_price_change_regret_correlation: float = 0.0
     useful_admission_count: int = 0
     useful_admission_rate: float = 0.0
     wasted_admission_count: int = 0
@@ -474,6 +552,7 @@ class TrialMetrics:
     invalid_reason: str = ""
     matched_lengths: tuple[int, ...] = ()
     structural_metrics: dict[str, float] = field(default_factory=dict)
+    admission_decisions: tuple[AdmissionDecisionDiagnostic, ...] = ()
 
     def as_dict(self) -> dict[str, float | int | bool | str]:
         """Return scalar trial metrics as a serializable mapping."""
@@ -511,6 +590,18 @@ class TrialMetrics:
             "avoidable_rejection_rate": self.avoidable_rejection_rate,
             "avoidable_rejection_regret_tokens": self.avoidable_rejection_regret_tokens,
             "avoidable_rejection_regret_token_rate": (self.avoidable_rejection_regret_token_rate),
+            "oracle_shadow_price_mean": self.oracle_shadow_price_mean,
+            "oracle_shadow_price_stddev": self.oracle_shadow_price_stddev,
+            "oracle_shadow_price_change_mean": self.oracle_shadow_price_change_mean,
+            "oracle_shadow_price_change_p95": self.oracle_shadow_price_change_p95,
+            "shadow_price_score_scale": self.shadow_price_score_scale,
+            "shadow_price_tracking_rmse": self.shadow_price_tracking_rmse,
+            "shadow_price_tracking_mae": self.shadow_price_tracking_mae,
+            "shadow_price_tracking_bias": self.shadow_price_tracking_bias,
+            "fast_shadow_price_decision_fraction": self.fast_shadow_price_decision_fraction,
+            "fast_shadow_price_regret_share": self.fast_shadow_price_regret_share,
+            "fast_shadow_price_regret_lift": self.fast_shadow_price_regret_lift,
+            "shadow_price_change_regret_correlation": (self.shadow_price_change_regret_correlation),
             "useful_admission_count": self.useful_admission_count,
             "useful_admission_rate": self.useful_admission_rate,
             "wasted_admission_count": self.wasted_admission_count,
@@ -598,6 +689,9 @@ class TrialMetrics:
 class EvaluationResult:
     """Aggregated evaluator result."""
 
+    verifier_version: str
+    evaluation_context_sha256: str
+    panel_sha256: str
     combined_score: float
     success: bool
     invalid_fraction: float
@@ -668,6 +762,27 @@ class _AdmissionAccounting:
             self.evicted_without_hit_count += 1
 
 
+@dataclass(frozen=True, slots=True)
+class AdmissionDecisionDiagnostic:
+    """One scored admission decision with quarantined oracle quantities."""
+
+    now: int
+    request_index: int
+    prefix_hash: int
+    depth: int
+    token_count: int
+    capacity_weight_tokens: int
+    score: float
+    accepted: bool
+    feasible: bool
+    incoming_value_tokens: float
+    displaced_value_tokens: float
+    incoming_value_density: float
+    oracle_shadow_price: float
+    oracle_surplus_density: float
+    regret_tokens: float
+
+
 @dataclass
 class _AdmissionAudit:
     """Same-state admission regret measured in future reusable tokens."""
@@ -678,33 +793,123 @@ class _AdmissionAudit:
     avoidable_admission_regret_tokens: float = 0.0
     avoidable_rejection_count: int = 0
     avoidable_rejection_regret_tokens: float = 0.0
+    record_decisions: bool = False
+    decisions: list[AdmissionDecisionDiagnostic] = field(default_factory=list)
+    shadow_samples: list[tuple[float, float, float, float]] = field(default_factory=list)
 
     def record(
         self,
         *,
+        now: int,
+        request_index: int,
+        block: _BlockState,
+        score: float,
         accepted: bool,
         feasible: bool,
         incoming_value_tokens: float,
         displaced_value_tokens: float,
+        capacity_weight_tokens: int,
     ) -> None:
         """Record one explicit policy admission score against a local oracle."""
+        regret = 0.0
         if accepted:
             self.accepted_count += 1
-            if not feasible:
-                return
-            regret = max(0.0, displaced_value_tokens - incoming_value_tokens)
-            if regret > 0.0:
+            if feasible:
+                regret = max(0.0, displaced_value_tokens - incoming_value_tokens)
+            if regret:
                 self.avoidable_admission_count += 1
                 self.avoidable_admission_regret_tokens += regret
-            return
+        else:
+            self.rejected_count += 1
+            if feasible:
+                regret = max(0.0, incoming_value_tokens - displaced_value_tokens)
+            if regret:
+                self.avoidable_rejection_count += 1
+                self.avoidable_rejection_regret_tokens += regret
 
-        self.rejected_count += 1
-        if not feasible:
-            return
-        regret = max(0.0, incoming_value_tokens - displaced_value_tokens)
-        if regret > 0.0:
-            self.avoidable_rejection_count += 1
-            self.avoidable_rejection_regret_tokens += regret
+        weight = max(1, capacity_weight_tokens)
+        incoming_density = incoming_value_tokens / weight
+        oracle_shadow_price = displaced_value_tokens / weight
+        oracle_surplus_density = incoming_density - oracle_shadow_price
+        if feasible:
+            self.shadow_samples.append(
+                (
+                    score,
+                    oracle_surplus_density,
+                    oracle_shadow_price,
+                    regret / weight,
+                )
+            )
+        if self.record_decisions:
+            self.decisions.append(
+                AdmissionDecisionDiagnostic(
+                    now=now,
+                    request_index=request_index,
+                    prefix_hash=block.prefix_hash,
+                    depth=block.depth,
+                    token_count=block.token_count,
+                    capacity_weight_tokens=weight,
+                    score=score,
+                    accepted=accepted,
+                    feasible=feasible,
+                    incoming_value_tokens=incoming_value_tokens,
+                    displaced_value_tokens=displaced_value_tokens,
+                    incoming_value_density=incoming_density,
+                    oracle_shadow_price=oracle_shadow_price,
+                    oracle_surplus_density=oracle_surplus_density,
+                    regret_tokens=regret,
+                )
+            )
+
+    def shadow_price_metrics(self) -> dict[str, float]:
+        """Return calibrated policy-versus-oracle water-level diagnostics."""
+        if not self.shadow_samples:
+            return {}
+        score_square = sum(score**2 for score, _, _, _ in self.shadow_samples)
+        score_surplus = sum(score * surplus for score, surplus, _, _ in self.shadow_samples)
+        scale = max(0.0, score_surplus / score_square) if score_square else 0.0
+        tracking_errors = [surplus - scale * score for score, surplus, _, _ in self.shadow_samples]
+        shadow_prices = [shadow_price for _, _, shadow_price, _ in self.shadow_samples]
+        changes = [
+            0.0,
+            *(
+                abs(current - previous)
+                for previous, current in zip(shadow_prices, shadow_prices[1:])
+            ),
+        ]
+        regret_densities = [regret for _, _, _, regret in self.shadow_samples]
+        positive_changes = [change for change in changes if change > 0.0]
+        fast_threshold = _percentile(positive_changes, 75) if positive_changes else math.inf
+        fast_indexes = [index for index, change in enumerate(changes) if change >= fast_threshold]
+        fast_regret = sum(regret_densities[index] for index in fast_indexes)
+        total_regret = sum(regret_densities)
+        fast_mean = (
+            sum(regret_densities[index] for index in fast_indexes) / len(fast_indexes)
+            if fast_indexes
+            else 0.0
+        )
+        overall_mean = total_regret / len(self.shadow_samples)
+        return {
+            "oracle_shadow_price_mean": mean(shadow_prices),
+            "oracle_shadow_price_stddev": (
+                pstdev(shadow_prices) if len(shadow_prices) > 1 else 0.0
+            ),
+            "oracle_shadow_price_change_mean": mean(changes),
+            "oracle_shadow_price_change_p95": _percentile(changes, 95),
+            "shadow_price_score_scale": scale,
+            "shadow_price_tracking_rmse": math.sqrt(mean(error**2 for error in tracking_errors)),
+            "shadow_price_tracking_mae": mean(abs(error) for error in tracking_errors),
+            "shadow_price_tracking_bias": mean(tracking_errors),
+            "fast_shadow_price_decision_fraction": (len(fast_indexes) / len(self.shadow_samples)),
+            "fast_shadow_price_regret_share": (fast_regret / total_regret if total_regret else 0.0),
+            "fast_shadow_price_regret_lift": (
+                fast_mean / overall_mean if overall_mean > 0.0 else 1.0
+            ),
+            "shadow_price_change_regret_correlation": _correlation(
+                changes,
+                regret_densities,
+            ),
+        }
 
 
 @dataclass
@@ -827,6 +1032,9 @@ class PrefixKVCacheSimulator:
         max_memory_bytes: int | None = None,
         observer: SimulatorObserver | None = None,
         eviction_decision_observer: EvictionDecisionObserver | None = None,
+        record_admission_diagnostics: bool = False,
+        oracle_admission: bool = False,
+        oracle_eviction: bool = False,
     ) -> None:
         self.capacity_blocks = capacity_blocks
         self.block_size_tokens = block_size_tokens
@@ -841,6 +1049,9 @@ class PrefixKVCacheSimulator:
         self.max_memory_bytes = max_memory_bytes
         self.observer = observer
         self.eviction_decision_observer = eviction_decision_observer
+        self.record_admission_diagnostics = record_admission_diagnostics
+        self.oracle_admission = oracle_admission
+        self.oracle_eviction = oracle_eviction
         self.blocks: dict[int, _BlockState] = {}
         self._release_events: dict[int, list[int]] = {}
         self._resident_hashes: set[int] = set()
@@ -927,7 +1138,9 @@ class PrefixKVCacheSimulator:
         short_reuse_after_eviction_missed_tokens = 0
         eviction_reuse_distances: list[float] = []
         admission_accounting = _AdmissionAccounting()
-        admission_audit = _AdmissionAudit()
+        admission_audit = _AdmissionAudit(
+            record_decisions=self.record_admission_diagnostics,
+        )
         avoidable_eviction_count = 0
         avoidable_short_reuse_eviction_count = 0
         value_weighted_avoidable_eviction_count = 0
@@ -1096,11 +1309,22 @@ class PrefixKVCacheSimulator:
                         displaced_value_tokens,
                         admission_feasible,
                     ) = self._admission_decision_values(block, audit_future_reuse)
+                    if self.oracle_admission:
+                        score = (
+                            incoming_value_tokens - displaced_value_tokens
+                            if admission_feasible
+                            else -1.0
+                        )
                     admission_audit.record(
+                        now=now,
+                        request_index=request_index,
+                        block=block,
+                        score=score,
                         accepted=score > 0.0,
                         feasible=admission_feasible,
                         incoming_value_tokens=incoming_value_tokens,
                         displaced_value_tokens=displaced_value_tokens,
+                        capacity_weight_tokens=self.block_size_tokens,
                     )
                     if score <= 0.0:
                         admission_rejection_count += 1
@@ -1280,6 +1504,7 @@ class PrefixKVCacheSimulator:
             reuse_after_eviction_missed_tokens=reuse_after_eviction_missed_tokens,
             recompute_tokens=recompute_tokens,
         )
+        shadow_price_metrics = admission_audit.shadow_price_metrics()
         return TrialMetrics(
             split=split,
             workload=workload,
@@ -1335,6 +1560,54 @@ class PrefixKVCacheSimulator:
             avoidable_rejection_regret_tokens=(admission_audit.avoidable_rejection_regret_tokens),
             avoidable_rejection_regret_token_rate=(
                 admission_audit.avoidable_rejection_regret_tokens / max(1, total_tokens)
+            ),
+            oracle_shadow_price_mean=shadow_price_metrics.get(
+                "oracle_shadow_price_mean",
+                0.0,
+            ),
+            oracle_shadow_price_stddev=shadow_price_metrics.get(
+                "oracle_shadow_price_stddev",
+                0.0,
+            ),
+            oracle_shadow_price_change_mean=shadow_price_metrics.get(
+                "oracle_shadow_price_change_mean",
+                0.0,
+            ),
+            oracle_shadow_price_change_p95=shadow_price_metrics.get(
+                "oracle_shadow_price_change_p95",
+                0.0,
+            ),
+            shadow_price_score_scale=shadow_price_metrics.get(
+                "shadow_price_score_scale",
+                0.0,
+            ),
+            shadow_price_tracking_rmse=shadow_price_metrics.get(
+                "shadow_price_tracking_rmse",
+                0.0,
+            ),
+            shadow_price_tracking_mae=shadow_price_metrics.get(
+                "shadow_price_tracking_mae",
+                0.0,
+            ),
+            shadow_price_tracking_bias=shadow_price_metrics.get(
+                "shadow_price_tracking_bias",
+                0.0,
+            ),
+            fast_shadow_price_decision_fraction=shadow_price_metrics.get(
+                "fast_shadow_price_decision_fraction",
+                0.0,
+            ),
+            fast_shadow_price_regret_share=shadow_price_metrics.get(
+                "fast_shadow_price_regret_share",
+                0.0,
+            ),
+            fast_shadow_price_regret_lift=shadow_price_metrics.get(
+                "fast_shadow_price_regret_lift",
+                0.0,
+            ),
+            shadow_price_change_regret_correlation=shadow_price_metrics.get(
+                "shadow_price_change_regret_correlation",
+                0.0,
             ),
             useful_admission_count=admission_accounting.useful_count,
             useful_admission_rate=(admission_accounting.useful_count / max(1, admission_count)),
@@ -1439,6 +1712,9 @@ class PrefixKVCacheSimulator:
             scoring_fn_complexity=scoring_fn_complexity,
             matched_lengths=tuple(matched_lengths),
             structural_metrics=structural_metrics,
+            admission_decisions=(
+                tuple(admission_audit.decisions) if self.record_admission_diagnostics else ()
+            ),
         )
 
     @property
@@ -1603,7 +1879,17 @@ class PrefixKVCacheSimulator:
                     info,
                 )
             )
-        _, _, victim, _ = max(scored, key=lambda item: (item[0], item[1]))
+        if self.oracle_eviction:
+            _, _, victim, _ = min(
+                scored,
+                key=lambda item: self._oracle_eviction_key(
+                    item[2],
+                    now,
+                    audit_future_reuse,
+                ),
+            )
+        else:
+            _, _, victim, _ = max(scored, key=lambda item: (item[0], item[1]))
         victim_next_reuse = audit_future_reuse.next_distance(victim.prefix_hash, now)
         future_values = {
             candidate.prefix_hash: self._future_value_tokens(candidate, audit_future_reuse)
@@ -1695,6 +1981,21 @@ class PrefixKVCacheSimulator:
         """Return the oracle upper bound on future token hits for one block."""
         remaining_reuse = audit_future_reuse.remaining_count(block.prefix_hash)
         return block.token_count * max(0.0, remaining_reuse or 0.0)
+
+    def _oracle_eviction_key(
+        self,
+        block: _BlockState,
+        now: int,
+        audit_future_reuse: _FutureReuseTracker,
+    ) -> tuple[float, float, int]:
+        """Rank legal victims by future value, then furthest next use."""
+        next_distance = audit_future_reuse.next_distance(block.prefix_hash, now)
+        tie_distance = math.inf if next_distance is None else next_distance
+        return (
+            self._future_value_tokens(block, audit_future_reuse),
+            -tie_distance,
+            block.prefix_hash,
+        )
 
     def _advance_decodes(
         self,
@@ -2077,6 +2378,9 @@ class PrefixKVCacheEvaluator:
         simulator_factory: Callable[..., PrefixKVCacheSimulator] = (PrefixKVCacheSimulator),
         workload_builder: Callable[..., tuple[WorkloadRequest, ...]] | None = None,
         fixed_admission_factory: Callable[..., PrefixKVPolicy] | None = None,
+        record_admission_diagnostics: bool = False,
+        oracle_admission: bool = False,
+        oracle_eviction: bool = False,
     ) -> None:
         self.config = config or EvaluatorConfig()
         self.splits = splits
@@ -2084,6 +2388,9 @@ class PrefixKVCacheEvaluator:
         self._simulator_factory = simulator_factory
         self._workload_builder = workload_builder or build_workload
         self._fixed_admission_factory = fixed_admission_factory
+        self._record_admission_diagnostics = record_admission_diagnostics
+        self._oracle_admission = oracle_admission
+        self._oracle_eviction = oracle_eviction
 
     def __call__(
         self,
@@ -2095,16 +2402,41 @@ class PrefixKVCacheEvaluator:
         factory = factory or baseline_lru_blocks
         trials: list[TrialMetrics] = []
         capacity_blocks_values = self.config.effective_capacity_blocks()
+        prepared_streams = {}
+        stream_records = []
+        for workload in self.config.workload_configs(self.splits):
+            for seed in self.config.seeds:
+                actual_seed = seed + workload.seed_offset
+                requests = self._workload_builder(
+                    workload.family,
+                    request_count=workload.request_count,
+                    block_size_tokens=self.config.effective_workload_token_granularity(),
+                    seed=actual_seed,
+                )
+                prepared_streams[(workload.split, workload.family, seed)] = (
+                    actual_seed,
+                    requests,
+                )
+                stream_records.append(
+                    request_stream_fingerprint_record(
+                        requests,
+                        split=workload.split,
+                        family=workload.family,
+                        base_seed=seed,
+                        seed_offset=workload.seed_offset,
+                        actual_seed=actual_seed,
+                    )
+                )
+        panel_sha = self._synthetic_panel_sha(
+            capacity_blocks_values,
+            stream_records,
+        )
         for workload in self.config.workload_configs(self.splits):
             for capacity_blocks in capacity_blocks_values:
                 for seed in self.config.seeds:
-                    actual_seed = seed + workload.seed_offset
-                    requests = self._workload_builder(
-                        workload.family,
-                        request_count=workload.request_count,
-                        block_size_tokens=self.config.effective_workload_token_granularity(),
-                        seed=actual_seed,
-                    )
+                    actual_seed, requests = prepared_streams[
+                        (workload.split, workload.family, seed)
+                    ]
                     trials.append(
                         self._run_trial(
                             factory,
@@ -2117,7 +2449,11 @@ class PrefixKVCacheEvaluator:
                         )
                     )
 
-        return self._result_from_trials(trials, scoring_fn_complexity)
+        return self._result_from_trials(
+            trials,
+            scoring_fn_complexity,
+            panel_sha=panel_sha,
+        )
 
     def evaluate_requests(
         self,
@@ -2132,6 +2468,25 @@ class PrefixKVCacheEvaluator:
         """Evaluate a fixed metadata-derived request sequence."""
         factory = factory or baseline_lru_blocks
         request_tuple = tuple(requests)
+        stream = request_stream_fingerprint_record(
+            request_tuple,
+            split=split,
+            family=workload,
+            base_seed=seed,
+            seed_offset=0,
+            actual_seed=seed,
+        )
+        panel_sha = panel_sha256(
+            evaluation=self._panel_evaluation_metadata(
+                self.config.effective_capacity_blocks(),
+                splits=(split,),
+                request_count=len(request_tuple),
+                base_seeds=(seed,),
+                family_request_multipliers={},
+                stream_count=1,
+            ),
+            streams=(stream,),
+        )
         trials = [
             self._run_trial(
                 factory,
@@ -2144,7 +2499,11 @@ class PrefixKVCacheEvaluator:
             )
             for capacity_blocks in self.config.effective_capacity_blocks()
         ]
-        return self._result_from_trials(trials, scoring_fn_complexity)
+        return self._result_from_trials(
+            trials,
+            scoring_fn_complexity,
+            panel_sha=panel_sha,
+        )
 
     def rescore_trials(
         self,
@@ -2153,7 +2512,60 @@ class PrefixKVCacheEvaluator:
         scoring_fn_complexity: int = 0,
     ) -> EvaluationResult:
         """Reaggregate existing trials under this evaluator's score weights."""
-        return self._result_from_trials(list(trials), scoring_fn_complexity)
+        trial_list = list(trials)
+        panel_shas = {trial.panel_sha256 for trial in trial_list}
+        if "" in panel_shas or len(panel_shas) != 1:
+            raise ValueError("rescoring requires trials from exactly one fingerprinted panel")
+        return self._result_from_trials(
+            trial_list,
+            scoring_fn_complexity,
+            panel_sha=next(iter(panel_shas)),
+        )
+
+    def _synthetic_panel_sha(
+        self,
+        capacity_blocks: tuple[int, ...],
+        streams: list[dict[str, object]],
+    ) -> str:
+        """Return the manifest-compatible hash for this synthetic panel."""
+        return panel_sha256(
+            evaluation=self._panel_evaluation_metadata(
+                capacity_blocks,
+                splits=self.splits,
+                request_count=self.config.request_count,
+                base_seeds=self.config.seeds,
+                family_request_multipliers=dict(
+                    sorted(self.config.family_request_multipliers.items())
+                ),
+                stream_count=len(streams),
+            ),
+            streams=streams,
+        )
+
+    def _panel_evaluation_metadata(
+        self,
+        capacity_blocks: tuple[int, ...],
+        *,
+        splits: tuple[str, ...],
+        request_count: int,
+        base_seeds: tuple[int, ...],
+        family_request_multipliers: dict[str, int],
+        stream_count: int,
+    ) -> dict[str, object]:
+        """Return the canonical panel configuration used by workload manifests."""
+        return {
+            "splits": list(splits),
+            "capacity_blocks": list(capacity_blocks),
+            "capacity_tokens": [
+                capacity * self.config.block_size_tokens for capacity in capacity_blocks
+            ],
+            "physical_block_size_tokens": self.config.block_size_tokens,
+            "workload_token_granularity": (self.config.effective_workload_token_granularity()),
+            "request_count": request_count,
+            "base_seeds": list(base_seeds),
+            "family_request_multipliers": family_request_multipliers,
+            "stream_count": stream_count,
+        }
 
     def _run_trial(
         self,
@@ -2176,6 +2588,9 @@ class PrefixKVCacheEvaluator:
             kv_capacity_mode=self.config.kv_capacity_mode,
             expose_future_reuse=self.expose_future_reuse,
             max_memory_bytes=self.config.max_memory_bytes,
+            record_admission_diagnostics=self._record_admission_diagnostics,
+            oracle_admission=self._oracle_admission,
+            oracle_eviction=self._oracle_eviction,
         )
         tracing_already_started = tracemalloc.is_tracing()
         if tracing_already_started:
@@ -2242,7 +2657,16 @@ class PrefixKVCacheEvaluator:
         self,
         trials: list[TrialMetrics],
         scoring_fn_complexity: int,
+        *,
+        panel_sha: str,
     ) -> EvaluationResult:
+        for trial in trials:
+            trial.panel_sha256 = panel_sha
+        context_sha = evaluation_context_sha256(
+            verifier_version=self.config.verifier_version,
+            evaluator_config=self.config.model_dump(mode="json"),
+            panel_sha=panel_sha,
+        )
         invalid_fraction = (
             sum(1 for trial in trials if trial.invalid) / len(trials) if trials else 1.0
         )
@@ -2267,6 +2691,9 @@ class PrefixKVCacheEvaluator:
             scoring_fn_complexity,
         )
         return EvaluationResult(
+            verifier_version=self.config.verifier_version,
+            evaluation_context_sha256=context_sha,
+            panel_sha256=panel_sha,
             combined_score=score_breakdown["combined_score"],
             success=selection_invalid_fraction == 0.0,
             invalid_fraction=selection_invalid_fraction,
@@ -2274,6 +2701,9 @@ class PrefixKVCacheEvaluator:
             workload_metrics=workload_metrics,
             capacity_metrics=capacity_metrics,
             candidate_metadata={
+                "verifier_version": self.config.verifier_version,
+                "evaluation_context_sha256": context_sha,
+                "panel_sha256": panel_sha,
                 "capacity_blocks": self.config.capacity_blocks,
                 "capacity_sweep_blocks": ",".join(
                     str(value) for value in self.config.effective_capacity_blocks()
@@ -2308,6 +2738,8 @@ class PrefixKVCacheEvaluator:
                     "configured" if self.config.latency_norm > 0.0 else "workload_capacity"
                 ),
                 "expose_future_reuse": self.expose_future_reuse,
+                "oracle_admission": self._oracle_admission,
+                "oracle_eviction": self._oracle_eviction,
                 "fixed_admission_policy": self.config.fixed_admission_policy or "",
                 "reporting_invalid_fraction": invalid_fraction,
                 "selection_invalid_fraction": selection_invalid_fraction,

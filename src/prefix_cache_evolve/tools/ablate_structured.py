@@ -13,6 +13,10 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import (
     EvaluationResult,
     PrefixKVCacheEvaluator,
 )
+from prefix_cache_evolve.evaluators.verifier import (
+    require_single_score_identity,
+    require_single_verifier_version,
+)
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import (
     load_evaluator_config,
 )
@@ -130,9 +134,12 @@ def _factory(disabled: frozenset[str]):
     return build_candidate
 
 
-def _summary(result: EvaluationResult, split: str) -> dict[str, float]:
+def _summary(result: EvaluationResult, split: str) -> dict[str, float | str]:
     metrics = result.split_metrics[split]
     return {
+        "verifier_version": result.verifier_version,
+        "evaluation_context_sha256": result.evaluation_context_sha256,
+        "panel_sha256": result.panel_sha256,
         "combined_score_without_complexity": result.combined_score,
         "mean_workload_score": result.score_breakdown["mean_workload_score"],
         "min_workload_contribution": result.score_breakdown["min_workload_contribution"],
@@ -173,8 +180,20 @@ def run_ablation(config_path: Path) -> dict[str, object]:
                 },
             }
         )
+    identities = {
+        panel: require_single_score_identity(
+            (row[panel] for row in rows),
+            context=f"structured ablation {panel} comparison",
+        )
+        for panel in ("selection", "probe")
+    }
     return {
         "schema": "prefix-kv-cache-structured-ablation-v1",
+        "verifier_version": config.verifier_version,
+        "evaluation_contexts": {
+            panel: identity.evaluation_context_sha256 for panel, identity in identities.items()
+        },
+        "panel_sha256s": {panel: identity.panel_sha256 for panel, identity in identities.items()},
         "config": str(config_path),
         "complexity_note": (
             "Behavior-only ablations are evaluated with complexity zero; source "
@@ -186,8 +205,32 @@ def run_ablation(config_path: Path) -> dict[str, object]:
 
 def _write_markdown(path: Path, payload: dict[str, object]) -> None:
     variants = payload["variants"]
+    verifier_version = require_single_verifier_version(
+        (row[panel] for row in variants for panel in ("selection", "probe")),
+        context="structured ablation report",
+    )
+    identities = {
+        panel: require_single_score_identity(
+            (row[panel] for row in variants),
+            context=f"structured ablation {panel} comparison",
+        )
+        for panel in ("selection", "probe")
+    }
+    if verifier_version != payload.get("verifier_version"):
+        raise ValueError("structured ablation report version does not match its score rows")
     lines = [
         "# Structured Prefix KV-Cache Ablation",
+        "",
+        f"Verifier: `{verifier_version}`",
+        "",
+        "Evaluation contexts: "
+        + ", ".join(
+            f"`{panel}={identity.evaluation_context_sha256}`"
+            for panel, identity in identities.items()
+        ),
+        "",
+        "Panels: "
+        + ", ".join(f"`{panel}={identity.panel_sha256}`" for panel, identity in identities.items()),
         "",
         str(payload["complexity_note"]),
         "",

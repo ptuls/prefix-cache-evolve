@@ -14,10 +14,12 @@
       384,
       768
     ],
+    "evaluation_context_sha256": "b4d8e05f8eecb686ee399e7145458efcf8c6b81955a8ed4adc4ed850df2fb99d",
     "family_request_multipliers": {
       "tenant_phase_shift_cycles": 3,
       "tenant_phase_shift_cycles_shifted": 4
     },
+    "panel_sha256": "4607782d231560f5d51c5f0347a789b7b82a7e8ff4d78ec5f1adb576c68d2c8f",
     "physical_block_size_tokens": 8,
     "request_count": 96,
     "splits": [
@@ -27,8 +29,10 @@
       "hidden"
     ],
     "stream_count": 81,
+    "verifier_version": "1.0.0",
     "workload_token_granularity": 8
   },
+  "evaluation_context_sha256": "b4d8e05f8eecb686ee399e7145458efcf8c6b81955a8ed4adc4ed850df2fb99d",
   "generator": {
     "module": "prefix_cache_evolve.evaluators.workloads",
     "python_implementation": "CPython",
@@ -1446,5 +1450,6 @@
       "total_prompt_tokens": 21655,
       "unique_prompt_count": 217
     }
-  ]
+  ],
+  "verifier_version": "1.0.0"
 }

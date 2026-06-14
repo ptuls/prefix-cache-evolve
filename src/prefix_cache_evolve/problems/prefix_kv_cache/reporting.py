@@ -11,6 +11,7 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import (
     EvaluationResult,
     EvaluatorConfig,
 )
+from prefix_cache_evolve.evaluators.verifier import require_single_score_identity
 
 QUICK_REPORT_WARNING = (
     "SMOKE-ONLY: `--quick` uses `request_count=36` and one seed. "
@@ -36,6 +37,10 @@ def baseline_report_headline(
     metadata: BaselineMetadata = BASELINE_REGISTRY,
 ) -> str:
     """Summarize candidate rank without mixing deployable and oracle claims."""
+    require_single_score_identity(
+        (result for _, result in ranked),
+        context="baseline report headline",
+    )
     names = [name for name, _ in ranked]
     if "candidate" not in names:
         return "Reporting baselines ranked by combined score."
@@ -82,11 +87,21 @@ def write_baseline_comparison_report(
     metadata: BaselineMetadata = BASELINE_REGISTRY,
 ) -> Path:
     """Write a Markdown comparison of the candidate and reporting baselines."""
+    identity = require_single_score_identity(
+        results.values(),
+        context="baseline comparison report",
+    )
     ranked = sorted(results.items(), key=lambda item: item[1].combined_score, reverse=True)
     lines = [
         "# Prefix KV-Cache Best Program Baseline Comparison",
         "",
         f"Candidate: `{candidate_path}`",
+        "",
+        f"Verifier: `{identity.verifier_version}`",
+        "",
+        f"Evaluation context: `{identity.evaluation_context_sha256}`",
+        "",
+        f"Panel: `{identity.panel_sha256}`",
         "",
         "Command:",
         "",
@@ -134,6 +149,10 @@ def write_baseline_plot_files(
     results: dict[str, EvaluationResult],
 ) -> tuple[Path, ...]:
     """Render baseline comparison SVG files."""
+    require_single_score_identity(
+        results.values(),
+        context="baseline comparison plots",
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     paths = (
         output_dir / "baseline_combined_scores.svg",

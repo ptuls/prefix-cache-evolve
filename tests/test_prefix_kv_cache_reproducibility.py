@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 import json
 from pathlib import Path
 
@@ -14,14 +13,17 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import (
     PrefixKVCacheEvaluator,
     baseline_lru_blocks,
 )
+from prefix_cache_evolve.evaluators.verifier import VERIFIER_VERSION
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import load_evaluator_config
 from prefix_cache_evolve.problems.prefix_kv_cache.pressure_aware_incumbent import (
     build_candidate,
 )
 from prefix_cache_evolve.problems.prefix_kv_cache.reproducibility import (
     build_workload_manifest,
+    file_sha256,
     stable_workload_manifest_payload,
 )
+from tests.support import score_identity
 
 _DISCOVERY_INCUMBENT_PATH = Path(
     "src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py"
@@ -29,9 +31,7 @@ _DISCOVERY_INCUMBENT_PATH = Path(
 _PRODUCTION_INCUMBENT_PATH = Path(
     "src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py"
 )
-_PROMOTED_PRODUCTION_ARTIFACT_PATH = Path(
-    "artifacts/prefix_kv_cache_simplification_runs/20260609T051303Z/elite_65_649.py"
-)
+_PRODUCTION_INCUMBENT_SHA256 = "43cc3f7267cac1bf5409e13a70e72aba9ba6c39c3e1d870fde4885e29db83adb"
 _ONE_SEED_DISCOVERY_TOKEN_HIT_RATES = {
     "train/shared_system_prompt": 0.834446919079436,
     "train/rag_template_reuse": 0.820967146548542,
@@ -53,22 +53,49 @@ _ONE_SEED_DISCOVERY_TOKEN_HIT_RATES = {
 }
 
 
+def _single_workload_config(**updates: object) -> EvaluatorConfig:
+    """Return a compact deterministic config for identity tests."""
+    values = {
+        "capacity_blocks": 4,
+        "request_count": 8,
+        "seeds": (11,),
+        "train_families": ("shared_system_prompt",),
+        "validation_families": (),
+        "probe_families": (),
+        "hidden_families": (),
+    }
+    values.update(updates)
+    return EvaluatorConfig(**values)
+
+
+def _manifest_record(
+    *,
+    verifier_version: str = VERIFIER_VERSION,
+    evaluation_verifier_version: str | None = None,
+) -> dict[str, object]:
+    """Return a minimal internally versioned workload manifest."""
+    return {
+        "schema": "v1",
+        **score_identity(verifier_version=verifier_version),
+        "evaluation": {
+            **score_identity(verifier_version=evaluation_verifier_version or verifier_version),
+            "stream_count": 1,
+        },
+        "streams": [{"request_stream_sha256": "stream"}],
+    }
+
+
 def test_workload_manifest_is_deterministic_and_records_actual_seed() -> None:
-    config = EvaluatorConfig(
-        capacity_blocks=4,
+    config = _single_workload_config(
         capacity_sweep_blocks=(4, 8),
-        request_count=8,
-        seeds=(11,),
-        train_families=("shared_system_prompt",),
-        validation_families=(),
-        probe_families=(),
-        hidden_families=(),
     )
 
     first = build_workload_manifest(config, splits=("train",))
     second = build_workload_manifest(config, splits=("train",))
 
     assert first == second
+    assert first["verifier_version"] == VERIFIER_VERSION
+    assert first["evaluation"]["verifier_version"] == VERIFIER_VERSION
     assert first["evaluation"]["stream_count"] == 1
     assert first["streams"][0]["actual_seed"] == 1011
     assert len(first["streams"][0]["request_stream_sha256"]) == 64
@@ -94,6 +121,40 @@ def test_deterministic_policy_evaluation_repeats_exactly() -> None:
     assert first == second
 
 
+def test_evaluator_identity_matches_workload_manifest() -> None:
+    config = _single_workload_config(
+        capacity_sweep_blocks=(4, 8),
+    )
+
+    result = PrefixKVCacheEvaluator(config, splits=("train",))(baseline_lru_blocks)
+    manifest = build_workload_manifest(config, splits=("train",))
+
+    assert result.panel_sha256 == manifest["panel_sha256"]
+    assert result.evaluation_context_sha256 == manifest["evaluation_context_sha256"]
+
+
+def test_score_config_change_preserves_panel_but_changes_context() -> None:
+    config = _single_workload_config()
+    changed = config.with_updates(churn_weight=config.churn_weight + 0.1)
+
+    first = build_workload_manifest(config, splits=("train",))
+    second = build_workload_manifest(changed, splits=("train",))
+
+    assert first["panel_sha256"] == second["panel_sha256"]
+    assert first["evaluation_context_sha256"] != second["evaluation_context_sha256"]
+
+
+def test_rescore_preserves_panel_but_changes_context() -> None:
+    config = _single_workload_config()
+    result = PrefixKVCacheEvaluator(config, splits=("train",))(baseline_lru_blocks)
+    changed = config.with_updates(churn_weight=config.churn_weight + 0.1)
+
+    rescored = PrefixKVCacheEvaluator(changed, splits=("train",)).rescore_trials(result.trials)
+
+    assert rescored.panel_sha256 == result.panel_sha256
+    assert rescored.evaluation_context_sha256 != result.evaluation_context_sha256
+
+
 def test_discovery_panel_matches_committed_workload_fingerprint() -> None:
     config = load_evaluator_config(Path("configs/prefix_kv_cache_discovery.yaml"))
     committed = json.loads(
@@ -103,19 +164,18 @@ def test_discovery_panel_matches_committed_workload_fingerprint() -> None:
     generated = build_workload_manifest(config)
 
     assert generated["panel_sha256"] == committed["panel_sha256"]
+    assert generated["evaluation_context_sha256"] == committed["evaluation_context_sha256"]
     assert generated["panel_sha256"] == (
         "4607782d231560f5d51c5f0347a789b7b82a7e8ff4d78ec5f1adb576c68d2c8f"
+    )
+    assert generated["evaluation_context_sha256"] == (
+        "b4d8e05f8eecb686ee399e7145458efcf8c6b81955a8ed4adc4ed850df2fb99d"
     )
 
 
 def test_stable_manifest_payload_ignores_environment_metadata() -> None:
-    manifest = {
-        "schema": "v1",
-        "panel_sha256": "panel",
-        "evaluation": {"stream_count": 1},
-        "streams": [{"request_stream_sha256": "stream"}],
-        "generator": {"python_version": "3.11.9", "source_file": "old.py"},
-    }
+    manifest = _manifest_record()
+    manifest["generator"] = {"python_version": "3.11.9", "source_file": "old.py"}
     regenerated = {
         **manifest,
         "generator": {"python_version": "3.12.3", "source_file": "workloads.py"},
@@ -124,6 +184,20 @@ def test_stable_manifest_payload_ignores_environment_metadata() -> None:
     assert stable_workload_manifest_payload(manifest) == stable_workload_manifest_payload(
         regenerated
     )
+
+
+def test_stable_manifest_payload_rejects_verifier_version_drift() -> None:
+    current = _manifest_record()
+    prior = _manifest_record(verifier_version="0.9.0")
+
+    assert stable_workload_manifest_payload(current) != stable_workload_manifest_payload(prior)
+
+
+def test_stable_manifest_payload_refuses_mixed_verifier_versions() -> None:
+    manifest = _manifest_record(evaluation_verifier_version="0.9.0")
+
+    with pytest.raises(ValueError, match="refuses mixed verifier versions"):
+        stable_workload_manifest_payload(manifest)
 
 
 def test_pressure_aware_incumbent_matches_one_seed_discovery_scores() -> None:
@@ -149,9 +223,8 @@ def test_pressure_aware_incumbent_matches_one_seed_discovery_scores() -> None:
         )
 
 
-def test_production_incumbent_matches_promoted_artifact() -> None:
+def test_production_incumbent_source_is_pinned() -> None:
     source = _PRODUCTION_INCUMBENT_PATH.read_text(encoding="utf-8")
-    artifact_source = _PROMOTED_PRODUCTION_ARTIFACT_PATH.read_text(encoding="utf-8")
 
-    assert ast.dump(ast.parse(source)) == ast.dump(ast.parse(artifact_source))
+    assert file_sha256(_PRODUCTION_INCUMBENT_PATH) == _PRODUCTION_INCUMBENT_SHA256
     assert scoring_fn_complexity(source, form_aware=True) == 572

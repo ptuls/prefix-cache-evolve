@@ -86,7 +86,7 @@
 \title{\textbf{\color{navy}Prefix KV-Cache Policy Evolution}\\
 \large Supplementary Research Log and Negative Results}
 \author{Experimental Record}
-\date{June 9, 2026}
+\date{June 10, 2026}
 
 \begin{document}
 
@@ -98,8 +98,12 @@ measurements, engineering journey, and rejected evolutionary solutions behind th
 current system.  It is intentionally separated from the main technical report so that
 \filepath{docs/technical_report.tex} can present the current method and evidence
 without reading like a lab notebook.  Operative claims should be taken from the main
-report and the generated summaries under \filepath{docs/results/}; historical scores
-below are not necessarily comparable across verifier revisions.
+report; this log is the canonical narrative record for experiments, while generated
+machine-readable evidence remains under \filepath{artifacts/} and
+\filepath{docs/results/}. Historical scores below are not necessarily comparable
+across verifier revisions.  Verifier
+\identifier{1.0.0} is the first machine-enforced score contract; earlier unstamped
+measurements are legacy records rather than \identifier{1.0.0} results.
 \end{abstract}
 
 \tableofcontents
@@ -112,6 +116,11 @@ retains detailed run narratives because failed searches, verifier changes, and
 negative results explain why the current workflow has its present trust boundaries,
 feedback channels, and promotion gates.  The main report cites only the conclusions
 that remain relevant to the current design.
+
+Current configurations, manifests, score records, and generated report rows carry a
+strict semantic verifier version.  Report code refuses to tabulate missing or mixed
+versions.  No semantic version is retroactively assigned to historical runs whose
+saved score records predate this contract.
 
 \important{Physical block-size key.}  Score-bearing sections are tagged
 \blocktag{8}, \blocktag{16}, or \mixedblocktag.  These tags identify the physical KV
@@ -226,7 +235,7 @@ caveat from the policy-quality result.
 verifier.  It documents the environment that produced the promoted policy; it is not
 the operative production-oriented ranking.  Under the current \(16\)-token default,
 TinyLFU-LRU leads the incumbent by \(0.791\) combined-score points, as summarized in
-the workload-model section and \filepath{docs/results/block_size_robustness.md}.
+the workload-model section and the geometry discussion later in this log.
 
 \begin{center}
 \scriptsize
@@ -327,8 +336,8 @@ incumbent decode allocation failure is \(77.5\%\), including \(91.1\%\) on
 reduces incumbent token hit from \(0.7145\) to \(0.4716\).  No prefix eviction policy
 can reclaim capacity occupied by active decode KV, so the next useful policy surface
 must include scheduler actions such as admission control, preemption, swapping, or
-separate prefix/decode budgets.  The complete panel is retained in
-\filepath{docs/results/reasoning_kv_robustness.md}.
+separate prefix/decode budgets.  The complete machine-readable panel is retained in
+\filepath{artifacts/prefix_kv_cache_reasoning_kv_analysis.json}.
 
 \subsection{Held-out structure-generalization probe}
 
@@ -412,8 +421,7 @@ is entirely explained by the \(0.264\) complexity-cost increase: raw probe behav
 improves by \(0.047\).  The fourth-term ablation therefore establishes that the term is
 load-bearing, while probe decomposition and the passed tripwire establish that it does
 not introduce a quiet held-out behavioral regression.  The exact ablation is retained
-in \filepath{docs/results/priority_aware_pressure_ablation.md}; the policy is
-promoted as the stable incumbent.
+in this subsection; the policy is promoted as the stable incumbent.
 
 The retained discovery-search configuration makes the two remaining weaknesses visible
 to mutation
@@ -500,7 +508,7 @@ the incumbent descendant-protection weight from \(0.2\) to \(0.6\)---keeps compo
 complexity at 636 and gains \(0.168\) raw selection, but loses \(0.006\) hidden score.
 It therefore remains a useful distillation result rather than a promotion candidate.
 Full counts, split-level regret, and compact variants are retained in
-\filepath{docs/results/eviction_policy_analysis.md}.
+\filepath{artifacts/prefix_kv_cache_eviction_analysis.json}.
 
 \subsection{Post-expansion evolution result}
 \label{sec:post-expansion}
@@ -725,6 +733,237 @@ but its combined score is worse because it admits too much dead content and chur
 more.  This is precisely the kind of distinction the expanded verifier was intended to
 surface.
 
+\section{Admission--Eviction Mechanism Diagnostics}
+\label{sec:mechanism-diagnostics}
+
+This section preserves four theory-grounded admission--eviction diagnostics.  Exact
+per-decision, per-group, and crossed-policy records remain in the corresponding JSON
+files under \filepath{artifacts/}.  Unlike the historical score chronology, these
+records carry the machine-enforced verifier identity used when they were generated.
+
+\subsection{Local same-state regret audit}
+
+\blocktag{16} The first falsification test decomposed local regret into avoidable
+admission, avoidable rejection, and value-weighted avoidable eviction.  The
+future-value surrogate is block token count times remaining request occurrences.
+For an incoming block, the audit compares that value with the cheapest legal
+displacement; for eviction, it compares the chosen victim with the cheapest legal
+victim.  This is a same-state diagnostic rather than a realized counterfactual replay.
+
+The strict claim that admission-side regret dominates in every
+workload--capacity--seed group is falsified.  Admission dominates 81 of 123 regretful
+groups, leaving 42 eviction-dominant counterexamples.  It nevertheless contributes
+\(181{,}327\) future-token units versus \(31{,}565\) for eviction, or \(85.2\%\) of
+aggregate surrogate regret.  Admission regret per decision is \(8.56\), compared with
+\(5.84\) for eviction; after normalizing within each group by the number of decisions,
+admission dominates only 61 of 123 groups.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lrrrrrr}
+\toprule
+Split & Regretful & Admission dominant & Rate & Admission regret &
+Eviction regret & Margin \\
+\midrule
+Hidden & 45 & 31 & 68.9\% & 30,182 & 18,255 & +11,927 \\
+Probe & 9 & 6 & 66.7\% & 49,490 & 822 & +48,668 \\
+Train & 24 & 12 & 50.0\% & 83,380 & 5,746 & +77,634 \\
+Validation & 45 & 32 & 71.1\% & 18,275 & 6,742 & +11,533 \\
+\bottomrule
+\end{tabular}
+\caption{Local admission--eviction regret by split.}
+\label{tab:local-regret-by-split}
+\end{table}
+
+The strongest recurring counterexamples are shifted heavy-tailed prefixes, shifted
+tenant cycles, shared-system-prompt traffic, priority one-off noise, and cyclic
+working-set pressure.  They justify an eviction-specific follow-up, but not a uniform
+eviction-first rule.  The complete group records and exact counterexample ranking are
+retained in
+\filepath{artifacts/prefix_kv_cache_admission_eviction_regret_audit.json}.
+
+\subsection{Admission-policy by eviction-policy matrix}
+
+\blocktag{16} A second experiment crossed every distinct admission implementation with
+LRU, LFU, cost-aware LRU, the incumbent's compact value-aware eviction, and a
+reporting-only constrained next-use control.  Eviction strategy materially changes
+realized hit rate under every nontrivial admission policy, but a complex eviction
+algorithm is not required: LFU and the incumbent's value-aware rule are usually close.
+
+\begin{table}[H]
+\centering
+\small
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrr}
+\toprule
+Admission & LRU hit & Best deployable eviction & Best hit & Gain &
+Oracle hit & Oracle headroom \\
+\midrule
+Admit all & 0.5205 & Incumbent value-aware & 0.5431 & +0.0226 & 0.5642 & +0.0211 \\
+Full blocks only & 0.5123 & LFU & 0.5219 & +0.0096 & 0.5283 & +0.0064 \\
+TinyLFU & 0.5286 & Incumbent value-aware & 0.5431 & +0.0145 & 0.5619 & +0.0188 \\
+Compact seed & 0.5247 & Incumbent value-aware & 0.5463 & +0.0217 & 0.5666 & +0.0203 \\
+Structured seed & 0.5422 & LFU & 0.5558 & +0.0136 & 0.5673 & +0.0114 \\
+Structured recurrence & 0.5380 & LFU & 0.5549 & +0.0169 & 0.5694 & +0.0145 \\
+Pressure-aware incumbent & 0.5448 & Incumbent value-aware & 0.5535 & +0.0087 &
+0.5684 & +0.0150 \\
+Oracle future reuse & 0.5677 & Incumbent value-aware & 0.5714 & +0.0037 &
+0.5795 & +0.0082 \\
+\bottomrule
+\end{tabular}
+}
+\caption{Best eviction rule for each admission implementation.}
+\label{tab:admission-eviction-matrix}
+\end{table}
+
+The best deployable pairing is structured admission plus LFU at \(0.5558\) mean
+token hit.  For the pressure-aware incumbent, value-aware eviction beats LRU in 76
+groups, ties in 80, and loses in 6, for a mean \(+0.0087\) token-hit delta.
+Constrained next-use reaches \(0.5684\), leaving measurable eviction headroom.  The
+result explains why the best replacement rules remain simple: admission determines
+which value distribution enters the cache, while a compact frequency-aware victim
+ranking captures most of the remaining deployable gain.  The complete 45-cell matrix
+is retained in
+\filepath{artifacts/prefix_kv_cache_admission_eviction_policy_matrix.json}.
+
+\subsection{Shadow-price tracking and the bandwidth hypothesis}
+
+\mixedblocktag The shadow-price replay covers 60 validation
+workload--capacity--seed groups with 96 requests per workload, seeds 11, 23, and 37,
+and capacities 8, 16, 24, and 48 blocks.  It defines the oracle water level as
+\(\lambda_t^\star=\mu_t/w\), where \(\mu_t\) is the cheapest legal displacement value
+and \(w\) is one physical cache slot in token units.  Because the policy score has
+arbitrary heuristic units, each replay fits a nonnegative no-intercept scale
+\(\beta\) from score to oracle surplus density.  The policy-implied water level is
+\(F_t/w-\beta s_t\), preserving the policy's actual zero crossing.
+
+The strict bandwidth prediction is falsified.  Of 22 regretful groups with measurable
+oracle-price movement, 16 (\(72.7\%\)) place a disproportionate share of admission
+regret in their fastest-change decisions.  Those decisions are only \(3.5\%\) of the
+total but contain \(12.5\%\) of admission regret, a \(3.96\times\) fast/slow
+regret-density lift.  Mean calibrated tracking RMSE is \(5.9622\) future-value units
+per cache token, mean absolute error is \(2.5956\), and mean
+shadow-movement/regret correlation is \(+0.184\).
+
+\begin{table}[H]
+\centering
+\small
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lrrrrrrrr}
+\toprule
+Workload & Regretful & Concentrated & Rate & Fast decisions &
+Fast regret & Lift & RMSE & Corr. \\
+\midrule
+Hotset/cold scan & 3 & 3 & 100.0\% & 4.0\% & 100.0\% & \(\infty\) & 9.0975 & +0.700 \\
+Phase shifts & 0 & 0 & 0.0\% & 0.0\% & 0.0\% & \(1.00\times\) & 0.0000 & +0.000 \\
+Priority bursts & 6 & 4 & 66.7\% & 5.8\% & 11.0\% & \(2.03\times\) & 7.1514 & +0.057 \\
+Stochastic mix & 4 & 2 & 50.0\% & 3.2\% & 9.4\% & \(3.10\times\) & 5.0478 & +0.048 \\
+Tenant cycles & 9 & 7 & 77.8\% & 2.6\% & 11.7\% & \(4.99\times\) & 4.5308 & +0.158 \\
+\bottomrule
+\end{tabular}
+}
+\caption{Shadow-price bandwidth diagnostic by workload.}
+\label{tab:shadow-price-by-workload}
+\end{table}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{rrrrrrr}
+\toprule
+Capacity & Regretful & Concentrated & Rate & Fast decisions & Fast regret & Lift \\
+\midrule
+8 & 12 & 10 & 83.3\% & 5.4\% & 14.5\% & \(2.96\times\) \\
+16 & 7 & 4 & 57.1\% & 1.8\% & 7.0\% & \(4.18\times\) \\
+24 & 3 & 2 & 66.7\% & 1.3\% & 5.1\% & \(4.22\times\) \\
+48 & 0 & 0 & 0.0\% & 0.0\% & 0.0\% & \(1.00\times\) \\
+\bottomrule
+\end{tabular}
+\caption{Shadow-price bandwidth diagnostic by cache capacity.}
+\label{tab:shadow-price-by-capacity}
+\end{table}
+
+The main limitation is identifiability, not merely imperfect tracking.  In 38 of 60
+groups, a zero-future-value legal victim pins \(\mu_t\) and therefore
+\(\lambda_t^\star\) at zero.  All 48-block groups and all phase-shift-prompt groups
+have this degeneracy.  A zero-movement group is not evidence that the policy tracks the
+water level successfully; it means that the local relaxation provides no bandwidth
+signal.  Pressure half-life is therefore a plausible loop-bandwidth parameter only in
+capacity-constrained regimes where displacement price actually moves.  Tracking error
+is useful as a quarantined mechanism-diversity coordinate, not as a direct selection
+reward or deployable future-value estimate.
+
+\subsection{Crossed causal admission--eviction replay}
+
+\mixedblocktag The decisive component experiment replays every
+workload--capacity--seed group in four cells: incumbent admission plus incumbent
+eviction (\(II\)), oracle admission plus incumbent eviction (\(OI\)), incumbent
+admission plus oracle eviction (\(IO\)), and both oracle components (\(OO\)).  Oracle
+admission accepts exactly when future occurrence value exceeds the cheapest legal
+displacement value.  Oracle eviction selects the legal leaf with minimum future
+occurrence value, breaking ties by furthest next use.  Incumbent score functions still
+execute so each intervention replaces only the selected action rule.
+
+The primary outcome is the evaluator's behavioral group score with the future-aware
+avoidable-eviction penalty and common complexity charge omitted.  This prevents the
+causal outcome from directly rewarding agreement with the audit surrogate.  The full
+panel contains 162 groups with 96 requests per workload, capacities 24 and 48 blocks,
+and three seeds.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lrrrrrr}
+\toprule
+Group set & \(n\) & \(\sum\tau_A\) & \(\sum\tau_E\) &
+\(\sum\tau_{AE}\) & Eviction after \(O_A\) & Retained \\
+\midrule
+Full panel & 162 & 1704.963 & 518.431 & -258.918 & 259.513 & 50.1\% \\
+Audit eviction-dominant & 29 & 530.681 & 419.871 & -340.599 & 79.271 & 18.9\% \\
+\bottomrule
+\end{tabular}
+\caption{Crossed causal component effects.  Eviction after \(O_A\) is
+\(Y_{OO}-Y_{OI}=\tau_E+\tau_{AE}\).}
+\label{tab:research-causal-components}
+\end{table}
+
+Admission has \(3.29\times\) the aggregate main effect of eviction and is larger in
+136 of 162 groups.  In the 29 groups labeled eviction-dominant by the local same-state
+audit, admission is causally larger in 23.  Oracle admission removes \(81.1\%\) of
+their aggregate eviction value, and 18 of 29 retain no positive eviction effect after
+admission is repaired.  Across the full panel, 37 of 162 groups retain positive
+residual eviction value.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lrrrrr}
+\toprule
+Split & Groups & \(\tau_A\) & \(\tau_E\) & \(\tau_{AE}\) &
+Eviction after \(O_A\) \\
+\midrule
+Hidden & 60 & 445.852 & 110.284 & 40.501 & 150.786 \\
+Probe & 12 & 86.019 & 24.103 & -2.933 & 21.170 \\
+Train & 30 & 588.057 & 233.135 & -180.684 & 52.451 \\
+Validation & 60 & 585.036 & 150.908 & -115.802 & 35.106 \\
+\bottomrule
+\end{tabular}
+\caption{Causal component effects by split.}
+\label{tab:research-causal-by-split}
+\end{table}
+
+The interaction adjudicates the hybrid question directly.  Admission repairs dissolve
+most apparent eviction value in the audit-labeled counterexamples, so those local
+surrogate labels should not be read as a mandate for globally richer eviction.
+Residual eviction value is nevertheless real and concentrated: hidden
+heavy-tailed-prefix, hidden cyclic-pressure, agentic-workflow, and tenant-cycle
+families retain material gains after oracle admission.  The engineering conclusion is
+asymmetric: optimize admission first, then gate richer eviction logic into the
+minority regimes where its value survives the admission intervention.  Secondary
+outcomes in the JSON artifact---token hit, block hit, saved tokens, p95 latency, and
+churn---support the same directional conclusion.
+
 \section{Engineering Journey: From Prototype to Productive Evolution}
 \label{app:engineering-journey}
 
@@ -815,7 +1054,56 @@ This work changed the objective repeatedly.  Historical scores are consequently 
 as a record of search progression, but not all are numerically comparable.  The report
 keeps those historical results because the verifier changes are themselves part of
 the journey: every new metric or workload was introduced in response to a concrete
-shortcut or blind spot.
+shortcut or blind spot.  They remain explicitly unversioned unless their original
+artifact records a verifier semantic version.
+
+\subsection{Future-information contract audit}
+
+The retained deployable policies do not use explicit future information.  Source
+inspection found future-reuse references only in the two reporting-only oracle
+baselines.  Historical candidates that attempted to reference future-reuse fields
+could not receive those values during normal evaluation, and the current static gate
+rejects such source before execution.
+
+The audit did identify indirect leakage opportunities in the evaluator contract.
+Those surfaces were removed so deployable callbacks receive only online policy
+signals:
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{@{}p{0.24\textwidth}XX@{}}
+\toprule
+\textbf{Surface} & \textbf{Previous behavior} & \textbf{Current contract} \\
+\midrule
+Future reuse and next-use distance &
+Available only when a future-aware mode was enabled &
+Deployable callbacks receive no values; baselines requiring them cannot be deployable \\
+Workload-generation seed &
+Passed to the candidate factory &
+Factory receives an independent fixed policy seed \\
+Request ID &
+Sequential benchmark position &
+Stable opaque hash \\
+Request type &
+Descriptive synthetic workload label &
+Normalized to \identifier{request} \\
+Prompt tokens &
+Usually empty but accepted from custom streams &
+Always empty in candidate-visible metadata \\
+Internal regret state &
+Computed by the simulator for reporting &
+Never copied into deployable block metadata \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+Regression tests cover miss, hit, admission, and eviction callbacks, policy-seed
+independence, and rejection of future-aware deployable baselines.  This establishes an
+experimental information contract, not an adversarial Python security boundary.
+Candidate code still executes in an isolated worker with resource limits rather than a
+capability-separated policy DSL, so intentionally malicious reflection remains outside
+the claim.  The ranked policies do not use those techniques, and the removed metadata
+surfaces were not consumed by their source.
 
 \subsection{Making Levi a reliable experimental component}
 
@@ -1077,8 +1365,35 @@ retained lineage to \$21.981 across 1,505 evaluations.  Adding the documented
 old-verifier, structured-policy, and two eviction-specialist stages yields a
 pre-promotion research total of at least \$44.845 across 2,989 evaluations.  This is
 still a lower bound because deterministic sweeps, local simulator compute, manual
-analysis, and unretained experiments are not priced.  The auditable breakdown is
-retained in \filepath{docs/results/search_cost_tally.md}.
+analysis, and unretained experiments are not priced.
+
+\begin{center}
+\small
+\begin{tabular}{lrr}
+\toprule
+\textbf{Stage} & \textbf{Evaluations} & \textbf{Recorded API cost} \\
+\midrule
+Early old-verifier iterations & 394 & \$6.473 \\
+Three structured-policy searches & 294 & \$7.682 \\
+Six retained discovery-verifier runs & 1,108 & \$16.911 \\
+Full-policy eviction-specialist run & 298 & \$4.376 \\
+Function-only eviction-specialist run & 498 & \$4.334 \\
+Production-oriented search & 299 & \$4.133 \\
+Dedicated simplification search & 98 & \$0.937 \\
+\midrule
+Documented pre-promotion total & 2,989 & \$44.845 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The retained sources are the run summaries under
+\filepath{artifacts/prefix_kv_cache_runs},
+\filepath{artifacts/prefix_kv_cache_production_runs},
+\filepath{artifacts/prefix_kv_cache_simplification_runs}, and
+\filepath{artifacts/prefix_kv_cache_eviction_specialist_runs}, plus the function-only
+snapshot under \filepath{runs/20260608_150431_280387}.  Early and structured stages
+whose run directories are no longer retained are recorded in the chronology tables
+above.
 
 The practical gain was therefore not one-shot cheapness.  The workflow made the
 research loop faster: a failed candidate could be decomposed into behavior,
@@ -1097,8 +1412,7 @@ percentage points.  The admission threshold learned for 16-token blocks is there
 too selective for finer-grained cache entries, especially after capacity becomes
 large enough that eviction pressure subsides.  Promotion is consequently scoped to
 16-token deployments; a geometry-robust successor must include both block sizes in
-selection.  Full results are retained in
-\filepath{docs/results/incumbent_geometry_sweep.md}.
+selection.
 
 \mixedblocktag A second sweep held cache capacity fixed at 384 and 768 tokens while increasing
 physical block size through 16, 24, 32, 48, and 64 tokens.  This falsified the
@@ -1110,8 +1424,7 @@ were already negative from 32 tokens onward, so complexity accounting is not the
 cause.  Coarse blocks instead destroy reusable-prefix resolution and reduce the
 number of independently retainable cache entries.  Sixteen tokens is the optimum
 of the tested coarse range; further crossover work should concentrate between 8 and
-24 tokens.  The complete table is retained in
-\filepath{docs/results/block_granularity_sweep.md}.
+24 tokens.
 
 \mixedblocktag A follow-up increased block capacity to 24, 48, 96, and 128 entries for every coarse
 block size.  Capacity restored the 24-token aggregate hit rate to \(0.667\) and
@@ -1155,8 +1468,7 @@ points.  More importantly, all scores are negative in that range, including the
 future-reuse oracle at \(-4.736\), \(-21.537\), and \(-24.361\).  Thus eviction
 choice can be decisive within a viable geometry, but neither perfect reuse
 information nor a different replacement rule repairs prefix boundaries destroyed
-by coarse blocks.  The full score matrix and JSON artifact are retained in
-\filepath{docs/results/block_granularity_sweep.md} and
+by coarse blocks.  The full score matrix is retained in
 \filepath{docs/results/baseline_geometry_sweep.json}.
 
 The current specialist lesson is that the original full-policy specialist surface
@@ -1289,7 +1601,7 @@ in the corresponding run directories under
 \filepath{artifacts/prefix_kv_cache_runs}.  Each includes
 \filepath{best_generated_mutation.py} and
 \filepath{best_generated_mutation_decomposition.json}.  Historical structured-run
-adjudication is retained in \filepath{docs/results/three_run_adjudication.md}.
+adjudication is retained in the tables above.
 
 \subsection{Controlled attempts that failed adjudication}
 
@@ -1320,9 +1632,7 @@ adjudication is retained in \filepath{docs/results/three_run_adjudication.md}.
   to \(55.383\), but reduced raw selection from \(70.989\) to \(70.955\), worsened
   validation avoidable-eviction rate from \(0.1530\) to \(0.1542\), and reduced hidden
   score from \(2.224\) to \(2.012\).  Its historical charged advantage came from
-  simplifying other full-policy code, not from better eviction behavior.  Full
-  adjudication is retained in
-  \filepath{docs/results/eviction_weight_graft.md}.
+  simplifying other full-policy code, not from better eviction behavior.
 \end{itemize}
 
 \subsection{Recurring shapes of inadequate evolved solutions}
@@ -1383,6 +1693,32 @@ Some unsuccessful runs diagnose the search process rather than a policy idea:
   A one-coefficient descendant reweight retained \(0.168\) raw selection points at the
   incumbent's 636-node complexity, but its \(0.006\) hidden-score loss still failed the
   fail-closed promotion rule.
+  \item \blocktag{16} A 98-evaluation weak-initial-seed rediscovery pilot assembled a
+  pressure-conditioned incumbent-family mechanism and raised charged selection from
+  \(53.366\) to \(59.404\), recovering \(49.2\%\) of the charged selection gap and
+  \(97.0\%\) of the raw selection gap.  It did not establish discoverability: the
+  generated policy reached \(1{,}214\) effective nodes, had negative charged probe-gap
+  recovery, recovered only \(45.5\%\) of the hidden charged gap, and failed the
+  multi-metric agentic gate on admission-waste divergence.  The retained incumbent
+  therefore remains a path-dependent local-evolution result until repeated neutral
+  weak-seed runs pass the separate behavioral rediscovery protocol.
+  \item \blocktag{16} Three fresh June 14 weak-seed searches made that protocol
+  executable but did not support discoverability.  Across \(894\) evaluations,
+  \(\$21.5381\), and \(8{,}705\) seconds, zero runs recovered at least \(80\%\) of
+  the charged weak-seed-to-incumbent gap on every canonical panel while remaining
+  deployable and passing the agentic gate.  The ordinary-score run overfit selection:
+  its 459-node generated policy scored \(67.444\) on selection but only \(30.661\)
+  on probe and failed the agentic gate.  Ranking by the minimum of ordinary score and
+  non-quarantined agentic guidance repaired that gate and raised probe to \(50.272\),
+  but selected a 216-node high-churn stateless policy with \(53.975\) selection and
+  \(-16.328\) hidden score.  After documenting generic stateful primitives and
+  enabling inspiration-based recombination, the final 298-evaluation run retained
+  the weak seed as its search winner.  Its strongest generated mutation was 708
+  nodes, failed the agentic gate, and scored below the weak seed on selection, probe,
+  and hidden panels.  Exact incumbent replay is reproducible; independent weak-seed
+  rediscovery is not yet established, and the next search-process target is
+  productive stateful mutation and recombination rather than another unchanged
+  budget increase.
   \item \blocktag{16} Adding shared prefix/decode capacity initially revealed a verifier bug: total
   occupancy allowed decode KV to mask prefix-policy underfill.  Restricting underfill
   to prefix occupancy restored the intended score semantics.  The corrected full panel
@@ -1400,5 +1736,23 @@ policy is not considered promising merely because it raises a weak-family hit ra
 a failed full policy is not discarded when a compact, independently testable fragment
 can be isolated.  This is the basis for the current separation between structure
 search, deletion ablation, coefficient tuning, and final cross-panel adjudication.
+
+\subsection{Score identity became a machine-enforced invariant}
+
+Historical scores were already labeled by verifier revision in prose, but verifier
+semver alone did not distinguish a score-weight change, geometry change, split change,
+or regenerated request panel.  Every score-bearing record now carries three fields:
+\identifier{verifier\_version}, \identifier{panel\_sha256}, and
+\identifier{evaluation\_context\_sha256}.  The panel hash covers the ordered request
+streams and panel geometry.  The context hash covers verifier semver, the normalized
+evaluator configuration, and the panel hash.
+
+This forced an important reporting distinction.  A baseline table at one geometry must
+have one exact score identity and now fails closed on any mismatch.  A geometry sweep
+or prefix-only/shared-capacity comparison intentionally spans contexts, so it records
+one identity per geometry or mode and validates each comparable slice independently.
+The resulting rule is operational rather than narrative: numbers may share a table only
+when the report declares whether they are exact-context comparisons or explicitly
+indexed cross-context measurements.
 
 \end{document}

@@ -23,6 +23,7 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import (
     RequestInfo,
     TrialMetrics,
     WorkloadRequest,
+    _AdmissionAudit,
     _aggregate_trials,
     baseline_depth_prefer_shallow,
     baseline_future_reuse_heuristic,
@@ -36,6 +37,10 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import (
     baseline_vllm_apc,
     build_workload,
     scoring_fn_complexity,
+)
+from prefix_cache_evolve.evaluators.verifier import (
+    VERIFIER_VERSION,
+    require_single_score_identity,
 )
 from prefix_cache_evolve.problems.prefix_kv_cache import evaluator as levi_evaluator
 from prefix_cache_evolve.problems.prefix_kv_cache import runner as prefix_runner
@@ -64,6 +69,7 @@ from prefix_cache_evolve.problems.prefix_kv_cache.specialist import (
 from prefix_cache_evolve.problems.prefix_kv_cache.utilities import (
     agentic_surrogate_probe_tripwire,
 )
+from tests.support import score_identity, score_record
 
 
 class AdmitAllLRU:
@@ -127,6 +133,7 @@ def _report_result(
         "priority_weighted_token_hit_rate": 0.55,
     }
     return EvaluationResult(
+        **score_identity(),
         combined_score=score,
         success=True,
         invalid_fraction=0.0,
@@ -153,6 +160,23 @@ def _report_result(
             "complexity_cost": 0.0,
         },
     )
+
+
+def _agentic_gate_metrics(
+    token_hit_rate: float,
+    **overrides: float,
+) -> dict[str, float]:
+    metrics = {
+        "token_hit_rate": token_hit_rate,
+        "request_token_hit_rate_p10": 0.25,
+        "worst_quarter_token_hit_rate": 0.35,
+        "wasted_admission_token_rate": 0.10,
+        "policy_underfill_rate": 0.05,
+        "short_reuse_after_eviction_missed_token_rate": 0.02,
+        "cache_churn_per_1k": 100.0,
+    }
+    metrics.update(overrides)
+    return metrics
 
 
 def test_evaluator_accepts_injected_workload_and_simulator_dependencies() -> None:
@@ -971,6 +995,12 @@ def test_evaluate_source_rejects_static_policy_violations(monkeypatch) -> None:
     result = levi_evaluator.evaluate_source(source)
 
     assert result.metrics["success"] is False
+    identity = require_single_score_identity(
+        (result.metrics, result.artifacts),
+        context="static rejection",
+    )
+    assert len(identity.evaluation_context_sha256) == 64
+    assert len(identity.panel_sha256) == 64
     assert result.metrics["error"].startswith("Repair before retry:")
     assert "future-knowledge field estimated_future_reuse" in result.metrics["error"]
     assert "broad exception handlers are not allowed" in result.metrics["error"]
@@ -1062,6 +1092,33 @@ def test_evaluate_source_eviction_only_uses_raw_behavioral_search_score(monkeypa
     assert result.metrics["success"] is True
     assert result.metrics["combined_score"] == result.metrics["raw_score_before_complexity"]
     assert result.metrics["combined_score"] > result.metrics["charged_combined_score"]
+
+
+def test_evaluate_source_robust_search_uses_non_quarantined_guidance_floor(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        levi_evaluator,
+        "DEFAULT_CONFIG",
+        EvaluatorConfig(
+            capacity_blocks=4,
+            request_count=8,
+            seeds=(3,),
+            train_families=("agentic_tool_workflows",),
+            validation_families=("shared_system_prompt",),
+            probe_families=(),
+            hidden_families=(),
+            search_score_mode="robust_min",
+            search_guidance_families=("agentic_tool_workflows",),
+        ),
+    )
+
+    result = levi_evaluator.evaluate_source(_minimal_policy_source("1.0", "0.0"))
+
+    guidance = result.metrics["search_guidance_floor_score"]
+    canonical = result.metrics["charged_combined_score"]
+    assert result.metrics["success"] is True
+    assert result.metrics["combined_score"] == min(canonical, guidance)
 
 
 def test_evaluate_source_eviction_only_rejects_full_policy_surface(monkeypatch) -> None:
@@ -1910,6 +1967,40 @@ def test_admission_audit_distinguishes_avoidable_admission_and_rejection() -> No
     assert threshold_and_ranking_error.value_weighted_avoidable_eviction_regret_tokens == 4.0
 
 
+def test_shadow_price_calibration_preserves_the_policy_zero_crossing() -> None:
+    audit = _AdmissionAudit()
+    block = SimpleNamespace(prefix_hash=1, depth=2, token_count=16)
+    audit.record(
+        now=0,
+        request_index=0,
+        block=block,
+        score=1.0,
+        accepted=True,
+        feasible=True,
+        incoming_value_tokens=32.0,
+        displaced_value_tokens=16.0,
+        capacity_weight_tokens=16,
+    )
+    audit.record(
+        now=1,
+        request_index=1,
+        block=block,
+        score=-1.0,
+        accepted=False,
+        feasible=True,
+        incoming_value_tokens=0.0,
+        displaced_value_tokens=16.0,
+        capacity_weight_tokens=16,
+    )
+
+    metrics = audit.shadow_price_metrics()
+
+    assert metrics["shadow_price_score_scale"] == pytest.approx(1.0)
+    assert metrics["shadow_price_tracking_rmse"] == pytest.approx(0.0)
+    assert metrics["shadow_price_tracking_mae"] == pytest.approx(0.0)
+    assert metrics["oracle_shadow_price_mean"] == pytest.approx(1.0)
+
+
 def test_temporal_and_tenant_tail_metrics_expose_service_collapse() -> None:
     simulator = PrefixKVCacheSimulator(
         capacity_blocks=1,
@@ -2094,15 +2185,12 @@ def test_candidate_program_can_be_compared_against_baselines(tmp_path, capsys, m
 
 
 def test_baseline_report_headline_does_not_overstate_candidate() -> None:
-    def result(score: float) -> SimpleNamespace:
-        return SimpleNamespace(combined_score=score)
-
     headline = _baseline_report_headline(
         [
-            ("oracle_future_reuse", result(90.0)),
-            ("tinylfu_lru", result(70.0)),
-            ("candidate", result(60.0)),
-            ("lru", result(50.0)),
+            ("oracle_future_reuse", score_record(90.0)),
+            ("tinylfu_lru", score_record(70.0)),
+            ("candidate", score_record(60.0)),
+            ("lru", score_record(50.0)),
         ]
     )
 
@@ -2112,15 +2200,12 @@ def test_baseline_report_headline_does_not_overstate_candidate() -> None:
 
 
 def test_baseline_report_headline_states_mixed_future_knowledge_ordering() -> None:
-    def result(score: float) -> SimpleNamespace:
-        return SimpleNamespace(combined_score=score)
-
     headline = _baseline_report_headline(
         [
-            ("oracle_future_reuse", result(90.0)),
-            ("candidate", result(80.0)),
-            ("future_reuse_heuristic", result(70.0)),
-            ("tinylfu_lru", result(60.0)),
+            ("oracle_future_reuse", score_record(90.0)),
+            ("candidate", score_record(80.0)),
+            ("future_reuse_heuristic", score_record(70.0)),
+            ("tinylfu_lru", score_record(60.0)),
         ]
     )
 
@@ -2128,6 +2213,30 @@ def test_baseline_report_headline_states_mixed_future_knowledge_ordering() -> No
         "The candidate clears the deployable credibility baselines in this capacity "
         "sweep. It trails `oracle_future_reuse`. It beats `future_reuse_heuristic`."
     )
+
+
+@pytest.mark.parametrize(
+    ("identity_override", "error"),
+    (
+        ({"verifier_version": "2.0.0"}, "refuses mixed verifier versions"),
+        (
+            {"evaluation_context_sha256": "c" * 64},
+            "refuses mixed evaluation contexts",
+        ),
+        ({"panel_sha256": "d" * 64}, "refuses mixed panels"),
+    ),
+)
+def test_baseline_report_refuses_mixed_score_identity(
+    identity_override: dict[str, str],
+    error: str,
+) -> None:
+    with pytest.raises(ValueError, match=error):
+        _baseline_report_headline(
+            [
+                ("candidate", score_record(80.0)),
+                ("tinylfu_lru", score_record(70.0, **identity_override)),
+            ]
+        )
 
 
 def test_complexity_counts_candidate_helper_methods() -> None:
@@ -2809,6 +2918,7 @@ def test_candidate_config_matches_default_verifier_panel_and_score_weights() -> 
     assert tuple(settings["probe_families"]) == default.probe_families
     assert tuple(settings["hidden_families"]) == default.hidden_families
     assert loaded.form_aware_complexity is True
+    assert loaded.verifier_version == VERIFIER_VERSION
     assert loaded.family_request_multipliers == default.family_request_multipliers
     assert loaded.timeout_s == 90
     assert loaded.request_count == 96
@@ -2870,6 +2980,20 @@ def test_evaluator_config_rejects_incomplete_or_unknown_tripwire_channels() -> N
         )
 
 
+def test_evaluator_config_rejects_invalid_robust_search_guidance() -> None:
+    with pytest.raises(ValueError, match="requires at least one"):
+        EvaluatorConfig(search_score_mode="robust_min")
+
+    with pytest.raises(ValueError, match="configured train families"):
+        EvaluatorConfig(
+            search_score_mode="robust_min",
+            search_guidance_families=("agent_trace_branching",),
+        )
+
+    with pytest.raises(ValueError, match="requires search_score_mode"):
+        EvaluatorConfig(search_guidance_families=("agentic_tool_workflows",))
+
+
 def test_candidate_search_configuration_is_forwarded_to_levi() -> None:
     config = prefix_runner._CONFIG_LOADER.load(Path("configs/prefix_kv_cache.yaml"))
     raw = config.raw
@@ -2897,6 +3021,7 @@ def test_candidate_search_configuration_is_forwarded_to_levi() -> None:
         "validation_workload_stochastic_serving_mix_token_hit_rate",
         "validation_avoidable_eviction_rate",
         "validation_short_reuse_after_eviction_missed_token_rate",
+        "validation_shadow_price_tracking_rmse",
     }.issubset(kwargs["behavior"]["score_keys"])
 
 
@@ -2937,6 +3062,20 @@ def test_prefix_evaluator_config_rejects_inactive_settings() -> None:
         evaluator_config_from_settings({"scoring": {"complexity_cap": 500}})
 
 
+def test_loaded_evaluator_config_requires_explicit_verifier_version(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+problem:
+  settings: {}
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="must explicitly declare"):
+        load_evaluator_config(config_path)
+
+
 def test_evaluator_config_validates_direct_values_and_updates() -> None:
     with pytest.raises(ValueError, match=r"(?s)capacity_blocks.*greater than 0"):
         EvaluatorConfig(capacity_blocks=0)
@@ -2946,6 +3085,12 @@ def test_evaluator_config_validates_direct_values_and_updates() -> None:
 
     with pytest.raises(ValueError, match=r"(?s)kv_capacity_mode.*Input should be"):
         EvaluatorConfig(kv_capacity_mode="unknown")
+
+    with pytest.raises(ValueError, match=r"verifier_version"):
+        EvaluatorConfig(verifier_version="1.0")
+
+    with pytest.raises(ValueError, match=r"implements verifier 1\.0\.0"):
+        EvaluatorConfig(verifier_version="0.9.0")
 
     config = EvaluatorConfig().with_updates(scoring={"churn_weight": 0.5})
 
@@ -3076,7 +3221,7 @@ def test_hidden_report_evaluates_requested_candidate(tmp_path, monkeypatch, caps
     def fake_evaluate_candidate(config, path, *, splits):
         captured["path"] = path
         captured["splits"] = splits
-        return SimpleNamespace(combined_score=12.5)
+        return score_record(12.5)
 
     monkeypatch.setattr(prefix_runner, "_evaluate_candidate_program", fake_evaluate_candidate)
     monkeypatch.setattr(prefix_runner, "REPORTING_BASELINES", {})
@@ -3096,8 +3241,8 @@ def test_probe_report_evaluates_requested_candidate(tmp_path, monkeypatch, capsy
     def fake_evaluate_candidate(config, path, *, splits):
         captured["path"] = path
         captured["splits"] = splits
-        return SimpleNamespace(
-            combined_score=12.5,
+        return score_record(
+            12.5,
             success=True,
             invalid_fraction=0.0,
             split_metrics={"probe": {"token_hit_rate": 0.5}},
@@ -3969,8 +4114,8 @@ def test_agentic_surrogate_probe_tripwire_fails_closed_without_both_metrics() ->
 def test_surrogate_probe_tripwire_suite_passes_all_configured_channels() -> None:
     suite = prefix_runner._surrogate_probe_tripwire_suite(
         {
-            "train/agentic_tool_workflows": {"token_hit_rate": 0.48},
-            "probe/agent_trace_branching": {"token_hit_rate": 0.38},
+            "train/agentic_tool_workflows": _agentic_gate_metrics(0.48),
+            "probe/agent_trace_branching": _agentic_gate_metrics(0.38),
             "validation/hotset_cold_scan": {"token_hit_rate": 0.64},
             "probe/cyclic_working_set_pressure": {"token_hit_rate": 0.86},
         }
@@ -3980,7 +4125,9 @@ def test_surrogate_probe_tripwire_suite_passes_all_configured_channels() -> None
     assert suite["flagged"] is False
     assert suite["flagged_channels"] == []
     assert suite["passed_channels"] == ["agentic_branching", "cyclic_working_set"]
-    assert suite["channels"]["agentic_branching"]["absolute_gap"] == pytest.approx(0.10)
+    assert suite["channels"]["agentic_branching"]["checks"]["token_hit_rate"][
+        "absolute_gap"
+    ] == pytest.approx(0.10)
     assert suite["channels"]["cyclic_working_set"]["absolute_gap"] == pytest.approx(0.22)
     assert suite["max_threshold_ratio"] == pytest.approx(0.88)
 
@@ -3988,8 +4135,8 @@ def test_surrogate_probe_tripwire_suite_passes_all_configured_channels() -> None
 def test_surrogate_probe_tripwire_suite_flags_only_divergent_channel() -> None:
     suite = prefix_runner._surrogate_probe_tripwire_suite(
         {
-            "train/agentic_tool_workflows": {"token_hit_rate": 0.48},
-            "probe/agent_trace_branching": {"token_hit_rate": 0.38},
+            "train/agentic_tool_workflows": _agentic_gate_metrics(0.48),
+            "probe/agent_trace_branching": _agentic_gate_metrics(0.38),
             "validation/hotset_cold_scan": {"token_hit_rate": 0.70},
             "probe/cyclic_working_set_pressure": {"token_hit_rate": 0.40},
         }
@@ -4006,8 +4153,8 @@ def test_surrogate_probe_tripwire_suite_flags_only_divergent_channel() -> None:
 def test_surrogate_probe_tripwire_suite_fails_closed_for_missing_channel() -> None:
     suite = prefix_runner._surrogate_probe_tripwire_suite(
         {
-            "train/agentic_tool_workflows": {"token_hit_rate": 0.48},
-            "probe/agent_trace_branching": {"token_hit_rate": 0.38},
+            "train/agentic_tool_workflows": _agentic_gate_metrics(0.48),
+            "probe/agent_trace_branching": _agentic_gate_metrics(0.38),
         }
     )
 
@@ -4019,8 +4166,8 @@ def test_surrogate_probe_tripwire_suite_fails_closed_for_missing_channel() -> No
 def test_surrogate_probe_tripwire_suite_accepts_per_family_thresholds() -> None:
     suite = prefix_runner._surrogate_probe_tripwire_suite(
         {
-            "train/agentic_tool_workflows": {"token_hit_rate": 0.48},
-            "probe/agent_trace_branching": {"token_hit_rate": 0.38},
+            "train/agentic_tool_workflows": _agentic_gate_metrics(0.48),
+            "probe/agent_trace_branching": _agentic_gate_metrics(0.38),
             "validation/hotset_cold_scan": {"token_hit_rate": 0.64},
             "probe/cyclic_working_set_pressure": {"token_hit_rate": 0.86},
         },
@@ -4032,8 +4179,33 @@ def test_surrogate_probe_tripwire_suite_accepts_per_family_thresholds() -> None:
 
     assert suite["status"] == "flagged"
     assert suite["flagged_channels"] == ["agentic_branching"]
-    assert suite["channels"]["agentic_branching"]["threshold"] == pytest.approx(0.09)
+    assert suite["channels"]["agentic_branching"]["checks"]["token_hit_rate"][
+        "threshold"
+    ] == pytest.approx(0.09)
     assert suite["channels"]["cyclic_working_set"]["threshold"] == pytest.approx(0.23)
+
+
+def test_surrogate_probe_tripwire_suite_flags_non_hit_agentic_divergence() -> None:
+    suite = prefix_runner._surrogate_probe_tripwire_suite(
+        {
+            "train/agentic_tool_workflows": _agentic_gate_metrics(
+                0.48,
+                wasted_admission_token_rate=0.50,
+            ),
+            "probe/agent_trace_branching": _agentic_gate_metrics(
+                0.38,
+                wasted_admission_token_rate=0.10,
+            ),
+            "validation/hotset_cold_scan": {"token_hit_rate": 0.64},
+            "probe/cyclic_working_set_pressure": {"token_hit_rate": 0.86},
+        }
+    )
+
+    assert suite["flagged_channels"] == ["agentic_branching"]
+    assert suite["channels"]["agentic_branching"]["checks"]["token_hit_rate"]["status"] == "pass"
+    assert suite["channels"]["agentic_branching"]["failed_metrics"] == [
+        "wasted_admission_token_rate"
+    ]
 
 
 def test_save_run_artifacts_persists_best_program_and_metadata(tmp_path, monkeypatch) -> None:
@@ -4094,12 +4266,16 @@ def test_save_run_artifacts_persists_best_program_and_metadata(tmp_path, monkeyp
         total_cost=0.25,
         archive_size=3,
         runtime_seconds=4.0,
-        metrics={"combined_score": 12.5},
+        metrics={
+            **score_identity(),
+            "combined_score": 12.5,
+        },
         artifacts={
+            **score_identity(),
             "split_metrics": {"validation": {"token_hit_rate": 0.5}},
             "workload_metrics": {
-                "train/agentic_tool_workflows": {"token_hit_rate": 0.48},
-                "probe/agent_trace_branching": {"token_hit_rate": 0.38},
+                "train/agentic_tool_workflows": _agentic_gate_metrics(0.48),
+                "probe/agent_trace_branching": _agentic_gate_metrics(0.38),
                 "validation/hotset_cold_scan": {"token_hit_rate": 0.64},
                 "probe/cyclic_working_set_pressure": {"token_hit_rate": 0.86},
             },
@@ -4138,16 +4314,14 @@ def test_save_run_artifacts_persists_best_program_and_metadata(tmp_path, monkeyp
     )
     workload_manifest = json.loads((run_dir / "workload_manifest.json").read_text(encoding="utf-8"))
     assert len(workload_manifest["panel_sha256"]) == 64
-    tripwire = json.loads(
-        (run_dir / "agentic_surrogate_probe_tripwire.json").read_text(encoding="utf-8")
-    )
-    assert tripwire["status"] == "pass"
-    assert tripwire["absolute_gap"] == pytest.approx(0.10)
-    assert "Status: PASS" in (run_dir / "agentic_surrogate_probe_tripwire.md").read_text(
+    gate = json.loads((run_dir / "agentic_surrogate_probe_gate.json").read_text(encoding="utf-8"))
+    assert gate["status"] == "pass"
+    assert gate["checks"]["token_hit_rate"]["absolute_gap"] == pytest.approx(0.10)
+    assert "Status: PASS" in (run_dir / "agentic_surrogate_probe_gate.md").read_text(
         encoding="utf-8"
     )
     run_summary = json.loads((run_dir / "run_summary.json").read_text(encoding="utf-8"))
-    assert run_summary["agentic_surrogate_probe_tripwire"]["status"] == "pass"
+    assert run_summary["agentic_surrogate_probe_gate"]["status"] == "pass"
     assert run_summary["surrogate_probe_tripwires"]["status"] == "pass"
     assert run_summary["surrogate_probe_tripwires"]["passed_channels"] == [
         "agentic_branching",
@@ -4188,16 +4362,19 @@ def test_persist_best_generated_mutation_decomposes_strongest_non_seed(
                         "program_id": "seed",
                         "content": seed_source,
                         "primary_score": 8.0,
+                        **score_identity(),
                     },
                     {
                         "program_id": "weaker",
                         "content": "def build_candidate():\n    return 'weaker'\n",
                         "primary_score": 3.0,
+                        **score_identity(),
                     },
                     {
                         "program_id": "strongest",
                         "content": strongest_source,
                         "primary_score": 7.0,
+                        **score_identity(),
                     },
                 ]
             }
@@ -4214,6 +4391,7 @@ def test_persist_best_generated_mutation_decomposes_strongest_non_seed(
             "primitive_subsidy_nodes": 2,
             "primitive_subsidy_exercised": True,
             "selection": {
+                **score_identity(),
                 "combined_score": 8.0 if is_seed else 7.0,
                 "score_breakdown": {
                     "mean_workload_score": 10.0,
@@ -4223,13 +4401,17 @@ def test_persist_best_generated_mutation_decomposes_strongest_non_seed(
                 },
             },
             "probe": {
+                **score_identity(),
                 "combined_score": 4.0,
                 "workload_metrics": {
                     "probe/agent_trace_branching": {"token_hit_rate": 0.2},
                     "probe/cyclic_working_set_pressure": {"token_hit_rate": 0.7},
                 },
             },
-            "hidden": {"combined_score": -1.0},
+            "hidden": {
+                **score_identity(),
+                "combined_score": -1.0,
+            },
         }
 
     monkeypatch.setattr(
@@ -4275,6 +4457,7 @@ def test_specialist_promotion_adjudication_fails_over_complexity_limit(
             "primitive_subsidy_nodes": 49 if is_candidate else 0,
             "primitive_subsidy_exercised": is_candidate,
             "selection": {
+                **score_identity(),
                 "combined_score": score,
                 "score_breakdown": {"complexity_cost": 0.0},
                 "split_metrics": {
@@ -4284,18 +4467,22 @@ def test_specialist_promotion_adjudication_fails_over_complexity_limit(
                     }
                 },
                 "workload_metrics": {
-                    "train/agentic_tool_workflows": {"token_hit_rate": 0.48},
+                    "train/agentic_tool_workflows": _agentic_gate_metrics(0.48),
                     "validation/hotset_cold_scan": {"token_hit_rate": 0.64},
                 },
             },
             "probe": {
+                **score_identity(),
                 "combined_score": score,
                 "workload_metrics": {
-                    "probe/agent_trace_branching": {"token_hit_rate": 0.40},
+                    "probe/agent_trace_branching": _agentic_gate_metrics(0.40),
                     "probe/cyclic_working_set_pressure": {"token_hit_rate": 0.80},
                 },
             },
-            "hidden": {"combined_score": score},
+            "hidden": {
+                **score_identity(),
+                "combined_score": score,
+            },
         }
 
     monkeypatch.setattr(prefix_runner, "_candidate_panel_decomposition", fake_decomposition)
@@ -4347,6 +4534,7 @@ def test_eviction_only_promotion_adjudication_composes_complete_candidate(
             "primitive_subsidy_nodes": 0,
             "primitive_subsidy_exercised": False,
             "selection": {
+                **score_identity(),
                 "combined_score": score,
                 "score_breakdown": {"complexity_cost": 1.0},
                 "split_metrics": {
@@ -4356,18 +4544,22 @@ def test_eviction_only_promotion_adjudication_composes_complete_candidate(
                     }
                 },
                 "workload_metrics": {
-                    "train/agentic_tool_workflows": {"token_hit_rate": 0.50},
+                    "train/agentic_tool_workflows": _agentic_gate_metrics(0.50),
                     "validation/hotset_cold_scan": {"token_hit_rate": 0.64},
                 },
             },
             "probe": {
+                **score_identity(),
                 "combined_score": score,
                 "workload_metrics": {
-                    "probe/agent_trace_branching": {"token_hit_rate": 0.40},
+                    "probe/agent_trace_branching": _agentic_gate_metrics(0.40),
                     "probe/cyclic_working_set_pressure": {"token_hit_rate": 0.80},
                 },
             },
-            "hidden": {"combined_score": score},
+            "hidden": {
+                **score_identity(),
+                "combined_score": score,
+            },
         }
 
     monkeypatch.setattr(prefix_runner, "_candidate_panel_decomposition", fake_decomposition)

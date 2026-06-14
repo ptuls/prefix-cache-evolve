@@ -158,8 +158,8 @@ def _evaluate_result(
     return evaluator(lambda *_: TunableCompactPolicy(parameters))
 
 
-def _evaluate(parameters: Parameters, config: EvaluatorConfig) -> float:
-    return _evaluate_result(parameters, config).combined_score
+def _evaluate(parameters: Parameters, config: EvaluatorConfig) -> EvaluationResult:
+    return _evaluate_result(parameters, config)
 
 
 def _run_decay_ablation(
@@ -195,6 +195,9 @@ def _run_decay_ablation(
         print(
             json.dumps(
                 {
+                    "verifier_version": result.verifier_version,
+                    "evaluation_context_sha256": result.evaluation_context_sha256,
+                    "panel_sha256": result.panel_sha256,
                     "variant": name,
                     "combined_score_without_complexity": result.combined_score,
                     "token_hit_rate": validation["token_hit_rate"],
@@ -245,18 +248,27 @@ def main(
     full_config = EvaluatorConfig(capacity_sweep_blocks=(24, 48))
     finalists = [
         (_evaluate(parameters, full_config), quick_score, parameters)
-        for quick_score, parameters in sorted(sampled, key=lambda item: item[0], reverse=True)[
-            :full_top
-        ]
+        for quick_score, parameters in sorted(
+            sampled,
+            key=lambda item: item[0].combined_score,
+            reverse=True,
+        )[:full_top]
     ]
-    for full_score, quick_score, parameters in sorted(
-        finalists, key=lambda item: item[0], reverse=True
+    for full_result, quick_result, parameters in sorted(
+        finalists,
+        key=lambda item: item[0].combined_score,
+        reverse=True,
     ):
         print(
             json.dumps(
                 {
-                    "full_score_without_complexity": full_score,
-                    "quick_score_without_complexity": quick_score,
+                    "verifier_version": full_result.verifier_version,
+                    "evaluation_context_sha256": (full_result.evaluation_context_sha256),
+                    "panel_sha256": full_result.panel_sha256,
+                    "full_score_without_complexity": full_result.combined_score,
+                    "quick_score_without_complexity": (quick_result.combined_score),
+                    "quick_evaluation_context_sha256": (quick_result.evaluation_context_sha256),
+                    "quick_panel_sha256": quick_result.panel_sha256,
                     "parameters": asdict(parameters),
                 },
                 sort_keys=True,

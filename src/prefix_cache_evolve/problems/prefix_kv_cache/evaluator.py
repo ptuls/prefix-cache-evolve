@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import ast
 import traceback
+from dataclasses import replace
+from functools import lru_cache
 from pathlib import Path
 from typing import Callable
 
@@ -18,10 +20,14 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import (
 )
 from prefix_cache_evolve.evaluators.prefix_kv_cache import (
     EvaluatorConfig,
+    PrefixKVCacheEvaluator,
     scoring_fn_complexity,
 )
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import (
     active_evaluator_config,
+)
+from prefix_cache_evolve.problems.prefix_kv_cache.reproducibility import (
+    build_workload_manifest,
 )
 from prefix_cache_evolve.problems.prefix_kv_cache.specialist import (
     candidate_evaluator,
@@ -486,6 +492,7 @@ def _evaluate_isolated(
                 "error_message": str(exc),
                 "suggestion": "Inspect candidate scoring methods for long-running logic.",
             },
+            splits=splits,
         )
     except Exception as exc:  # pragma: no cover - defensive
         return _error_result(
@@ -496,9 +503,14 @@ def _evaluate_isolated(
                 "full_traceback": traceback.format_exc(),
                 "suggestion": "Unexpected evaluator failure; inspect the traceback.",
             },
+            splits=splits,
         )
     if load_error is not None:
-        return _error_result("failed to load candidate factory", load_error)
+        return _error_result(
+            "failed to load candidate factory",
+            load_error,
+            splits=splits,
+        )
     if result is None:  # pragma: no cover - defensive
         return _error_result(
             "evaluation failed",
@@ -507,6 +519,7 @@ def _evaluate_isolated(
                 "error_message": "evaluation worker returned no result",
                 "suggestion": "Unexpected evaluator failure; inspect the traceback.",
             },
+            splits=splits,
         )
     return _success_result(result, include_hidden=include_hidden)
 
@@ -596,10 +609,17 @@ def _success_result(
     config = active_evaluator_config(DEFAULT_CONFIG)
     complexity_cost = float(prefix_result.score_breakdown.get("complexity_cost", 0.0))
     raw_score = float(prefix_result.combined_score) + complexity_cost
+    guidance_score = _search_guidance_score(prefix_result, config)
     if config.search_score_mode == "combined":
         search_score = float(prefix_result.combined_score)
     elif config.search_score_mode == "raw_before_complexity":
         search_score = raw_score
+    elif config.search_score_mode == "robust_min":
+        search_score = (
+            min(float(prefix_result.combined_score), guidance_score)
+            if guidance_score is not None
+            else float(prefix_result.combined_score)
+        )
     else:
         return _error_result(
             f"unknown search score mode {config.search_score_mode}",
@@ -609,12 +629,17 @@ def _success_result(
             },
         )
     metrics = {
+        "verifier_version": prefix_result.verifier_version,
+        "evaluation_context_sha256": prefix_result.evaluation_context_sha256,
+        "panel_sha256": prefix_result.panel_sha256,
         "combined_score": search_score,
         "charged_combined_score": prefix_result.combined_score,
         "raw_score_before_complexity": raw_score,
         "success": prefix_result.success,
         "invalid_fraction": prefix_result.invalid_fraction,
     }
+    if guidance_score is not None:
+        metrics["search_guidance_floor_score"] = guidance_score
     repair_feedback: tuple[str, ...] = ()
     if not prefix_result.success:
         invalid_reasons = tuple(
@@ -643,6 +668,9 @@ def _success_result(
     metrics.update(_promotion_eligibility_metrics(prefix_result))
 
     artifacts = {
+        "verifier_version": prefix_result.verifier_version,
+        "evaluation_context_sha256": prefix_result.evaluation_context_sha256,
+        "panel_sha256": prefix_result.panel_sha256,
         "split_metrics": {
             key: value
             for key, value in prefix_result.split_metrics.items()
@@ -661,6 +689,36 @@ def _success_result(
         artifacts["repair_feedback"] = list(repair_feedback)
         artifacts["suggestion"] = " ".join(repair_feedback)
     return EvaluatorResult(metrics=metrics, artifacts=artifacts)
+
+
+def _search_guidance_score(
+    prefix_result: PrefixEvaluationResult,
+    config: EvaluatorConfig,
+) -> float | None:
+    """Rescore configured non-quarantined train families as a robust floor."""
+    guidance_families = set(config.search_guidance_families)
+    if not guidance_families:
+        return None
+    guidance_trials = [
+        replace(trial, split="validation")
+        for trial in prefix_result.trials
+        if trial.split == "train" and trial.workload in guidance_families
+    ]
+    if not guidance_trials:
+        return None
+    scoring_config = config.with_updates(
+        search_score_mode="combined",
+        search_guidance_families=(),
+    )
+    complexity = int(prefix_result.candidate_metadata.get("scoring_fn_complexity", 0))
+    return (
+        PrefixKVCacheEvaluator(scoring_config)
+        .rescore_trials(
+            guidance_trials,
+            scoring_fn_complexity=complexity,
+        )
+        .combined_score
+    )
 
 
 def _runtime_repair_feedback(invalid_reasons: tuple[str, ...]) -> tuple[str, ...]:
@@ -898,16 +956,47 @@ def _metric(values: dict, key: str) -> float:
     return float(value) if isinstance(value, (int, float, bool)) else 0.0
 
 
-def _error_result(message: str, artifacts: dict) -> EvaluatorResult:
+def _error_result(
+    message: str,
+    artifacts: dict,
+    *,
+    splits: tuple[str, ...] = ("train", "validation", "probe"),
+) -> EvaluatorResult:
     config = active_evaluator_config(DEFAULT_CONFIG)
+    context_sha, panel_sha = _error_score_identity(
+        config.model_dump_json(),
+        splits,
+    )
     return EvaluatorResult(
         metrics={
+            "verifier_version": config.verifier_version,
+            "evaluation_context_sha256": context_sha,
+            "panel_sha256": panel_sha,
             "combined_score": config.v_min - 1.0 - config.invalid_surcharge,
             "success": False,
             "invalid_fraction": 1.0,
             "error": message,
         },
-        artifacts=artifacts,
+        artifacts={
+            "verifier_version": config.verifier_version,
+            "evaluation_context_sha256": context_sha,
+            "panel_sha256": panel_sha,
+            **artifacts,
+        },
+    )
+
+
+@lru_cache(maxsize=16)
+def _error_score_identity(
+    config_json: str,
+    splits: tuple[str, ...],
+) -> tuple[str, str]:
+    """Return a cached identity for evaluator failures on one panel."""
+    config = EvaluatorConfig.model_validate_json(config_json)
+    manifest = build_workload_manifest(config, splits=splits)
+    return (
+        str(manifest["evaluation_context_sha256"]),
+        str(manifest["panel_sha256"]),
     )
 
 

@@ -4,17 +4,23 @@ from __future__ import annotations
 
 import hashlib
 import inspect
-import json
 import platform
-from collections import Counter
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Mapping
 
+from prefix_cache_evolve.evaluators.fingerprints import (
+    evaluation_context_sha256,
+    panel_sha256,
+    request_stream_fingerprint_record,
+)
+from prefix_cache_evolve.evaluators.fingerprints import (
+    request_stream_sha256 as request_stream_sha256,
+)
 from prefix_cache_evolve.evaluators.prefix_kv_cache import (
     EvaluatorConfig,
-    WorkloadRequest,
     build_workload,
 )
+from prefix_cache_evolve.evaluators.verifier import require_single_score_identity
 
 
 def build_workload_manifest(
@@ -34,87 +40,72 @@ def build_workload_manifest(
                 seed=actual_seed,
             )
             streams.append(
-                {
-                    "split": workload.split,
-                    "family": workload.family,
-                    "base_seed": base_seed,
-                    "seed_offset": workload.seed_offset,
-                    "actual_seed": actual_seed,
-                    "request_count": len(requests),
-                    "request_stream_sha256": request_stream_sha256(requests),
-                    "total_prompt_tokens": sum(request.info.prompt_length for request in requests),
-                    "total_output_tokens": sum(request.true_output_length for request in requests),
-                    "unique_prompt_count": len(
-                        {
-                            request.prompt_tokens or request.info.prompt_tokens
-                            for request in requests
-                        }
-                    ),
-                    "arrival_span_steps": _arrival_span_steps(requests),
-                    "request_type_counts": dict(
-                        sorted(Counter(request.info.request_type for request in requests).items())
-                    ),
-                }
+                request_stream_fingerprint_record(
+                    requests,
+                    split=workload.split,
+                    family=workload.family,
+                    base_seed=base_seed,
+                    seed_offset=workload.seed_offset,
+                    actual_seed=actual_seed,
+                )
             )
 
+    evaluation = {
+        "verifier_version": config.verifier_version,
+        "splits": list(splits),
+        "capacity_blocks": list(config.effective_capacity_blocks()),
+        "capacity_tokens": list(config.effective_capacity_tokens()),
+        "physical_block_size_tokens": config.block_size_tokens,
+        "workload_token_granularity": config.effective_workload_token_granularity(),
+        "request_count": config.request_count,
+        "base_seeds": list(config.seeds),
+        "family_request_multipliers": dict(sorted(config.family_request_multipliers.items())),
+        "stream_count": len(streams),
+    }
+    panel_sha = panel_sha256(
+        evaluation={key: value for key, value in evaluation.items() if key != "verifier_version"},
+        streams=streams,
+    )
+    context_sha = evaluation_context_sha256(
+        verifier_version=config.verifier_version,
+        evaluator_config=config.model_dump(mode="json"),
+        panel_sha=panel_sha,
+    )
     manifest_core = {
         "schema": "prefix-kv-cache-workload-manifest-v1",
+        "verifier_version": config.verifier_version,
+        "evaluation_context_sha256": context_sha,
+        "panel_sha256": panel_sha,
         "determinism_scope": (
             "Deterministic for the same source, Python environment, evaluator config, "
             "and deterministic candidate policy."
         ),
         "generator": _generator_metadata(),
         "evaluation": {
-            "splits": list(splits),
-            "capacity_blocks": list(config.effective_capacity_blocks()),
-            "capacity_tokens": list(config.effective_capacity_tokens()),
-            "physical_block_size_tokens": config.block_size_tokens,
-            "workload_token_granularity": config.effective_workload_token_granularity(),
-            "request_count": config.request_count,
-            "base_seeds": list(config.seeds),
-            "family_request_multipliers": dict(sorted(config.family_request_multipliers.items())),
-            "stream_count": len(streams),
+            **evaluation,
+            "evaluation_context_sha256": context_sha,
+            "panel_sha256": panel_sha,
         },
         "streams": streams,
     }
-    return {
-        **manifest_core,
-        "panel_sha256": _canonical_sha256(
-            {
-                "evaluation": manifest_core["evaluation"],
-                "streams": streams,
-            }
-        ),
-    }
-
-
-def request_stream_sha256(requests: Iterable[WorkloadRequest]) -> str:
-    """Return a stable hash of all simulator-relevant fields in request order."""
-    digest = hashlib.sha256()
-    for request in requests:
-        payload = {
-            "request_id": request.info.request_id,
-            "tenant_id": request.info.tenant_id,
-            "session_id": request.info.session_id,
-            "prompt_length": request.info.prompt_length,
-            "priority": request.info.priority,
-            "request_type": request.info.request_type,
-            "predicted_output_length": request.info.predicted_output_length,
-            "true_output_length": request.true_output_length,
-            "arrival_step": request.arrival_step,
-            "prompt_tokens": list(request.prompt_tokens or request.info.prompt_tokens),
-        }
-        digest.update(_canonical_json(payload))
-        digest.update(b"\n")
-    return digest.hexdigest()
+    return manifest_core
 
 
 def stable_workload_manifest_payload(manifest: Mapping[str, Any]) -> dict[str, Any]:
     """Return the environment-independent fields used for reproducibility checks."""
+    evaluation = manifest.get("evaluation")
+    if not isinstance(evaluation, Mapping):
+        raise ValueError("workload manifest is missing evaluation metadata")
+    identity = require_single_score_identity(
+        (manifest, evaluation),
+        context="workload manifest",
+    )
     return {
         "schema": manifest.get("schema"),
-        "panel_sha256": manifest.get("panel_sha256"),
-        "evaluation": manifest.get("evaluation"),
+        "verifier_version": identity.verifier_version,
+        "evaluation_context_sha256": identity.evaluation_context_sha256,
+        "panel_sha256": identity.panel_sha256,
+        "evaluation": evaluation,
         "streams": manifest.get("streams"),
     }
 
@@ -140,26 +131,3 @@ def _generator_metadata() -> dict[str, str]:
         metadata["source_file"] = source_path.name
         metadata["source_sha256"] = file_sha256(source_path)
     return metadata
-
-
-def _arrival_span_steps(requests: tuple[WorkloadRequest, ...]) -> int:
-    if not requests:
-        return 0
-    arrivals = [
-        index if request.arrival_step is None else request.arrival_step
-        for index, request in enumerate(requests)
-    ]
-    return arrivals[-1] - arrivals[0] + 1
-
-
-def _canonical_sha256(payload: object) -> str:
-    return hashlib.sha256(_canonical_json(payload)).hexdigest()
-
-
-def _canonical_json(payload: object) -> bytes:
-    return json.dumps(
-        payload,
-        ensure_ascii=True,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")

@@ -12,6 +12,7 @@ search:
 
 problem:
   settings:
+    verifier_version: "1.0.0"
     capacity_blocks: 48
     capacity_sweep_blocks:
       - 48

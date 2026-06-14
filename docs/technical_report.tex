@@ -110,8 +110,8 @@ next-use oracle and ahead of all deployable credibility baselines.  It scores
 \(77.113\), compared with \(97.074\) for the reporting-only oracle and \(70.362\) for
 TinyLFU-LRU.  A subsequent production-oriented search on the operative \(16\)-token
 verifier promoted a \(572\)-node policy scoring \(65.649\), ahead of TinyLFU-LRU at
-\(63.548\).  It passes both held-out per-family tripwires: the agentic gap is
-\(0.0918<0.12\), and the cyclic working-set gap is \(0.2198<0.25\).  It also scores
+\(63.548\).  It passes all seven checks in the held-out agentic surrogate gate and the
+cyclic working-set tripwire with a \(0.2198<0.25\) token-hit gap.  It also scores
 \(3.064\) on the hidden panel versus \(-2.789\) for TinyLFU-LRU and retains
 substantially lower churn.
 This was not a sub-\$5 one-shot discovery.  The production search and its required
@@ -269,8 +269,8 @@ Historical discovery policy used for the reproducible \(77.113\) hardened-accoun
 result, originally reported as \(77.230\). \\
 \filepath{src/prefix_cache_evolve/problems/prefix_kv_cache/compact_seed.py} &
 Prior compact incumbent retained as a small alternate evolution seed. \\
-\filepath{scripts/tune_prefix_kv_compact.py} &
-Reproducible coefficient sweep for the compact policy family. \\
+\filepath{src/prefix_cache_evolve/tools/cli.py} &
+Consolidated analysis, ablation, and deterministic tuning command tree. \\
 \filepath{tests/test_prefix_kv_cache_evaluator.py} &
 Functional PyTest coverage for policies, simulator invariants, metrics, workloads,
 ranking behavior, reports, and evolution integration. \\
@@ -735,13 +735,15 @@ or external production trace contributes to them.  The exact historical evaluato
 settings are retained in
 \filepath{configs/prefix_kv_cache_discovery.yaml}.  The committed discovery workload
 manifest records summaries and SHA-256 fingerprints for all 81 ordered synthetic
-streams, plus the generator-source hash and CPython version.  Its aggregate
+streams, plus verifier \identifier{1.0.0}, the generator-source hash, and CPython
+version.  Its aggregate
 access-pattern fingerprint starts \identifier{4607782d2315}; the manifest retains
 the full value.
 Production-trace replay remains a separate user-supplied path; trace reports record the
 input-file hash, and replay reports also record the derived request-stream hash.
 
-The earlier incumbent scored \(62.757\) at the primary 16-token size.  The promoted
+The earlier incumbent scores \(62.641\) at the primary 16-token size under verifier
+\identifier{1.0.0}.  The promoted
 production search result now scores \(65.649\), ahead of TinyLFU+LRU at \(63.548\),
 with validation token hit \(0.596\) and churn \(163.9\) per 1,000 requests.  At the
 24-block capacity its token hit rate is \(0.579\) versus \(0.539\) for TinyLFU+LRU;
@@ -1456,8 +1458,10 @@ agentic-surrogate hit and underfill, and stochastic-mix hit rate. \\
 mutation feedback & Every retained parent exposes the agentic surrogate,
 stochastic-serving target, and up to three additional weak-workload diagnostics to
 normal mutation workers. \\
-promotion tripwires & Per-family token-hit divergence limits are 0.12 for
-agentic branching and 0.25 for cyclic working-set pressure.  Probe values remain
+promotion gates & Agentic branching uses a fail-closed seven-metric surrogate gate
+covering aggregate hit, request-tail hit, worst-quarter hit, admission waste,
+underfill, short-reuse eviction misses, and normalized churn.  Cyclic working-set
+pressure retains its 0.25 token-hit divergence tripwire.  Probe values remain
 quarantined from selection and mutation feedback. \\
 candidate guardrails & The general lane evaluates modestly over-cap candidates as
 exploration-only and requests a dedicated simplification mutation; promotion remains
@@ -1527,6 +1531,16 @@ failed because of admission waste, victim choice, churn, underfill, tail service
 complexity, or an invalid implementation.  Without that decomposition, search receives
 only a discontinuous ``better or worse'' signal and tends to repeat structurally
 similar mistakes.
+
+Verifier \identifier{1.0.0} is the first machine-enforced score contract.  Operative
+YAML configurations declare that semantic version explicitly; evaluation results,
+workload manifests, report rows, run summaries, and newly persisted evolution
+snapshots repeat it beside score-bearing records.  Report builders fail closed on
+missing or mixed versions before ranking or tabulation.  Historical unstamped scores
+remain useful chronology, but they cannot be combined with \identifier{1.0.0}
+measurements.  Configuration loading also rejects a semantic version that differs
+from the verifier implemented by the checked-out source, so current code cannot
+relabel its output as another verifier release.
 
 Constraints should be classified by what a violation means, rather than making every
 undesirable property an immediate rejection:
@@ -1616,8 +1630,7 @@ These are recorded model API charges, not total research cost.  The tally exclud
 deterministic coefficient sweeps, simulator CPU time, report generation, human
 analysis and composition, and experiments without reliable retained cost metadata.
 The post-promotion weak-seed rediscovery run is also excluded.  Exact component values
-and artifact sources are listed in
-\filepath{docs/results/search_cost_tally.md}.
+and artifact sources are consolidated in the supplementary research log.
 
 The stronger productivity result is \important{iteration velocity rather than
 one-shot cheapness}.  Within this project, fine-grained diagnostics, persisted
@@ -1937,13 +1950,13 @@ reviewed alongside the validation scalar.
 \subsection{Current production-oriented result}
 
 On the operative 16-token verifier, the promoted 572-node policy scores \(65.649\),
-ahead of TinyLFU-LRU at \(63.548\).  It passes the agentic tripwire with a \(0.0918\)
-gap against a \(0.12\) limit and the cyclic working-set tripwire with a \(0.2198\)
-gap against a \(0.25\) limit.  It scores \(3.064\) on the hidden panel versus
-\(-2.789\) for TinyLFU-LRU and retains substantially lower churn.  The result supports
-two-stage search: measured over-cap exploration can expose useful structure, but a
-separate simplification phase and fail-closed adjudication are required before
-promotion.  The two required runs cost \$5.070 together; the broader retained lineage
+ahead of TinyLFU-LRU at \(63.548\).  It passes all seven checks in the agentic
+surrogate gate and the cyclic working-set tripwire with a \(0.2198\) gap against a
+\(0.25\) limit.  It scores \(3.064\) on the hidden panel versus \(-2.789\) for
+TinyLFU-LRU and retains substantially lower churn.  The result supports two-stage
+search: measured over-cap exploration can expose useful structure, but a separate
+simplification phase and fail-closed adjudication are required before promotion.  The
+two required runs cost \$5.070 together; the broader retained lineage
 cost \$21.981.  These figures should not be collapsed into the \$4.133 production-run
 cost.
 
@@ -1976,14 +1989,14 @@ search found richer policies that improved targeted recurrence behavior, but del
 ablation showed broad recurrence state was harmful, priority-decay state was inert, and
 complexity plus cross-panel regressions prevented promotion.  These results motivate
 the retained principles below; detailed tables, per-run narratives, and negative
-results are preserved in \filepath{docs/research_log.tex} and
-\filepath{docs/results/}.
+results are preserved in \filepath{docs/research_log.tex}, with machine-readable
+evidence under \filepath{docs/results/} and \filepath{artifacts/}.
 
 \section{Evolution-Discovered Principles}
 \label{sec:evolution-principles}
 
-The supplementary research log and generated result summaries contain more information
-than the retained winner alone.  This section consolidates that evidence into a
+The supplementary research log and machine-readable result artifacts contain more
+information than the retained winner alone.  This section consolidates that evidence into a
 principle ledger so future search does not repeatedly rediscover the same failures.  A
 \important{retained principle} is supported by a baseline comparison, controlled
 ablation, repeated search adjudication, or a combination of those sources.  The lists
@@ -2279,7 +2292,11 @@ Functional PyTest coverage asserts, among other properties:
   \item the quick report is labeled smoke-only;
   \item Pydantic rejects unknown workflow and evaluator settings and invalid ranges
   before execution;
-  \item YAML family and score configuration matches verifier defaults.
+  \item YAML family and score configuration matches verifier defaults;
+  \item repository YAML configs explicitly declare verifier \identifier{1.0.0};
+  every score tuple also carries a panel SHA-256 and an evaluation-context SHA-256
+  over the verifier version, normalized evaluator configuration, and panel; report
+  generation rejects missing or mixed identities within each comparison.
 \end{itemize}
 
 \subsection{Current verification status}
@@ -2296,9 +2313,9 @@ Under the operative verifier and workload configuration:
   \item the historical discovery baseline panel preserves credible ordering: oracle
   first, pressure-aware incumbent second, TinyLFU-LRU third, the reporting heuristic
   fourth, and prefix-anchor and vLLM APC following;
-  \item on the operative 16-token default, TinyLFU-LRU leads the incumbent by \(0.791\)
-  charged points, while the incumbent retains higher validation token hit and much
-  lower churn.
+  \item on the operative 16-token default, the promoted production incumbent leads
+  TinyLFU-LRU by \(2.101\) charged points (\(65.649\) versus \(63.548\)), while
+  retaining higher validation token hit and much lower churn.
 \end{itemize}
 
 \section{Limitations and Recommended Next Steps}
@@ -2461,7 +2478,7 @@ Under the operative verifier and workload configuration:
 \subsection{Run the structured ablation and search parent}
 
 \begin{lstlisting}[style=shell]
-.venv/bin/python scripts/ablate_prefix_kv_structured.py
+.venv/bin/prefix-cache-tools ablate structured
 
 .venv/bin/python -m prefix_cache_evolve.problems.prefix_kv_cache.runner \
   --iterations 100 \
@@ -2473,7 +2490,7 @@ Under the operative verifier and workload configuration:
 \subsection{Run the deterministic compact-policy tuner}
 
 \begin{lstlisting}[style=shell]
-.venv/bin/python scripts/tune_prefix_kv_compact.py \
+.venv/bin/prefix-cache-tools tune compact \
   --samples 180 \
   --full-top 12 \
   --seed 20260605
@@ -2489,13 +2506,13 @@ Under the operative verifier and workload configuration:
 \subsection{Run eviction decision and distillation analysis}
 
 \begin{lstlisting}[style=shell]
-.venv/bin/python -m prefix_cache_evolve.tools.analyze_eviction
+.venv/bin/prefix-cache-tools analyze eviction
 \end{lstlisting}
 
 \subsection{Run shared reasoning decode-KV robustness analysis}
 
 \begin{lstlisting}[style=shell]
-.venv/bin/python -m prefix_cache_evolve.tools.analyze_reasoning_kv
+.venv/bin/prefix-cache-tools analyze reasoning-kv
 \end{lstlisting}
 
 \subsection{Artifact layout}
@@ -2515,9 +2532,10 @@ run-type-specific artifacts:
   \item \filepath{workload_manifest.json}: deterministic stream summaries and panel
   fingerprint for the operative report configuration;
   \item \filepath{surrogate_probe_tripwires.json} and
-  \filepath{surrogate_probe_tripwires.md}: fail-closed per-family comparisons for
-  agentic branching and cyclic working-set pressure; the legacy
-  \filepath{agentic_surrogate_probe_tripwire.*} files remain for compatibility;
+  \filepath{surrogate_probe_tripwires.md}: fail-closed gate suite containing the
+  multi-metric agentic comparison and cyclic working-set token-hit tripwire;
+  \item \filepath{agentic_surrogate_probe_gate.json} and
+  \filepath{agentic_surrogate_probe_gate.md}: detailed per-metric agentic gate result;
   \item \filepath{promotion_adjudication.json} and
   \filepath{promotion_adjudication.md}: fail-closed composed complete-policy
   adjudication for specialist runs;
@@ -2556,10 +2574,10 @@ cumulative discovery program a sub-\$5 exercise.
 Current evidence supports these design principles, but production-trace transfer,
 shared decode-capacity control, and geometry-robust promotion remain open.
 
-Detailed chronology and rejected solutions are intentionally separated into
-\filepath{docs/research_log.tex}; generated measurements remain under
-\filepath{docs/results/}.  This keeps the main report focused on the current method,
-claims, limitations, and reproducibility contract.
+Detailed chronology, experiment tables, and rejected solutions are intentionally
+consolidated in \filepath{docs/research_log.tex}; generated measurements remain under
+\filepath{docs/results/} and \filepath{artifacts/}.  This keeps the main report focused
+on the current method, claims, limitations, and reproducibility contract.
 
 \appendix
 
@@ -2567,8 +2585,9 @@ claims, limitations, and reproducibility contract.
 
 The detailed engineering journey, run diary, historical verifier results, structured
 search detours, and rejected evolutionary solutions are retained in the separately
-compilable \filepath{docs/research_log.tex}.  Generated result summaries remain under
-\filepath{docs/results/}, and exact run artifacts remain under \filepath{artifacts/}.
+compilable \filepath{docs/research_log.tex}.  Machine-readable manifests and score
+matrices remain under \filepath{docs/results/}, and exact run artifacts remain under
+\filepath{artifacts/}.
 Separating that evidence record keeps this report focused while preserving the
 provenance needed to audit or reinterpret its conclusions.
 
@@ -2602,6 +2621,11 @@ This statement separates four facts that should not be collapsed:
   \(5{,}402\) eviction decisions have multiple legal victims, with 10.64 legal victims
   on average.  A full specialist changes the selected victim on \(21.5\%\) of eviction
   decisions.
+  \item \textbf{Causal component value.}  In the \(2\times2\) incumbent/oracle crossed
+  replay, admission has \(3.29\times\) the aggregate main effect of eviction.
+  Oracle admission removes \(81.1\%\) of eviction value in the groups that the local
+  audit labeled eviction-dominant, although \(37/162\) groups retain positive residual
+  eviction value.
   \item \textbf{Deployability and complexity.}  The best completed function-only
   specialist improves raw specialist score from \(70.989\) to \(72.091\), but composes
   to a \(1{,}011\)-node complete policy.  The model must therefore distinguish
@@ -2986,6 +3010,61 @@ a local same-state comparison.  They are not realized causal regret: changing on
 admission or victim can change later reachability, pressure, legal victims, and even
 which future requests become hits.
 
+\subsection{Measured shadow-price tracking}
+
+The local relaxation also yields a measurable control diagnostic.  Because one
+physical cache block consumes one capacity slot, let \(w\) denote the configured
+physical block size in token units and define the replay-oracle water level
+\begin{equation}
+  \lambda_t^\star=\frac{\mu_t}{w}.
+  \label{eq:oracle-shadow-price}
+\end{equation}
+Candidate admission scores are dimensionless, so subtracting them directly from
+\(\lambda_t^\star\) would be invalid.  For each workload-capacity-seed replay, fit a
+single nonnegative scale with no intercept,
+\begin{equation}
+  \beta^\star=
+  \arg\min_{\beta\ge0}
+  \sum_t\left(
+    \frac{F_t(b_t)-\mu_t}{w}-\beta s_t
+  \right)^2,
+  \label{eq:shadow-score-calibration}
+\end{equation}
+where \(s_t\) is the candidate's signed admission score.  The no-intercept constraint
+preserves the actual policy boundary \(s_t=0\).  The candidate-implied water level and
+tracking error are then
+\begin{align}
+  \widehat\lambda_t
+  &=\frac{F_t(b_t)}{w}-\beta^\star s_t,\\
+  e_t^\lambda
+  &=\widehat\lambda_t-\lambda_t^\star
+   =\frac{F_t(b_t)-\mu_t}{w}-\beta^\star s_t.
+  \label{eq:shadow-tracking-error}
+\end{align}
+This is a quarantined hindsight diagnostic, not a deployable future-value estimate.
+It measures whether the score behaves like an online surplus estimator after only a
+unit calibration.  The validation tracking RMSE is retained as a MAP-Elites behavior
+coordinate, but it is not added to the scalar selection objective.
+
+The bandwidth prediction is tested groupwise.  A decision is ``fast'' when
+\(|\lambda_t^\star-\lambda_{t-1}^\star|\) lies in the top quartile of positive changes
+within its replay.  The strict claim requires every regretful moving group to place a
+larger share of admission regret in this fast set than the set's decision share.
+Across validation replays at 8, 16, 24, and 48 blocks for phase shifts, priority
+bursts, tenant cycles, stochastic mixes, and hotset scans, the claim is falsified:
+16 of 22 regretful moving groups satisfy it.  Aggregately, however, the fastest
+3.5\% of decisions contain 12.5\% of admission regret, a \(3.96\times\) fast/slow
+regret-density lift.  Tenant cycles satisfy the concentration test in 7 of 9 groups;
+priority bursts in 4 of 6; stochastic mixes in 2 of 4.
+
+The more important qualification is identifiability.  In 38 of 60 groups,
+\(\lambda_t^\star\) never moves because a zero-future-value legal victim keeps
+\(\mu_t=0\).  All 48-block groups and all phase-shift-prompt groups have this
+degeneracy.  Thus pressure half-life is plausibly a loop-bandwidth parameter only in
+capacity-constrained regimes where the local displacement price is informative.
+The current evidence does not support treating threshold tracking as a universal
+explanation of admission regret.
+
 For group \(g\), define
 \begin{align}
   A_g &= \sum_{t\in g}\sum_{b\in\mathcal R_t}R^A_t(b),\\
@@ -3085,10 +3164,10 @@ This evidence changes the interpretation of eviction.  The correct statement is 
 that eviction has no room to improve.  The correct statement is that the currently
 found richer eviction improvements sit on an unfavorable complexity-generalization
 frontier.  The full function-only specialist has real victim-ranking signal but
-composes to \(1{,}011\) nodes.  Guarded age plus descendant protection captures
-\(98.0\%\) of the full specialist's raw gain, but still composes to 775 nodes.  A
+composes to \(1{,}023\) nodes.  Guarded age plus descendant protection captures
+\(98.0\%\) of the full specialist's raw gain, but still composes to 787 nodes.  A
 single deployable distillation--raising descendant protection from \(0.2\) to
-\(0.6\)--keeps complexity at 636 and gains \(0.168\) raw selection, but loses
+\(0.6\)--keeps complexity at 648 and gains \(0.168\) raw selection, but loses
 \(0.006\) hidden score.  Hence eviction is behaviorally meaningful, while promotable
 eviction sophistication remains unproven.
 
@@ -3132,8 +3211,9 @@ future reuse.
 
 \subsection{A regime-gated hybrid policy model}
 
-The corrected model suggests a hybrid policy family rather than a larger unconditional
-ranker.  Let \(h_t\in\{0,1\}\) be an online regime gate estimated from candidate-visible
+The crossed replay supports a sparse hybrid policy family rather than a larger
+unconditional ranker.  Let \(h_t\in\{0,1\}\) be an online regime gate estimated from
+candidate-visible
 features such as legal-victim count, age dispersion, descendant distribution, observed
 frequency dispersion, pressure, miss rate, and priority-backed reuse.  A composable
 eviction score can be written as
@@ -3159,8 +3239,8 @@ more complexity on victim ranking.
 
 \subsection{Causal component experiments}
 
-The local audit is not enough to establish causal component value.  The decisive study
-is a crossed replay using incumbent and oracle components.  Let
+The local audit is not enough to establish causal component value.  We therefore ran
+the crossed replay using incumbent and oracle components.  Let
 \(Y_{AE}(g)\) be the group score when admission component \(A\in\{I,O\}\) and eviction
 component \(E\in\{I,O\}\) are selected from the incumbent \(I\) or a legal future-aware
 oracle \(O\).  The paired effects are
@@ -3169,11 +3249,44 @@ oracle \(O\).  The paired effects are
   \tau_E(g)&=Y_{IO}(g)-Y_{II}(g),\\
   \tau_{AE}(g)&=Y_{OO}(g)-Y_{OI}(g)-Y_{IO}(g)+Y_{II}(g).
 \end{align}
-The corrected hypothesis is not \(\tau_A(g)>\tau_E(g)\) for every group.  It is that
-\(\sum_g\tau_A(g)>\sum_g\tau_E(g)\) may hold in aggregate, while the audit-identified
-counterexample families should satisfy \(\tau_E(g)>\tau_A(g)\).  A large interaction
-term \(\tau_{AE}\) would show that admission and eviction cannot be optimized
-independently because admission changes the future legal-victim distribution.
+Table~\ref{tab:causal-component-factorial} reports the completed full-panel result.
+The primary outcome is the evaluator's behavioral group score with the future-aware
+avoidable-eviction penalty and common complete-policy complexity charge omitted.  This
+prevents the causal outcome from directly rewarding agreement with the audit surrogate.
+The replay covers 162
+workload--capacity--seed groups with 96 requests per workload, capacities 24 and 48,
+and three seeds.  The same conclusions hold directionally for token hit rate and
+prefill tokens saved in the machine-readable artifact.
+
+\begin{table}[H]
+\centering
+\small
+\caption{Paired causal component effects.  ``Eviction after \(O_A\)'' is
+\(Y_{OO}-Y_{OI}=\tau_E+\tau_{AE}\).}
+\label{tab:causal-component-factorial}
+\begin{tabular}{lrrrrr}
+\toprule
+Group set & \(n\) & \(\sum\tau_A\) & \(\sum\tau_E\) &
+\(\sum\tau_{AE}\) & Eviction after \(O_A\) \\
+\midrule
+Full panel & 162 & 1704.963 & 518.431 & -258.918 & 259.513 \\
+Audit-labeled eviction-dominant & 29 & 530.681 & 419.871 & -340.599 & 79.271 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Admission therefore has \(3.29\times\) the aggregate eviction main effect and is
+larger in \(136/162\) groups.  The interaction directly rejects a literal reading of
+the surrogate counterexamples: among the 29 groups labeled eviction-dominant by the
+same-state audit, admission is causally larger in 23, oracle admission removes
+\(81.1\%\) of aggregate eviction value, and 18 retain no positive eviction effect
+after admission is repaired.  Across the full panel, however, \(37/162\) groups retain
+positive residual eviction value and \(50.1\%\) of the aggregate eviction main effect
+remains.  The causal conclusion is consequently asymmetric: optimize admission first,
+then gate richer eviction logic only into the minority regimes where its value
+survives the admission intervention.  Detailed workload effects and all secondary
+outcomes are preserved in \filepath{docs/research_log.tex}; exact paired results remain
+in \filepath{artifacts/prefix_kv_cache_causal_component_factorial.json}.
 
 A second, cheaper experiment is a factorial matrix of deployable components: several
 admission rules crossed with several eviction rules, all replayed on the same traces.

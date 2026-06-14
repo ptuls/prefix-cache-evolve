@@ -34,10 +34,13 @@ search:
 
 problem:
   settings:
+    verifier_version: "1.0.0"
     seeds: [11, 23, 37]
     policy_seed: 0
 ```
 
+- `verifier_version` must match the verifier implemented by the checked-out
+  source.
 - `problem.settings.seeds` deterministically generates synthetic workloads.
 - `policy_seed` is passed to candidate factories independently of workload
   generation.
@@ -62,7 +65,70 @@ configuration.
 
 Saved evolution runs contain the configuration snapshot, workload manifest,
 resolved model identifiers, search seed, package versions, Git commit and dirty
-state, Levi snapshot, model cost, and candidate source.
+state, Levi snapshot, model cost, and candidate source. New score records and
+snapshot history entries carry a three-part identity:
+
+- `verifier_version`: the semantic verifier contract.
+- `panel_sha256`: ordered request streams plus panel geometry.
+- `evaluation_context_sha256`: verifier version, normalized evaluator config,
+  and panel SHA-256.
+
+Reports reject missing or mixed identities inside an exact comparison.
+Intentional cross-context reports, such as geometry sweeps, record and validate
+one identity per geometry. Historical unstamped runs remain legacy records and
+cannot be tabulated with current versioned results.
+
+## Weak-Seed Rediscovery
+
+Deterministic replay of the incumbent is different from independently finding a
+similar policy. The normal search remains incumbent-seeded because it is the
+productive optimization lane. Rediscovery uses
+`configs/prefix_kv_cache_rediscovery.yaml`, the candidate-valid
+`seeds/weak_initial.py` seed, and a neutral prompt with no incumbent source,
+score, coefficients, or mechanism-preservation instructions. Search ranks the
+minimum of ordinary selection score and a non-quarantined agentic-workflow
+guidance score. Final rediscovery adjudication always re-evaluates generated
+source with the unchanged canonical `configs/prefix_kv_cache.yaml`; probe and
+hidden panels remain unavailable during search.
+
+Run at least three independent search seeds at the normal 300-evaluation budget:
+
+```bash
+uv run prefix-cache-evolve \
+  --iterations 300 \
+  --config configs/prefix_kv_cache_rediscovery.yaml \
+  --seed-program src/prefix_cache_evolve/problems/prefix_kv_cache/seeds/weak_initial.py \
+  --search-seed 101 \
+  --artifact-output artifacts/prefix_kv_cache_rediscovery_runs/weak_initial
+```
+
+Repeat with additional search seeds, then adjudicate every saved run together:
+
+```bash
+uv run prefix-cache-tools analyze rediscovery \
+  --run artifacts/prefix_kv_cache_rediscovery_runs/weak_initial/<run-a> \
+  --run artifacts/prefix_kv_cache_rediscovery_runs/weak_initial/<run-b> \
+  --run artifacts/prefix_kv_cache_rediscovery_runs/weak_initial/<run-c>
+```
+
+The primary criterion is behavioral rather than source similarity. A generated
+policy must be valid, remain at or below 650 effective AST nodes, pass the
+agentic surrogate gate, and recover at least 80% of the charged
+weak-seed-to-incumbent gap on selection, quarantined probe, and hidden panels.
+The discoverability claim is supported only after at least two distinct search
+seeds pass.
+
+The current result is negative. Three staged 298-evaluation runs on June 14,
+2026 used search seeds 211, 307, and 401, totaling 894 evaluations, `$21.5381`,
+and 8,705 seconds. None passed the behavioral criterion. The ordinary-score run
+overfit selection and failed probe plus the agentic gate. Adding the robust
+guidance floor improved probe and passed the gate but selected a compact,
+high-churn policy that failed selection and hidden transfer. After documenting
+generic stateful primitives and enabling inspirations, the final corrected run
+did not beat the weak seed; its strongest generated mutation was 708 nodes,
+failed the agentic gate, and scored below the weak seed on every canonical
+charged panel. Exact incumbent replay is reproducible, but independent
+weak-seed rediscovery is not yet established.
 
 ## Bring Your Own Model
 

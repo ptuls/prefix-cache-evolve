@@ -24,7 +24,11 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import (
     WorkloadRequest,
     scoring_fn_complexity,
 )
-from prefix_cache_evolve.workflow.configuration import (
+from prefix_cache_evolve.evaluators.verifier import (
+    require_single_score_identity,
+    require_single_verifier_version,
+)
+from prefix_cache_evolve.workflow.config import (
     ConfigLoader,
     MinimalConfigProvider,
     YamlConfigProvider,
@@ -92,7 +96,7 @@ from .utilities import (
     workload_metric_non_regression as _workload_metric_non_regression,
 )
 from .utilities import (
-    write_agentic_surrogate_probe_tripwire_report as _write_agentic_surrogate_probe_tripwire_report,
+    write_agentic_surrogate_probe_gate_report as _write_agentic_surrogate_probe_gate_report,
 )
 from .utilities import (
     write_generated_mutation_report as _write_generated_mutation_report,
@@ -319,6 +323,13 @@ def compare_baselines(
             config=config,
         )
         print(f"baseline_comparison={report_path}")
+    print(
+        "verifier_version="
+        + require_single_score_identity(
+            results.values(),
+            context="baseline console report",
+        ).verifier_version
+    )
     for name, result in results.items():
         print(f"{name}: combined_score={result.combined_score:.3f} [{_baseline_group(name)}]")
         for capacity, metrics in result.capacity_metrics.items():
@@ -389,14 +400,19 @@ def save_run_artifacts(
     artifacts = getattr(result, "artifacts", {}) or {}
     metadata = getattr(result, "metadata", {}) or {}
     resolved_report_config = report_config or _artifact_report_config()
+    identity = require_single_score_identity(
+        (metrics, artifacts),
+        context="evolution run artifacts",
+    )
+    if identity.verifier_version != resolved_report_config.verifier_version:
+        raise ValueError("run artifact verifier version does not match the operative report config")
     workload_metrics = artifacts.get("workload_metrics") if isinstance(artifacts, dict) else None
     tripwire_thresholds = dict(resolved_report_config.surrogate_probe_tripwire_thresholds)
     tripwire_suite = _surrogate_probe_tripwire_suite(
         workload_metrics,
         thresholds=tripwire_thresholds,
     )
-    agentic_tripwire = dict(tripwire_suite["channels"]["agentic_branching"])
-    agentic_tripwire["schema"] = "prefix-kv-cache-agentic-surrogate-probe-tripwire-v1"
+    agentic_gate = tripwire_suite["channels"]["agentic_branching"]
     config_snapshot_name = None
     if config_snapshot is not None and config_snapshot.is_file():
         config_snapshot_name = "config_snapshot.yaml"
@@ -405,6 +421,9 @@ def save_run_artifacts(
             encoding="utf-8",
         )
     summary = {
+        "verifier_version": identity.verifier_version,
+        "evaluation_context_sha256": identity.evaluation_context_sha256,
+        "panel_sha256": identity.panel_sha256,
         "run_id": run_id,
         "iterations": iterations,
         "config": config_label,
@@ -416,14 +435,17 @@ def save_run_artifacts(
         "archive_size": getattr(result, "archive_size", None),
         "runtime_seconds": getattr(result, "runtime_seconds", None),
         "repository": _repository_state(),
-        "agentic_surrogate_probe_tripwire": {
-            key: agentic_tripwire[key]
+        "agentic_surrogate_probe_gate": {
+            key: agentic_gate[key]
             for key in (
                 "status",
                 "flagged",
                 "flag_reason",
-                "absolute_gap",
-                "threshold",
+                "checked_metric_count",
+                "failed_metric_count",
+                "failed_metrics",
+                "missing_metrics",
+                "max_threshold_ratio",
             )
         },
         "surrogate_probe_tripwires": {
@@ -440,10 +462,10 @@ def save_run_artifacts(
     _write_json(run_dir / "metrics.json", metrics)
     _write_json(run_dir / "artifacts.json", artifacts)
     _write_json(run_dir / "metadata.json", metadata)
-    _write_json(run_dir / "agentic_surrogate_probe_tripwire.json", agentic_tripwire)
-    _write_agentic_surrogate_probe_tripwire_report(
-        run_dir / "agentic_surrogate_probe_tripwire.md",
-        agentic_tripwire,
+    _write_json(run_dir / "agentic_surrogate_probe_gate.json", agentic_gate)
+    _write_agentic_surrogate_probe_gate_report(
+        run_dir / "agentic_surrogate_probe_gate.md",
+        agentic_gate,
     )
     _write_json(run_dir / "surrogate_probe_tripwires.json", tripwire_suite)
     _write_surrogate_probe_tripwire_report(
@@ -455,6 +477,8 @@ def save_run_artifacts(
     summary["workload_manifest"] = {
         "path": "workload_manifest.json",
         "panel_sha256": workload_manifest["panel_sha256"],
+        "evaluation_context_sha256": workload_manifest["evaluation_context_sha256"],
+        "verifier_version": workload_manifest["verifier_version"],
     }
     _write_json(run_dir / "run_summary.json", summary)
 
@@ -577,11 +601,23 @@ def _persist_best_generated_mutation(
             run_dir / "best_generated_mutation_snapshot.json",
             {key: value for key, value in strongest.items() if key not in {"code", "content"}},
         )
+        snapshot_identity = require_single_score_identity(
+            (strongest,),
+            context="best generated mutation snapshot",
+        )
+        if snapshot_identity.verifier_version != config.verifier_version:
+            raise ValueError("generated mutation snapshot verifier version does not match config")
         decomposition = {
             "schema": "prefix-kv-cache-generated-mutation-decomposition-v1",
+            "verifier_version": config.verifier_version,
             "snapshot": str(snapshot_path),
             "generated_program_id": strongest.get("program_id"),
             "snapshot_primary_score": strongest.get("primary_score"),
+            "snapshot_primary_score_verifier_version": (snapshot_identity.verifier_version),
+            "snapshot_primary_score_evaluation_context_sha256": (
+                snapshot_identity.evaluation_context_sha256
+            ),
+            "snapshot_primary_score_panel_sha256": snapshot_identity.panel_sha256,
             "seed": _candidate_panel_decomposition(config, seed_path),
             "best_generated_mutation": _candidate_panel_decomposition(
                 config,
@@ -710,6 +746,7 @@ def _persist_specialist_promotion_adjudication(
         eligible = all(check["passed"] for check in checks.values())
         payload = {
             "schema": "prefix-kv-cache-specialist-promotion-adjudication-v1",
+            "verifier_version": config.verifier_version,
             "status": "pass" if eligible else "fail",
             "eligible": eligible,
             "specialist_fixed_admission_policy": config.fixed_admission_policy,
@@ -735,6 +772,7 @@ def _persist_specialist_promotion_adjudication(
     except Exception as exc:
         payload = {
             "schema": "prefix-kv-cache-specialist-promotion-adjudication-v1",
+            "verifier_version": config.verifier_version,
             "status": "fail",
             "eligible": False,
             "specialist_fixed_admission_policy": config.fixed_admission_policy,
@@ -804,6 +842,7 @@ def hidden_report(
         candidate_path = _resolve_candidate_program(candidate_program)
         print(f"candidate={candidate_path}")
         champion = _evaluate_candidate_program(config, candidate_path, splits=("hidden",))
+    print(f"verifier_version={champion.verifier_version}")
     print(f"  combined_score={champion.combined_score:.3f}")
     results = _evaluate_baselines(
         config,
@@ -841,8 +880,15 @@ def probe_report(
         ),
         **_evaluate_baselines(config, include_reporting=True, splits=("probe",)),
     }
+    identity = require_single_score_identity(
+        results.values(),
+        context="structure probe report",
+    )
     payload = {
         "schema": "prefix-kv-cache-structure-probe-v1",
+        "verifier_version": identity.verifier_version,
+        "evaluation_context_sha256": identity.evaluation_context_sha256,
+        "panel_sha256": identity.panel_sha256,
         "candidate": str(candidate_path),
         "selection_score_excludes_probe": True,
         "results": {name: _evaluation_result_summary(result) for name, result in results.items()},
@@ -924,8 +970,15 @@ def replay_trace_report(
             ),
             **results,
         }
+    identity = require_single_score_identity(
+        results.values(),
+        context="trace replay report",
+    )
     payload = {
         "schema": "prefix-kv-cache-trace-replay-v1",
+        "verifier_version": identity.verifier_version,
+        "evaluation_context_sha256": identity.evaluation_context_sha256,
+        "panel_sha256": identity.panel_sha256,
         "trace_path": str(trace_path),
         "trace_sha256": file_sha256(trace_path),
         "request_stream_sha256": request_stream_sha256(requests),
@@ -1005,11 +1058,17 @@ def write_score_weight_sensitivity_report(
         "candidate": _evaluate_candidate_program(config, candidate_path),
         **_evaluate_baselines(config),
     }
+    verifier_version = require_single_score_identity(
+        results.values(),
+        context="score-weight sensitivity report",
+    ).verifier_version
     rows = _score_weight_sensitivity_rows(results, config)
     lines = [
         "# Prefix KV-Cache Score-Weight Sensitivity",
         "",
         f"Candidate: `{candidate_path}`",
+        "",
+        f"Verifier: `{verifier_version}`",
         "",
         (
             "Each row rescales one score weight while holding all simulator trials "
@@ -1080,6 +1139,9 @@ def write_block_size_robustness_report(
             complexity_cost = float(result.score_breakdown.get("complexity_cost", 0.0))
             rows.append(
                 {
+                    "verifier_version": result.verifier_version,
+                    "evaluation_context_sha256": result.evaluation_context_sha256,
+                    "panel_sha256": result.panel_sha256,
                     "block_size_tokens": block_size_tokens,
                     "capacity_blocks": capacity_blocks,
                     "capacity_tokens": capacity_tokens,
@@ -1097,10 +1159,34 @@ def write_block_size_robustness_report(
                 }
             )
 
+    verifier_version = require_single_verifier_version(
+        rows,
+        context="block-size robustness report",
+    )
+    identities = {
+        block_size: require_single_score_identity(
+            (row for row in rows if row["block_size_tokens"] == block_size),
+            context=f"block-size robustness {block_size}-token comparison",
+        )
+        for block_size in block_sizes
+    }
     lines = [
         "# Prefix KV-Cache Block-Size Robustness",
         "",
         f"Candidate: `{candidate_path}`",
+        "",
+        f"Verifier: `{verifier_version}`",
+        "",
+        "Evaluation contexts: "
+        + ", ".join(
+            f"`{block_size}={identity.evaluation_context_sha256}`"
+            for block_size, identity in identities.items()
+        ),
+        "",
+        "Panels: "
+        + ", ".join(
+            f"`{block_size}={identity.panel_sha256}`" for block_size, identity in identities.items()
+        ),
         "",
         (
             "Each block size replays identical synthetic token streams and preserves "
@@ -1187,20 +1273,24 @@ def _score_weight_sensitivity_rows(
         base_value = float(getattr(config, weight))
         for factor in factors:
             variant = config.with_updates(**{weight: base_value * factor})
-            rescored = {}
+            rescored_results = {}
             for name, result in results.items():
                 complexity = int(result.candidate_metadata.get("scoring_fn_complexity", 0))
-                rescored[name] = (
-                    PrefixKVCacheEvaluator(variant)
-                    .rescore_trials(
-                        result.trials,
-                        scoring_fn_complexity=complexity,
-                    )
-                    .combined_score
+                rescored_results[name] = PrefixKVCacheEvaluator(variant).rescore_trials(
+                    result.trials,
+                    scoring_fn_complexity=complexity,
                 )
+            identity = require_single_score_identity(
+                rescored_results.values(),
+                context=f"score-weight sensitivity {weight} x {factor}",
+            )
+            rescored = {name: result.combined_score for name, result in rescored_results.items()}
             ranking = sorted(rescored, key=rescored.get, reverse=True)
             rows.append(
                 {
+                    "verifier_version": identity.verifier_version,
+                    "evaluation_context_sha256": identity.evaluation_context_sha256,
+                    "panel_sha256": identity.panel_sha256,
                     "weight": weight,
                     "base_value": base_value,
                     "factor": factor,

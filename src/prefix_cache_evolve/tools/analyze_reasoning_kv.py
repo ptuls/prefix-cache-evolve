@@ -13,6 +13,10 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import (
     EvaluationResult,
     PrefixKVCacheEvaluator,
 )
+from prefix_cache_evolve.evaluators.verifier import (
+    require_single_score_identity,
+    require_single_verifier_version,
+)
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import load_evaluator_config
 from prefix_cache_evolve.problems.prefix_kv_cache.pressure_aware_incumbent import (
     build_candidate as build_incumbent,
@@ -51,6 +55,9 @@ def _raw_score(result: EvaluationResult) -> float:
 def _summarize_result(result: EvaluationResult) -> dict[str, object]:
     metrics = result.split_metrics["validation"]
     summary: dict[str, object] = {
+        "verifier_version": result.verifier_version,
+        "evaluation_context_sha256": result.evaluation_context_sha256,
+        "panel_sha256": result.panel_sha256,
         "raw_score": _raw_score(result),
         "charged_score": result.combined_score,
         "complexity_cost": result.score_breakdown.get("complexity_cost", 0.0),
@@ -117,8 +124,20 @@ def run_analysis(
         for rank, name in enumerate(ranked, start=1):
             policy_results[name]["raw_rank"] = rank
         modes[mode] = policy_results
+    identities = {
+        mode: require_single_score_identity(
+            rows.values(),
+            context=f"reasoning-KV {mode} comparison",
+        )
+        for mode, rows in modes.items()
+    }
     return {
         "schema": "prefix-kv-cache-reasoning-kv-analysis-v1",
+        "verifier_version": base.verifier_version,
+        "evaluation_contexts": {
+            mode: identity.evaluation_context_sha256 for mode, identity in identities.items()
+        },
+        "panel_sha256s": {mode: identity.panel_sha256 for mode, identity in identities.items()},
         "config": str(config_path),
         "capacity_blocks": list(base.effective_capacity_blocks()),
         "block_size_tokens": base.block_size_tokens,
@@ -133,11 +152,35 @@ def run_analysis(
 
 def _write_markdown(path: Path, payload: dict[str, object]) -> None:
     modes = payload["modes"]
+    verifier_version = require_single_verifier_version(
+        (row for mode in modes.values() for row in mode.values()),
+        context="reasoning-KV report",
+    )
+    identities = {
+        mode: require_single_score_identity(
+            rows.values(),
+            context=f"reasoning-KV {mode} comparison",
+        )
+        for mode, rows in modes.items()
+    }
+    if verifier_version != payload.get("verifier_version"):
+        raise ValueError("reasoning-KV report version does not match its score rows")
     prefix_only = modes["prefix_only"]
     shared = modes["shared"]
     shared_ranked = sorted(shared, key=lambda name: shared[name]["raw_rank"])
     lines = [
         "# Reasoning Decode-KV Robustness",
+        "",
+        f"Verifier: `{verifier_version}`",
+        "",
+        "Evaluation contexts: "
+        + ", ".join(
+            f"`{mode}={identity.evaluation_context_sha256}`"
+            for mode, identity in identities.items()
+        ),
+        "",
+        "Panels: "
+        + ", ".join(f"`{mode}={identity.panel_sha256}`" for mode, identity in identities.items()),
         "",
         "This panel keeps the operative prefix-only verifier unchanged and replays existing",
         "algorithms with an opt-in shared-capacity model. In shared mode, generated decode KV",
@@ -245,7 +288,7 @@ def _write_markdown(path: Path, payload: dict[str, object]) -> None:
 @click.option(
     "--markdown",
     type=click.Path(path_type=Path),
-    default=Path("docs/results/reasoning_kv_robustness.md"),
+    default=Path("artifacts/prefix_kv_cache_reasoning_kv_analysis.md"),
     show_default=True,
 )
 def main(

@@ -29,6 +29,11 @@ _levi_search_seed = 0
 _levi_completion_index = 0
 _levi_api_base: str | None = None
 _levi_api_key_env: str | None = None
+_SCORE_IDENTITY_KEYS = (
+    "verifier_version",
+    "evaluation_context_sha256",
+    "panel_sha256",
+)
 
 
 @dataclass
@@ -89,6 +94,10 @@ class LeviScoreFunction:
             score = 0.0
 
         levi_metrics: dict[str, Any] = {"score": float(score)}
+        for key in _SCORE_IDENTITY_KEYS:
+            value = metrics.get(key)
+            if isinstance(value, str):
+                levi_metrics[key] = value
         for key, value in metrics.items():
             if isinstance(value, (int, float)) and math.isfinite(float(value)):
                 levi_metrics[key] = float(value)
@@ -178,11 +187,20 @@ class LeviRunner:
         evaluation = self._evaluate_best_program(best_program)
         metrics = evaluation.metrics
         artifacts = evaluation.artifacts
+        score_identity = {
+            key: value
+            for key in _SCORE_IDENTITY_KEYS
+            if isinstance((value := metrics.get(key)), str)
+        }
+        snapshot_path = Path(output_dir) / "snapshot.json"
+        if score_identity:
+            _stamp_levi_snapshot_score_identity(snapshot_path, score_identity)
         metadata = {
+            **score_identity,
             "levi_total_cost": getattr(result, "total_cost", 0.0),
             "levi_runtime_seconds": getattr(result, "runtime_seconds", 0.0),
             "levi_output_dir": str(output_dir),
-            "levi_snapshot_path": str(Path(output_dir) / "snapshot.json"),
+            "levi_snapshot_path": str(snapshot_path),
             "levi_paradigm_candidates_dir": str(Path(output_dir) / "paradigm_candidates"),
             "search_seed": search_seed,
             "model": getattr(config, "model", None),
@@ -626,6 +644,9 @@ def _persist_levi_paradigm_candidate_capture(capture: dict[str, Any], stats: Any
                 "source": source_name,
                 "result": result_name,
                 "score": result.get("score"),
+                "verifier_version": result.get("verifier_version"),
+                "evaluation_context_sha256": result.get("evaluation_context_sha256"),
+                "panel_sha256": result.get("panel_sha256"),
                 "error": result.get("error"),
             }
         )
@@ -639,6 +660,28 @@ def _persist_levi_paradigm_candidate_capture(capture: dict[str, Any], stats: Any
             "candidates": manifest_candidates,
         },
     )
+
+
+def _stamp_levi_snapshot_score_identity(
+    path: Path,
+    score_identity: dict[str, str],
+) -> None:
+    """Stamp every score-bearing Levi snapshot record with its score identity."""
+    if not path.is_file():
+        return
+    snapshot = json.loads(path.read_text(encoding="utf-8"))
+    snapshot.update(score_identity)
+    for key in ("metadata", "run_state"):
+        record = snapshot.get(key)
+        if isinstance(record, dict):
+            record.update(score_identity)
+    for key in ("elites", "score_history"):
+        records = snapshot.get(key)
+        if isinstance(records, list):
+            for record in records:
+                if isinstance(record, dict):
+                    record.update(score_identity)
+    _write_levi_json(path, snapshot)
 
 
 def _write_levi_json(path: Path, payload: Any) -> None:

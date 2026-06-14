@@ -19,6 +19,10 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import (
     build_workload,
 )
 from prefix_cache_evolve.evaluators.telemetry import EvictionDecisionSnapshot
+from prefix_cache_evolve.evaluators.verifier import (
+    require_single_score_identity,
+    require_single_verifier_version,
+)
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import load_evaluator_config
 from prefix_cache_evolve.problems.prefix_kv_cache.pressure_aware_incumbent import (
     build_candidate as build_incumbent,
@@ -478,6 +482,9 @@ def _rescore_panel(
 def _panel_summary(result: EvaluationResult, split: str) -> dict[str, float]:
     metrics = result.split_metrics[split]
     return {
+        "verifier_version": result.verifier_version,
+        "evaluation_context_sha256": result.evaluation_context_sha256,
+        "panel_sha256": result.panel_sha256,
         "raw_score": result.combined_score,
         "token_hit_rate": float(metrics["token_hit_rate"]),
         "avoidable_eviction_rate": float(metrics["avoidable_eviction_rate"]),
@@ -523,13 +530,26 @@ def _run_variant_panels(config: EvaluatorConfig) -> dict[str, object]:
 def run_analysis(config_path: Path) -> dict[str, object]:
     """Run same-state eviction analysis and full-panel variant adjudication."""
     config = load_evaluator_config(config_path)
+    variants = _run_variant_panels(config)
+    identities = {
+        panel: require_single_score_identity(
+            (variant[panel] for variant in variants.values()),
+            context=f"eviction analysis {panel} comparison",
+        )
+        for panel in ("selection", "probe", "hidden")
+    }
     return {
         "schema": "prefix-kv-cache-eviction-analysis-v1",
+        "verifier_version": config.verifier_version,
+        "evaluation_contexts": {
+            panel: identity.evaluation_context_sha256 for panel, identity in identities.items()
+        },
+        "panel_sha256s": {panel: identity.panel_sha256 for panel, identity in identities.items()},
         "config": str(config_path),
         "block_size_tokens": config.block_size_tokens,
         "capacity_blocks": list(config.effective_capacity_blocks()),
         "counterfactual": _run_counterfactual_analysis(config),
-        "variants": _run_variant_panels(config),
+        "variants": variants,
     }
 
 
@@ -537,6 +557,23 @@ def _write_markdown(path: Path, payload: dict[str, object]) -> None:
     counterfactual = payload["counterfactual"]["overall"]
     by_split = payload["counterfactual"]["by_split"]
     variants = payload["variants"]
+    verifier_version = require_single_verifier_version(
+        (
+            variant[panel]
+            for variant in variants.values()
+            for panel in ("selection", "probe", "hidden")
+        ),
+        context="eviction analysis report",
+    )
+    identities = {
+        panel: require_single_score_identity(
+            (variant[panel] for variant in variants.values()),
+            context=f"eviction analysis {panel} comparison",
+        )
+        for panel in ("selection", "probe", "hidden")
+    }
+    if verifier_version != payload.get("verifier_version"):
+        raise ValueError("eviction report version does not match its score rows")
     full = counterfactual["full_specialist"]
     incumbent = variants["incumbent"]
     descendant = variants["descendant_reweight"]
@@ -552,6 +589,17 @@ def _write_markdown(path: Path, payload: dict[str, object]) -> None:
     )
     lines = [
         "# Eviction Decision and Distillation Analysis",
+        "",
+        f"Verifier: `{verifier_version}`",
+        "",
+        "Evaluation contexts: "
+        + ", ".join(
+            f"`{panel}={identity.evaluation_context_sha256}`"
+            for panel, identity in identities.items()
+        ),
+        "",
+        "Panels: "
+        + ", ".join(f"`{panel}={identity.panel_sha256}`" for panel, identity in identities.items()),
         "",
         "This analysis compares eviction rankers on the incumbent's exact cache states, then",
         "runs each ranker end to end with admission and lifecycle callbacks frozen.",
@@ -667,7 +715,7 @@ def _write_markdown(path: Path, payload: dict[str, object]) -> None:
 @click.option(
     "--markdown",
     type=click.Path(path_type=Path),
-    default=Path("docs/results/eviction_policy_analysis.md"),
+    default=Path("artifacts/prefix_kv_cache_eviction_analysis.md"),
     show_default=True,
 )
 def main(config: Path, output: Path, markdown: Path) -> None:

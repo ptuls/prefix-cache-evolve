@@ -13,6 +13,16 @@ class EvolutionReporter:
         logger.info("{}", "=" * 60)
         logger.info("Config: {}", config_label)
         logger.info("Iterations: {}", iterations)
+        metadata = getattr(result, "metadata", None) or {}
+        verifier_version = metadata.get("verifier_version")
+        if verifier_version is not None:
+            logger.info("Verifier version: {}", verifier_version)
+        evaluation_context = metadata.get("evaluation_context_sha256")
+        if evaluation_context is not None:
+            logger.info("Evaluation context: {}", evaluation_context)
+        panel_sha = metadata.get("panel_sha256")
+        if panel_sha is not None:
+            logger.info("Panel SHA-256: {}", panel_sha)
         logger.info("Best score: {}", getattr(result, "best_score", "n/a"))
         logger.info("Evaluations: {}", getattr(result, "total_evaluations", "n/a"))
         total_cost = getattr(result, "total_cost", None)

@@ -9,6 +9,11 @@ from typing import Any
 
 import click
 
+from prefix_cache_evolve.evaluators.verifier import (
+    require_single_score_identity,
+    require_single_verifier_version,
+)
+
 
 @dataclass(frozen=True)
 class JourneyRun:
@@ -58,6 +63,17 @@ def _validate_snapshot(snapshot: dict[str, Any]) -> None:
         raise ValueError("score history and error count do not cover all evaluations")
     if scored_accept_count != accept_count:
         raise ValueError("score history acceptance count does not match run state")
+    versioned_records = [
+        snapshot,
+        run_state,
+        snapshot["metadata"],
+        *history,
+        *snapshot["elites"],
+    ]
+    require_single_score_identity(
+        versioned_records,
+        context="evaluation trajectory snapshot",
+    )
 
 
 def _map(value: float, low: float, high: float, start: float, span: float) -> float:
@@ -335,6 +351,10 @@ def render_trajectory(repo_root: Path) -> str:
     snapshots = [_load_snapshot(repo_root / run.snapshot_path) for run in JOURNEY_RUNS]
     for snapshot in snapshots:
         _validate_snapshot(snapshot)
+    require_single_verifier_version(
+        snapshots,
+        context="evaluation trajectory",
+    )
     lines = [
         "\\resizebox{\\textwidth}{!}{%",
         "\\begin{tikzpicture}[x=1cm,y=1cm]",

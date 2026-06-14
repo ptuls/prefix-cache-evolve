@@ -66,6 +66,7 @@ def run_demo() -> None:
     config = EvaluatorConfig(request_count=32, seeds=(3,), capacity_blocks=16)
     evaluator = PrefixKVCacheEvaluator(config)
     result = evaluator(build_candidate, scoring_fn_complexity=0)
+    print(f"verifier_version={result.verifier_version}")
     print(f"combined_score={result.combined_score:.3f}")
     for split, metrics in result.split_metrics.items():
         print(

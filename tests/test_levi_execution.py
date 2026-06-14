@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from prefix_cache_evolve.evaluator_entry import EvaluatorResult
-from prefix_cache_evolve.workflow.configuration import ConfigLoader
+from prefix_cache_evolve.workflow.config import ConfigLoader
 from prefix_cache_evolve.workflow.execution import (
     LeviRunner,
     LeviScoreFunction,
@@ -25,6 +25,7 @@ from prefix_cache_evolve.workflow.execution import (
     _module_name_from_package_path,
     _persist_levi_paradigm_candidate_capture,
 )
+from tests.support import score_identity
 
 requires_levi = pytest.mark.skipif(
     importlib.util.find_spec("levi") is None,
@@ -81,6 +82,25 @@ def test_levi_score_function_exposes_combined_score() -> None:
     score_fn = LeviScoreFunction(evaluate_factory)
 
     assert score_fn(lambda: 2.5) == {"score": 2.5, "combined_score": 2.5}
+
+
+def test_levi_score_function_preserves_score_identity() -> None:
+    def evaluate_factory(_factory):
+        return EvaluatorResult(
+            metrics={
+                **score_identity(),
+                "combined_score": 2.5,
+            },
+            artifacts={},
+        )
+
+    score_fn = LeviScoreFunction(evaluate_factory)
+
+    assert score_fn(lambda: None) == {
+        "score": 2.5,
+        **score_identity(),
+        "combined_score": 2.5,
+    }
 
 
 def test_levi_score_function_prefers_source_aware_evaluator() -> None:
@@ -545,7 +565,11 @@ def test_persist_levi_paradigm_candidate_capture_keeps_rejected_code(
             "candidates": [
                 {
                     "code": "def build_candidate():\n    return None\n",
-                    "result": {"score": 72.5, "combined_score": 72.5},
+                    "result": {
+                        **score_identity(),
+                        "score": 72.5,
+                        "combined_score": 72.5,
+                    },
                 },
                 {
                     "code": "def build_candidate():\n    return 1\n",
@@ -563,7 +587,10 @@ def test_persist_levi_paradigm_candidate_capture_keeps_rejected_code(
     assert (event_dir / "00_paradigm_shift.py").is_file()
     assert (event_dir / "01_variant.py").is_file()
     manifest = json.loads((event_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["candidates"][0]["score"] == 72.5
+    candidate = manifest["candidates"][0]
+    assert candidate["score"] == 72.5
+    for key, value in score_identity().items():
+        assert candidate[key] == value
     assert manifest["candidates"][1]["error"] == "candidate rejected"
     assert manifest["stats"]["paradigm_accepted"] is False
 
@@ -646,6 +673,19 @@ def test_levi_runner_records_generated_snapshot_path(tmp_path, monkeypatch) -> N
 
     def evolve_code(_description, **kwargs):
         captured.update(kwargs)
+        output_dir = Path(kwargs["output_dir"])
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "snapshot.json").write_text(
+            json.dumps(
+                {
+                    "metadata": {"best_score": 2.0},
+                    "run_state": {"best_score": 2.0},
+                    "elites": [{"primary_score": 2.0}],
+                    "score_history": [{"score": 2.0, "best_score": 2.0}],
+                }
+            ),
+            encoding="utf-8",
+        )
         return SimpleNamespace(
             best_program=program_path.read_text(encoding="utf-8"),
             best_score=2.0,
@@ -668,8 +708,11 @@ def test_levi_runner_records_generated_snapshot_path(tmp_path, monkeypatch) -> N
         runner,
         "_evaluate_best_program",
         lambda _source: EvaluatorResult(
-            metrics={"combined_score": 2.0},
-            artifacts={},
+            metrics={
+                **score_identity(),
+                "combined_score": 2.0,
+            },
+            artifacts=score_identity(),
         ),
     )
     config = SimpleNamespace(
@@ -698,6 +741,17 @@ def test_levi_runner_records_generated_snapshot_path(tmp_path, monkeypatch) -> N
     assert result.metadata["pipeline"] == {"n_llm_workers": 1}
     assert result.metadata["runtime"]["python"]
     assert result.metadata["runtime"]["packages"]["numpy"]
+    snapshot = json.loads(output_dir.joinpath("snapshot.json").read_text(encoding="utf-8"))
+    score_records = (
+        snapshot,
+        snapshot["metadata"],
+        snapshot["run_state"],
+        snapshot["elites"][0],
+        snapshot["score_history"][0],
+    )
+    for record in score_records:
+        for key, value in score_identity().items():
+            assert record[key] == value
 
 
 @requires_levi

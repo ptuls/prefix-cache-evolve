@@ -25,6 +25,7 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import (
     build_workload,
 )
 from prefix_cache_evolve.evaluators.telemetry import RequestSnapshot
+from prefix_cache_evolve.evaluators.verifier import VERIFIER_VERSION
 from prefix_cache_evolve.problems.prefix_kv_cache.production_incumbent import (
     build_candidate,
 )
@@ -112,6 +113,13 @@ def _policy_metadata(name: str) -> dict[str, Any]:
         "status": "promoted incumbent" if promoted else group,
         "promoted": promoted,
         "benchmark_selection_score": (_INCUMBENT_BENCHMARK_SELECTION_SCORE if promoted else None),
+        "benchmark_verifier_version": VERIFIER_VERSION if promoted else None,
+        "benchmark_evaluation_context_sha256": (
+            "6ffec4f6d223c7ef63e635e7ed1e124eb15f92965736c469e9d0c7591e43bf99" if promoted else None
+        ),
+        "benchmark_panel_sha256": (
+            "9431a5bd792de803d68e99d6c98d273f30d5d3e757ea83939760d0cfec60c354" if promoted else None
+        ),
         "benchmark_context": "production · 16-token verifier" if promoted else None,
     }
 
@@ -145,6 +153,7 @@ class SimulationLab:
     def catalog(self) -> dict[str, Any]:
         """Return policies, workloads, and defaults supported by the lab."""
         return {
+            "verifier_version": VERIFIER_VERSION,
             "source": {
                 "id": "synthetic",
                 "label": "Synthetic traffic",

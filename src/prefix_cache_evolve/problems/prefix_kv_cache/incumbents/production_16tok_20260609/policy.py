@@ -44,11 +44,9 @@ class CompactReusePolicy:
             + 0.35 * math.log1p(block.descendant_count)
             + 1.5 * math.log1p(block.estimated_recompute_cost / 96.0)
         )
-        pressure_penalty = (
-            self._admission_pressure
-            * (0.55 + 0.12 * max(0, block.depth - 1))
-            / (1.0 + reuse + 0.35 * priority)
-        )
+        pressure_penalty = self._admission_pressure * (
+            0.55 + 0.12 * max(0, block.depth - 1)
+        ) / (1.0 + reuse + 0.35 * priority)
         return (
             value
             - 0.7
@@ -56,9 +54,15 @@ class CompactReusePolicy:
             / max(1.0, 0.75 + 0.25 * frequency)
             - pressure_penalty
             - 0.22 * max(0.0, self._admission_pressure - 0.8)
-            - 0.18 * max(0.0, 1.0 - priority) * max(0.0, self._admission_pressure - 0.25)
-            - 0.12 * max(0.0, 1.0 - priority) * max(0.0, block.descendant_count - 1)
-            + 0.12 * threshold_excess(priority, 0.5) * threshold_excess(frequency, 1.0)
+            - 0.18
+            * max(0.0, 1.0 - priority)
+            * max(0.0, self._admission_pressure - 0.25)
+            - 0.12
+            * max(0.0, 1.0 - priority)
+            * max(0.0, block.descendant_count - 1)
+            + 0.12
+            * threshold_excess(priority, 0.5)
+            * threshold_excess(frequency, 1.0)
         )
 
     def score_eviction(self, block, now):

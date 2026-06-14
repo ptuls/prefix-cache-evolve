@@ -10,6 +10,7 @@ from prefix_cache_evolve.problems.prefix_kv_cache.configuration import (
     DEFAULT_CONFIG_PATH,
     load_evaluator_config,
 )
+from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.registry import current_incumbent
 from prefix_cache_evolve.tools import analyze_rediscovery
 from prefix_cache_evolve.tools.analyze_eviction import (
     VARIANT_SOURCES,
@@ -381,7 +382,7 @@ def test_run_analysis_prefers_generated_mutation_and_reports_preliminary(
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     initial_source = _WEAK_SEED_PATH.read_text(encoding="utf-8")
-    incumbent_source = (_POLICY_ROOT / "production_incumbent.py").read_text(encoding="utf-8")
+    incumbent_source = current_incumbent("production").source_path.read_text(encoding="utf-8")
     (run_dir / "seed_program.py").write_text(initial_source, encoding="utf-8")
     (run_dir / "best_program.py").write_text(initial_source, encoding="utf-8")
     (run_dir / "best_generated_mutation.py").write_text(incumbent_source, encoding="utf-8")
@@ -445,7 +446,7 @@ def test_run_analysis_rejects_close_result_when_agentic_gate_fails(
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     initial_source = _WEAK_SEED_PATH.read_text(encoding="utf-8")
-    incumbent_source = (_POLICY_ROOT / "production_incumbent.py").read_text(encoding="utf-8")
+    incumbent_source = current_incumbent("production").source_path.read_text(encoding="utf-8")
     (run_dir / "seed_program.py").write_text(initial_source, encoding="utf-8")
     (run_dir / "best_generated_mutation.py").write_text(incumbent_source, encoding="utf-8")
     (run_dir / "config_snapshot.yaml").write_text(

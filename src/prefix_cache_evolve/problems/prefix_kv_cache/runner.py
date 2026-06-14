@@ -42,7 +42,8 @@ from .configuration import (
     load_evaluator_config,
     prefix_kv_config_environment,
 )
-from .production_incumbent import build_candidate
+from .incumbents import build_current_incumbent as build_candidate
+from .incumbents.registry import current_incumbent, incumbent_record
 from .reproducibility import (
     build_workload_manifest,
     file_sha256,
@@ -114,11 +115,11 @@ from .utilities import (
 if TYPE_CHECKING:
     from prefix_cache_evolve.workflow.execution import LeviRunner
 
-_DEFAULT_SEED_PATH = Path(__file__).parent / "production_incumbent.py"
+_DEFAULT_SEED_PATH = current_incumbent("production").source_path
 _EVICTION_SPECIALIST_SEED_PATH = Path(__file__).parent / "seeds" / "eviction_specialist.py"
 DEFAULT_SEED_SOURCE = ProgramSource(_DEFAULT_SEED_PATH.read_text(encoding="utf-8"))
 _EVALUATOR_PATH = Path(__file__).parent / "evaluator.py"
-_COMPACT_SEED_PATH = Path(__file__).parent / "compact_seed.py"
+_COMPACT_SEED_PATH = incumbent_record("historical_compact_20260607").source_path
 _DEFAULT_CONFIG_FILE = str(DEFAULT_CONFIG_PATH)
 _CONFIG_LOADER = ConfigLoader()
 _DEFAULT_CAPACITY_SWEEP_BLOCKS = (24, 48)
@@ -1368,7 +1369,7 @@ def _score_weight_sensitivity_rows(
     type=click.Path(path_type=Path),
     help=(
         "Candidate .py file or saved run directory to use as the evolution seed; "
-        "defaults to the pressure-aware incumbent."
+        "defaults to the current production incumbent."
     ),
 )
 @click.option(

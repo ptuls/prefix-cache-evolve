@@ -23,16 +23,17 @@ from prefix_cache_evolve.evaluators.verifier import (
     require_single_verifier_version,
 )
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import load_evaluator_config
-from prefix_cache_evolve.problems.prefix_kv_cache.production_incumbent import (
-    build_candidate,
+from prefix_cache_evolve.problems.prefix_kv_cache.incumbents import (
+    build_current_incumbent as build_candidate,
 )
+from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.registry import current_incumbent
 
 _DEFAULT_BLOCK_SIZES = (16, 24, 32, 48, 64)
 _DEFAULT_CAPACITIES = (24, 48, 96, 128)
 _DEFAULT_CONFIG = Path("configs/prefix_kv_cache.yaml")
 _DEFAULT_OUTPUT = Path("docs/results/baseline_geometry_sweep.json")
 _INCUMBENT_NAME = "evolved_incumbent"
-_INCUMBENT_PATH = Path("src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py")
+_INCUMBENT_PATH = current_incumbent("production").source_path
 
 
 @dataclass(frozen=True)

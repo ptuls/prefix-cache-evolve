@@ -26,6 +26,9 @@ prefix-cache-tools
 │   └── regret
 ├── ablate
 │   └── structured
+├── incumbents
+│   ├── list
+│   └── validate
 └── tune
     └── compact
 ```
@@ -35,6 +38,19 @@ Run any command with `--help` for its complete option list:
 ```bash
 .venv/bin/prefix-cache-tools analyze regret --help
 ```
+
+## Incumbent Registry
+
+List the immutable promoted-policy bundles and validate their source,
+provenance, complexity, and benchmark pins:
+
+```bash
+.venv/bin/prefix-cache-tools incumbents list
+.venv/bin/prefix-cache-tools incumbents validate
+```
+
+Promotion creates a new bundle and changes the current role in
+`incumbents/registry.json`; existing bundle source is never overwritten.
 
 ## Analyses
 
@@ -198,23 +214,23 @@ Common reports include:
 # Baseline comparison.
 .venv/bin/prefix-cache-evolve \
   --baseline-report \
-  --candidate-program src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py
+  --candidate-program src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/production_16tok_20260609/policy.py
 
 # Quarantined probe and hidden final-adjudication panels.
 .venv/bin/prefix-cache-evolve \
   --probe-report \
-  --candidate-program src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py
+  --candidate-program src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/production_16tok_20260609/policy.py
 .venv/bin/prefix-cache-evolve \
   --hidden-report \
-  --candidate-program src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py
+  --candidate-program src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/production_16tok_20260609/policy.py
 
 # Block-size robustness and score-weight sensitivity.
 .venv/bin/prefix-cache-evolve \
   --block-size-report \
-  --candidate-program src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py
+  --candidate-program src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/production_16tok_20260609/policy.py
 .venv/bin/prefix-cache-evolve \
   --sensitivity-report \
-  --candidate-program src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py
+  --candidate-program src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/production_16tok_20260609/policy.py
 ```
 
 Trace calibration and replay consume user-supplied anonymized metadata:
@@ -223,7 +239,7 @@ Trace calibration and replay consume user-supplied anonymized metadata:
 .venv/bin/prefix-cache-evolve --calibrate-trace trace.jsonl
 .venv/bin/prefix-cache-evolve \
   --replay-trace trace.jsonl \
-  --candidate-program src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py
+  --candidate-program src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/production_16tok_20260609/policy.py
 ```
 
 See `configs/prefix_kv_trace_schema.json` and `docs/reproducibility.md` before

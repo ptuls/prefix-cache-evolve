@@ -10,3 +10,6 @@
 Benchmark policy programs under `prefix_kv_cache` are code-as-data: their exact source affects
 complexity measurements and reproducibility. Do not make style-only edits to those programs
 without rerunning and documenting the affected experiments.
+
+Promoted policies live in immutable bundles under `prefix_kv_cache/incumbents`. Add a new bundle
+and update the registry when promoting a policy; never overwrite an existing incumbent source.

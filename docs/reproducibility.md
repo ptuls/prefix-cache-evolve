@@ -78,6 +78,31 @@ Intentional cross-context reports, such as geometry sweeps, record and validate
 one identity per geometry. Historical unstamped runs remain legacy records and
 cannot be tabulated with current versioned results.
 
+## Incumbent Registry
+
+Promoted policies are committed as immutable bundles under
+`src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/`. Each bundle
+contains the exact candidate `policy.py` and a `manifest.json` recording:
+
+- source SHA-256, import target, and effective complexity;
+- verifier, panel, evaluation-context, score, and headline metric pins;
+- originating run, source artifact, recorded evaluations, and API cost;
+- lineage and any distinction between original promotion accounting and the
+  current replay.
+
+`registry.json` preserves historical incumbents and assigns the current
+production and retained discovery roles. Promoting a new policy means adding a
+new bundle and changing the registry; do not overwrite an existing bundle.
+Validate all stored identities with:
+
+```bash
+uv run prefix-cache-tools incumbents validate
+uv run prefix-cache-tools incumbents list
+```
+
+CI runs the same validation and fails on unregistered bundles, source drift,
+complexity drift, stale import targets, or mismatched source-artifact hashes.
+
 ## Weak-Seed Rediscovery
 
 Deterministic replay of the incumbent is different from independently finding a

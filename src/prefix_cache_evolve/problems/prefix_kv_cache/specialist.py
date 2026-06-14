@@ -13,10 +13,13 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import (
     PrefixKVCacheEvaluator,
 )
 
-from .pressure_aware_incumbent import build_candidate as build_pressure_aware_incumbent
+from .incumbents import build_discovery_incumbent
+from .incumbents.registry import current_incumbent
 
+_DISCOVERY_INCUMBENT_ID = current_incumbent("discovery").incumbent_id
 _FIXED_ADMISSION_POLICIES: dict[str, Callable[..., PrefixKVPolicy]] = {
-    "pressure_aware_incumbent": build_pressure_aware_incumbent,
+    _DISCOVERY_INCUMBENT_ID: build_discovery_incumbent,
+    "pressure_aware_incumbent": build_discovery_incumbent,
 }
 _EVICTION_ONLY_ARGUMENTS = ("block", "now", "frequency", "priority")
 _FULL_POLICY_METHODS = {

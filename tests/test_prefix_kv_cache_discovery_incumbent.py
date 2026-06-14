@@ -1,10 +1,10 @@
-"""Tests for the promoted pressure-aware prefix KV-cache incumbent."""
+"""Tests for the retained discovery incumbent."""
 
 from types import SimpleNamespace
 
 import pytest
 
-from prefix_cache_evolve.problems.prefix_kv_cache.pressure_aware_incumbent import (
+from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.discovery_8tok_20260608.policy import (
     DEFAULT_PRESSURE_HALF_LIFE,
     CompactReusePolicy,
 )

@@ -1,0 +1,42 @@
+{
+  "schema": "prefix-kv-cache-incumbent-manifest-v1",
+  "id": "historical_composed_8tok_20260608",
+  "role": "historical",
+  "status": "retained",
+  "promoted_at": "2026-06-08T00:16:16Z",
+  "source": {
+    "path": "policy.py",
+    "module": "prefix_cache_evolve.problems.prefix_kv_cache.incumbents.historical_composed_8tok_20260608.policy",
+    "factory": "build_candidate",
+    "sha256": "9db1dab7a9294a2745f8d9acb9b7b00610de8f21e68982a6da758a0f5f42226a",
+    "complexity_mode": "form_aware",
+    "effective_complexity": 621
+  },
+  "benchmark": {
+    "verifier_version": "1.0.0",
+    "config_path": "configs/prefix_kv_cache_discovery.yaml",
+    "splits": [
+      "train",
+      "validation",
+      "probe"
+    ],
+    "panel_sha256": "a4cbed7296d62c495e004cce824e6c3000f26d8dbe549e4b2038e147eb7fb59c",
+    "evaluation_context_sha256": "00c89c53207b681c371bf624cc9f1d7d626c542bc2f3e21aa694d42553a57cb7",
+    "selection_combined_score": 76.51243737431354,
+    "validation_token_hit_rate": 0.6696953479538746,
+    "probe_token_hit_rate": 0.6286110510558537
+  },
+  "provenance": {
+    "stage": "composed_discovery_parent",
+    "run_id": "20260608T001616Z",
+    "run_artifact_root": "artifacts/prefix_kv_cache_runs/20260608T001616Z",
+    "source_artifact": "seed_program.py",
+    "source_artifact_sha256": "9db1dab7a9294a2745f8d9acb9b7b00610de8f21e68982a6da758a0f5f42226a",
+    "lineage_parent_ids": [
+      "historical_compact_20260607"
+    ],
+    "original_reported_score": 76.63,
+    "original_reported_effective_complexity": 609,
+    "note": "Exact composed incumbent retained as the seed of the final discovery run."
+  }
+}

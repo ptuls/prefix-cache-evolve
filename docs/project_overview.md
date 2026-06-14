@@ -61,7 +61,7 @@ independent discovery are deliberately reported as separate claims.
   RadixAttention, LRU, LFU, recompute-aware, prefix-fanout, and tenant-fair
   policies.
 - Reporting-only future-knowledge controls and decision-level regret audits.
-- Versioned score identities, workload manifests, retained candidate source,
+- Versioned score identities, workload manifests, immutable incumbent bundles,
   and saved evolution artifacts.
 - An anonymized metadata-only trace calibration and replay path.
 - An interactive policy-comparison lab.

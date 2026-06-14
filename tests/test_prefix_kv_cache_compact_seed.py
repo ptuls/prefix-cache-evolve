@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from prefix_cache_evolve.problems.prefix_kv_cache.compact_seed import CompactReusePolicy
+from prefix_cache_evolve.problems.prefix_kv_cache.incumbents import incumbent_record
 from prefix_cache_evolve.problems.prefix_kv_cache.seeds.structured_recurrence import (
     StructuredRecurrencePolicy,
 )
@@ -13,6 +13,10 @@ from prefix_cache_evolve.tools.ablate_structured import AblationStructuredPolicy
 from prefix_cache_evolve.tools.tune_compact import (
     DEFAULT_PARAMETERS,
     TunableCompactPolicy,
+)
+
+CompactReusePolicy = incumbent_record("historical_compact_20260607").load_symbol(
+    "CompactReusePolicy"
 )
 
 

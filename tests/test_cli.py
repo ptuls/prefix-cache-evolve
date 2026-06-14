@@ -1,5 +1,6 @@
 """Functional tests for repository Click commands."""
 
+import json
 import runpy
 from pathlib import Path
 from typing import cast
@@ -71,6 +72,9 @@ def test_runner_show_config_does_not_start_evolution() -> None:
         ["analyze", "regret", "--help"],
         ["analyze", "reasoning-kv", "--help"],
         ["ablate", "structured", "--help"],
+        ["incumbents", "--help"],
+        ["incumbents", "list", "--help"],
+        ["incumbents", "validate", "--help"],
         ["tune", "compact", "--help"],
     ),
 )
@@ -79,6 +83,23 @@ def test_consolidated_tools_expose_subcommand_help(arguments: list[str]) -> None
 
     assert result.exit_code == 0
     assert "Options:" in result.output
+
+
+def test_incumbent_validation_command_passes() -> None:
+    result = CliRunner().invoke(tools_main, ["incumbents", "validate"])
+
+    assert result.exit_code == 0
+    assert result.output == "validated_incumbents=4\n"
+
+
+def test_incumbent_list_distinguishes_history_from_current_assignments() -> None:
+    result = CliRunner().invoke(tools_main, ["incumbents", "list"])
+
+    assert result.exit_code == 0
+    records = {record["id"]: record for record in json.loads(result.output)}
+    assert records["historical_compact_20260607"]["current_roles"] == []
+    assert records["production_16tok_20260609"]["status"] == "promoted"
+    assert records["production_16tok_20260609"]["current_roles"] == ["production"]
 
 
 @pytest.mark.parametrize("mode", ("--shadow-price", "--causal-components"))

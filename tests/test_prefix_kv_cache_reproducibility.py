@@ -15,8 +15,14 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import (
 )
 from prefix_cache_evolve.evaluators.verifier import VERIFIER_VERSION
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import load_evaluator_config
-from prefix_cache_evolve.problems.prefix_kv_cache.pressure_aware_incumbent import (
-    build_candidate,
+from prefix_cache_evolve.problems.prefix_kv_cache.incumbents import (
+    build_discovery_incumbent as build_candidate,
+)
+from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.registry import (
+    current_incumbent,
+    incumbent_record,
+    incumbent_records,
+    validate_incumbent_registry,
 )
 from prefix_cache_evolve.problems.prefix_kv_cache.reproducibility import (
     build_workload_manifest,
@@ -25,13 +31,11 @@ from prefix_cache_evolve.problems.prefix_kv_cache.reproducibility import (
 )
 from tests.support import score_identity
 
-_DISCOVERY_INCUMBENT_PATH = Path(
-    "src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py"
-)
-_PRODUCTION_INCUMBENT_PATH = Path(
-    "src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py"
-)
-_PRODUCTION_INCUMBENT_SHA256 = "43cc3f7267cac1bf5409e13a70e72aba9ba6c39c3e1d870fde4885e29db83adb"
+_DISCOVERY_INCUMBENT = current_incumbent("discovery")
+_DISCOVERY_INCUMBENT_PATH = _DISCOVERY_INCUMBENT.source_path
+_PRODUCTION_INCUMBENT = current_incumbent("production")
+_PRODUCTION_INCUMBENT_PATH = _PRODUCTION_INCUMBENT.source_path
+_INCUMBENT_IDS = tuple(record.incumbent_id for record in incumbent_records())
 _ONE_SEED_DISCOVERY_TOKEN_HIT_RATES = {
     "train/shared_system_prompt": 0.834446919079436,
     "train/rag_template_reuse": 0.820967146548542,
@@ -223,8 +227,37 @@ def test_pressure_aware_incumbent_matches_one_seed_discovery_scores() -> None:
         )
 
 
-def test_production_incumbent_source_is_pinned() -> None:
+def test_incumbent_registry_preserves_exact_sources_and_metadata() -> None:
+    records = validate_incumbent_registry()
     source = _PRODUCTION_INCUMBENT_PATH.read_text(encoding="utf-8")
 
-    assert file_sha256(_PRODUCTION_INCUMBENT_PATH) == _PRODUCTION_INCUMBENT_SHA256
+    assert {record.role for record in records} == {"discovery", "historical", "production"}
+    assert file_sha256(_PRODUCTION_INCUMBENT_PATH) == _PRODUCTION_INCUMBENT.source_sha256
     assert scoring_fn_complexity(source, form_aware=True) == 572
+    assert _PRODUCTION_INCUMBENT.provenance["source_artifact_sha256"] == (
+        _PRODUCTION_INCUMBENT.source_sha256
+    )
+
+
+@pytest.mark.parametrize("incumbent_id", _INCUMBENT_IDS)
+def test_registered_incumbent_matches_pinned_benchmark_identity(incumbent_id: str) -> None:
+    incumbent = incumbent_record(incumbent_id)
+    benchmark = incumbent.benchmark
+    config = load_evaluator_config(Path(str(benchmark["config_path"])))
+    source = incumbent.source_path.read_text(encoding="utf-8")
+    complexity = scoring_fn_complexity(source, form_aware=config.form_aware_complexity)
+
+    result = PrefixKVCacheEvaluator(config, splits=tuple(benchmark["splits"]))(
+        incumbent.load_factory(),
+        scoring_fn_complexity=complexity,
+    )
+
+    assert result.verifier_version == benchmark["verifier_version"]
+    assert result.panel_sha256 == benchmark["panel_sha256"]
+    assert result.evaluation_context_sha256 == benchmark["evaluation_context_sha256"]
+    assert result.combined_score == benchmark["selection_combined_score"]
+    assert (
+        result.split_metrics["validation"]["token_hit_rate"]
+        == (benchmark["validation_token_hit_rate"])
+    )
+    assert result.split_metrics["probe"]["token_hit_rate"] == benchmark["probe_token_hit_rate"]

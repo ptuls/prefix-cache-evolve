@@ -129,7 +129,7 @@ problem:
     surrogate_probe_tripwire_thresholds:
       agentic_branching: 0.12
       cyclic_working_set: 0.25
-    fixed_admission_policy: pressure_aware_incumbent
+    fixed_admission_policy: discovery_8tok_20260608
     candidate_policy_surface: eviction_only
     search_score_mode: raw_before_complexity
     reject_unsupported_source_patterns: true

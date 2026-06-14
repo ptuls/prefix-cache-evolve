@@ -1,0 +1,25 @@
+{
+  "schema": "prefix-kv-cache-incumbent-registry-v1",
+  "current": {
+    "discovery": "discovery_8tok_20260608",
+    "production": "production_16tok_20260609"
+  },
+  "incumbents": [
+    {
+      "id": "historical_compact_20260607",
+      "manifest": "historical_compact_20260607/manifest.json"
+    },
+    {
+      "id": "historical_composed_8tok_20260608",
+      "manifest": "historical_composed_8tok_20260608/manifest.json"
+    },
+    {
+      "id": "discovery_8tok_20260608",
+      "manifest": "discovery_8tok_20260608/manifest.json"
+    },
+    {
+      "id": "production_16tok_20260609",
+      "manifest": "production_16tok_20260609/manifest.json"
+    }
+  ]
+}

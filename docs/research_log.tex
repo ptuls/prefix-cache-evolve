@@ -590,7 +590,7 @@ this run does \emph{not} establish that a subsidized structured policy lost on m
 It establishes that the search found a promising but verbose hand-rolled structure and
 failed to adopt the cheaper provided representation.
 
-The saved winner is byte-identical to \code{compact_seed.py}; validation, probe, and
+The saved winner is byte-identical to the retained compact incumbent; validation, probe, and
 hidden metrics for the recommended seed were therefore exactly unchanged.  At that
 stage, the adjudication rule retained the prior seed because no candidate improved
 validation while preserving both quarantined panels.  The full decomposition is
@@ -703,7 +703,7 @@ The full structure probe remains quarantined from selection.  The per-family hit
 are useful diagnostics, but Run 2 demonstrates why they should not be promoted without
 an operational non-regression constraint: both hit rates improved while aggregate
 probe score deteriorated sharply.  At that stage, adjudication kept
-\code{compact_seed.py} unchanged and treated the structured seed as a useful alternate
+the compact incumbent unchanged and treated the structured seed as a useful alternate
 parent.  The ablation and repeated-run verdicts are persisted in
 \filepath{artifacts/prefix_kv_cache_structured_ablation.json} and
 \filepath{artifacts/prefix_kv_cache_structured_runs/adjudication.json}.
@@ -983,7 +983,7 @@ launched'' to ``a run can produce evidence worth trusting.''
 
 \subsection{What ``up and running'' actually required}
 
-There were four distinct thresholds of readiness:
+There were five distinct thresholds of readiness:
 
 \begin{enumerate}
   \item \textbf{The repository could run locally.}  Baseline, simulator, reporting, and
@@ -1010,6 +1010,14 @@ There were four distinct thresholds of readiness:
   snapshots, split and workload metrics, the strongest generated non-seed candidate,
   probe and hidden decompositions, and a final promotion decision.  Without those
   artifacts, an unchanged seed could conceal what evolution had actually discovered.
+
+  \item \textbf{A promoted incumbent remained auditable after the run.}  Ignored run
+  artifacts and mutable filenames were not a durable promotion record: a formatter
+  could preserve behavior while changing the exact source hash, and provenance stayed
+  scattered across prose and local directories.  Promoted policies are now retained as
+  immutable source-and-manifest bundles.  A registry assigns production and discovery
+  roles, while CI validates source hashes, effective complexity, import targets,
+  benchmark identities, and the originating candidate-artifact hash.
 \end{enumerate}
 
 The practical bootstrap path therefore became:

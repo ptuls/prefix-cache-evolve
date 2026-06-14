@@ -44,5 +44,8 @@ jobs:
           --workload-manifest-reference docs/results/discovery_workload_manifest.json
           --config configs/prefix_kv_cache_discovery.yaml
 
+      - name: Verify incumbent registry
+        run: uv run prefix-cache-tools incumbents validate
+
       - name: Test
         run: uv run pytest -q

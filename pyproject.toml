@@ -109,10 +109,11 @@ ignore = ["D105", "D107"]
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
+[tool.ruff.format]
+exclude = ["src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/**/policy.py"]
+
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["D"]
-"src/prefix_cache_evolve/problems/prefix_kv_cache/compact_seed.py" = ["D"]
 "src/prefix_cache_evolve/problems/prefix_kv_cache/initial_program.py" = ["D"]
-"src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py" = ["D"]
-"src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py" = ["D"]
+"src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/**/policy.py" = ["D"]
 "src/prefix_cache_evolve/problems/prefix_kv_cache/seeds/*.py" = ["D"]

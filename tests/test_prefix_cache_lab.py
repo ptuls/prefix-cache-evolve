@@ -10,6 +10,7 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import (
     baseline_lru_blocks,
     build_workload,
 )
+from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.registry import current_incumbent
 from prefix_cache_evolve.problems.prefix_kv_cache.lab import SimulationLab
 
 
@@ -37,7 +38,14 @@ def test_lab_catalog_exposes_candidates_baselines_and_public_workloads() -> None
     assert policies["candidate"]["label"] == "Priority-aware pressure incumbent"
     assert policies["candidate"]["status"] == "promoted incumbent"
     assert policies["candidate"]["promoted"] is True
-    assert policies["candidate"]["benchmark_selection_score"] == 65.649
+    assert (
+        policies["candidate"]["benchmark_selection_score"]
+        == current_incumbent("production").benchmark["selection_combined_score"]
+    )
+    assert (
+        policies["candidate"]["benchmark_evaluation_context_sha256"]
+        == current_incumbent("production").benchmark["evaluation_context_sha256"]
+    )
     assert policies["candidate"]["benchmark_context"] == "production · 16-token verifier"
     assert "bounded multi-timescale reuse state" in policies["candidate"]["description"]
     assert policies["vllm_apc"]["group"] == "deployable"
@@ -70,7 +78,10 @@ def test_lab_simulation_emits_aligned_policy_snapshots() -> None:
         "lru",
     ]
     assert result["policies"][0]["promoted"] is True
-    assert result["policies"][0]["benchmark_selection_score"] == 65.649
+    assert (
+        result["policies"][0]["benchmark_selection_score"]
+        == current_incumbent("production").benchmark["selection_combined_score"]
+    )
     assert result["policies"][1]["promoted"] is False
     for policy in result["policies"]:
         events = policy["events"]

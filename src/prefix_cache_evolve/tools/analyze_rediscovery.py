@@ -10,6 +10,10 @@ from typing import Any
 import click
 
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import load_evaluator_config
+from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.registry import (
+    current_incumbent,
+    incumbent_record,
+)
 from prefix_cache_evolve.problems.prefix_kv_cache.reproducibility import file_sha256
 from prefix_cache_evolve.problems.prefix_kv_cache.runner import _candidate_panel_decomposition
 from prefix_cache_evolve.problems.prefix_kv_cache.utilities import (
@@ -25,8 +29,8 @@ _DEFAULT_OUTPUT_PATH = _REPOSITORY_ROOT / "artifacts/prefix_kv_cache_rediscovery
 _POLICY_ROOT = _REPOSITORY_ROOT / "src/prefix_cache_evolve/problems/prefix_kv_cache"
 _REFERENCE_PATHS = {
     "weak_initial": _POLICY_ROOT / "seeds/weak_initial.py",
-    "intermediate_compact": _POLICY_ROOT / "compact_seed.py",
-    "incumbent": _POLICY_ROOT / "production_incumbent.py",
+    "intermediate_compact": incumbent_record("historical_compact_20260607").source_path,
+    "incumbent": current_incumbent("production").source_path,
 }
 _PANELS = ("selection", "probe", "hidden")
 

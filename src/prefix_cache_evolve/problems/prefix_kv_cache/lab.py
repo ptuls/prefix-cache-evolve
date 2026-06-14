@@ -26,9 +26,10 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import (
 )
 from prefix_cache_evolve.evaluators.telemetry import RequestSnapshot
 from prefix_cache_evolve.evaluators.verifier import VERIFIER_VERSION
-from prefix_cache_evolve.problems.prefix_kv_cache.production_incumbent import (
-    build_candidate,
+from prefix_cache_evolve.problems.prefix_kv_cache.incumbents import (
+    build_current_incumbent as build_candidate,
 )
+from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.registry import current_incumbent
 
 _DEFAULT_POLICIES = (
     "candidate",
@@ -37,7 +38,7 @@ _DEFAULT_POLICIES = (
     "lru",
 )
 _INCUMBENT_ID = "candidate"
-_INCUMBENT_BENCHMARK_SELECTION_SCORE = 65.649
+_INCUMBENT = current_incumbent("production")
 _POLICY_DESCRIPTIONS = {
     "candidate": (
         "Promoted pressure-aware policy with bounded multi-timescale reuse state. "
@@ -112,14 +113,16 @@ def _policy_metadata(name: str) -> dict[str, Any]:
         "group": group,
         "status": "promoted incumbent" if promoted else group,
         "promoted": promoted,
-        "benchmark_selection_score": (_INCUMBENT_BENCHMARK_SELECTION_SCORE if promoted else None),
-        "benchmark_verifier_version": VERIFIER_VERSION if promoted else None,
+        "benchmark_selection_score": (
+            _INCUMBENT.benchmark["selection_combined_score"] if promoted else None
+        ),
+        "benchmark_verifier_version": (
+            _INCUMBENT.benchmark["verifier_version"] if promoted else None
+        ),
         "benchmark_evaluation_context_sha256": (
-            "6ffec4f6d223c7ef63e635e7ed1e124eb15f92965736c469e9d0c7591e43bf99" if promoted else None
+            _INCUMBENT.benchmark["evaluation_context_sha256"] if promoted else None
         ),
-        "benchmark_panel_sha256": (
-            "9431a5bd792de803d68e99d6c98d273f30d5d3e757ea83939760d0cfec60c354" if promoted else None
-        ),
+        "benchmark_panel_sha256": (_INCUMBENT.benchmark["panel_sha256"] if promoted else None),
         "benchmark_context": "production · 16-token verifier" if promoted else None,
     }
 

@@ -32,15 +32,15 @@ from prefix_cache_evolve.evaluators.utilities import percentile
 from prefix_cache_evolve.evaluators.verifier import (
     require_single_score_identity,
 )
-from prefix_cache_evolve.problems.prefix_kv_cache.compact_seed import (
-    build_candidate as build_compact_seed,
-)
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import load_evaluator_config
-from prefix_cache_evolve.problems.prefix_kv_cache.pressure_aware_incumbent import (
-    build_candidate as build_incumbent,
+from prefix_cache_evolve.problems.prefix_kv_cache.incumbents import (
+    build_current_incumbent as build_production_incumbent,
 )
-from prefix_cache_evolve.problems.prefix_kv_cache.production_incumbent import (
-    build_candidate as build_production_incumbent,
+from prefix_cache_evolve.problems.prefix_kv_cache.incumbents import (
+    build_discovery_incumbent as build_incumbent,
+)
+from prefix_cache_evolve.problems.prefix_kv_cache.incumbents import (
+    incumbent_record,
 )
 from prefix_cache_evolve.problems.prefix_kv_cache.seeds.structured_recurrence import (
     build_candidate as build_structured_recurrence,
@@ -50,6 +50,7 @@ from prefix_cache_evolve.problems.prefix_kv_cache.seeds.structured_seed import (
 )
 
 _DEFAULT_SPLITS = ("train", "validation", "probe", "hidden")
+build_compact_seed = incumbent_record("historical_compact_20260607").load_factory()
 
 
 @dataclass(frozen=True, slots=True)

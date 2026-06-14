@@ -24,8 +24,11 @@ from prefix_cache_evolve.evaluators.verifier import (
     require_single_verifier_version,
 )
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import load_evaluator_config
-from prefix_cache_evolve.problems.prefix_kv_cache.pressure_aware_incumbent import (
-    build_candidate as build_incumbent,
+from prefix_cache_evolve.problems.prefix_kv_cache.incumbents import (
+    build_discovery_incumbent as build_incumbent,
+)
+from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.registry import (
+    current_incumbent,
 )
 from prefix_cache_evolve.problems.prefix_kv_cache.specialist import (
     EvictionOnlyEvaluator,
@@ -33,10 +36,7 @@ from prefix_cache_evolve.problems.prefix_kv_cache.specialist import (
 )
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-_INCUMBENT_PATH = (
-    _REPOSITORY_ROOT
-    / "src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py"
-)
+_INCUMBENT_PATH = current_incumbent("discovery").source_path
 _SHORT_REUSE_DISTANCE_STEPS = 8.0
 
 INCUMBENT_SOURCE = """\

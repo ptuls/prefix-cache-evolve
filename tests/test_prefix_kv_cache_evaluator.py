@@ -52,6 +52,7 @@ from prefix_cache_evolve.problems.prefix_kv_cache.configuration import (
     evaluator_config_from_settings,
     load_evaluator_config,
 )
+from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.registry import current_incumbent
 from prefix_cache_evolve.problems.prefix_kv_cache.runner import (
     _baseline_report_headline,
     _config_from_args,
@@ -1449,11 +1450,11 @@ def build_candidate(capacity_blocks, block_size_tokens, seed=None):
 @pytest.mark.parametrize(
     "path",
     [
-        "src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py",
-        "src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py",
+        current_incumbent("discovery").source_path,
+        current_incumbent("production").source_path,
     ],
 )
-def test_committed_incumbents_pass_static_source_contract(path: str) -> None:
+def test_committed_incumbents_pass_static_source_contract(path: Path) -> None:
     source = Path(path).read_text(encoding="utf-8")
     complexity = scoring_fn_complexity(source, form_aware=True)
     config = EvaluatorConfig(
@@ -3030,7 +3031,7 @@ def test_eviction_specialist_config_fixes_admission_and_separates_promotion_cap(
     workflow_config = prefix_runner._CONFIG_LOADER.load(path)
     evaluator_config = load_evaluator_config(path)
 
-    assert evaluator_config.fixed_admission_policy == "pressure_aware_incumbent"
+    assert evaluator_config.fixed_admission_policy == "discovery_8tok_20260608"
     assert evaluator_config.candidate_policy_surface == "eviction_only"
     assert evaluator_config.search_score_mode == "raw_before_complexity"
     assert evaluator_config.max_candidate_complexity == 1000
@@ -3178,9 +3179,7 @@ def test_demo_run_evolution_defaults_to_production_incumbent(monkeypatch) -> Non
 
     prefix_runner.demo_run_evolution(iterations=1, quick=True, artifact_output=None)
 
-    expected = Path(
-        "src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py"
-    ).read_text(encoding="utf-8")
+    expected = current_incumbent("production").source_path.read_text(encoding="utf-8")
     assert captured["source"] == expected
 
 
@@ -4585,9 +4584,7 @@ def test_eviction_only_promotion_adjudication_composes_complete_candidate(
 
 
 def test_compose_eviction_specialist_source_replaces_only_eviction_method() -> None:
-    base_source = Path(
-        "src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py"
-    ).read_text(encoding="utf-8")
+    base_source = current_incumbent("discovery").source_path.read_text(encoding="utf-8")
     specialist_source = textwrap.dedent(
         """
         import statistics

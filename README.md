@@ -68,7 +68,7 @@ Evaluate the production incumbent on the full validation panel:
 uv run prefix-cache-evolve \
   --baseline-report \
   --candidate-program \
-  src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py
+  src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/production_16tok_20260609/policy.py
 ```
 
 For development:
@@ -121,6 +121,10 @@ Open `http://127.0.0.1:8765`. Hidden workloads remain excluded from the UI.
 5. Fine-grained failures and workload diagnostics guide subsequent mutations.
 6. Final promotion requires deployable complexity and fail-closed cross-panel
    adjudication.
+
+Promoted policies are stored as immutable source-and-manifest bundles under
+`src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents`. Validate source,
+provenance, and benchmark pins with `uv run prefix-cache-tools incumbents validate`.
 
 Candidate-visible fields are online-computable at or before the current request.
 Future-use information is quarantined to reporting-only baselines and verifier

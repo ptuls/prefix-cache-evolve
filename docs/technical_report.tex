@@ -260,14 +260,16 @@ Evolution prompt, model and pipeline configuration, workload panel, and score we
 \filepath{src/prefix_cache_evolve/workflow/execution.py} &
 Adapter between Levi's \code{evolve_code} API and the repository's evaluator result
 format. \\
-\filepath{src/prefix_cache_evolve/workflow/configuration.py} &
+\filepath{src/prefix_cache_evolve/workflow/config.py} &
 Pydantic-validated YAML loading and conversion into arguments forwarded to Levi. \\
-\filepath{src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py} &
-Current promoted deployable policy discovered by the production-oriented search. \\
-\filepath{src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py} &
-Historical discovery policy used for the reproducible \(77.113\) hardened-accounting
-result, originally reported as \(77.230\). \\
-\filepath{src/prefix_cache_evolve/problems/prefix_kv_cache/compact_seed.py} &
+\filepath{src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/registry.json} &
+Current role assignments for immutable production and discovery incumbent bundles. \\
+\filepath{src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/production_16tok_20260609/policy.py} &
+Exact promoted deployable source discovered by the production-oriented search. \\
+\filepath{src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/discovery_8tok_20260608/policy.py} &
+Exact retained discovery source used for the reproducible \(77.113\)
+hardened-accounting result, originally reported as \(77.230\). \\
+\filepath{src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/historical_compact_20260607/policy.py} &
 Prior compact incumbent retained as a small alternate evolution seed. \\
 \filepath{src/prefix_cache_evolve/tools/cli.py} &
 Consolidated analysis, ablation, and deterministic tuning command tree. \\
@@ -1743,8 +1745,8 @@ lifetime hit count with only recent policy-owned evidence.
 
 \subsection{Promoted pressure-aware extension}
 
-The current incumbent in
-\filepath{src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py}
+The retained discovery incumbent in
+\filepath{src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/discovery_8tok_20260608/policy.py}
 preserves the compact policy's eviction equation and most admission terms.  It adds a
 bounded admission-pressure state \(q_t\) derived from the online recent-admission-
 pressure and miss-rate signals:
@@ -2424,7 +2426,7 @@ Under the operative verifier and workload configuration:
 .venv/bin/python -m prefix_cache_evolve.problems.prefix_kv_cache.runner \
   --baseline-report \
   --candidate-program \
-  src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py
+  src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/production_16tok_20260609/policy.py
 \end{lstlisting}
 
 \subsection{Reproduce the historical discovery result and workload panel}
@@ -2438,7 +2440,7 @@ Under the operative verifier and workload configuration:
 .venv/bin/prefix-cache-evolve \
   --baseline-report \
   --candidate-program \
-  src/prefix_cache_evolve/problems/prefix_kv_cache/pressure_aware_incumbent.py \
+  src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/discovery_8tok_20260608/policy.py \
   --config configs/prefix_kv_cache_discovery.yaml
 \end{lstlisting}
 
@@ -2448,12 +2450,12 @@ Under the operative verifier and workload configuration:
 .venv/bin/python -m prefix_cache_evolve.problems.prefix_kv_cache.runner \
   --probe-report \
   --candidate-program \
-  src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py
+  src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/production_16tok_20260609/policy.py
 
 .venv/bin/python -m prefix_cache_evolve.problems.prefix_kv_cache.runner \
   --hidden-report \
   --candidate-program \
-  src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py
+  src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/production_16tok_20260609/policy.py
 \end{lstlisting}
 
 \subsection{Run a new evolution from the production incumbent}
@@ -2463,7 +2465,7 @@ Under the operative verifier and workload configuration:
   --iterations 300 \
   --config configs/prefix_kv_cache.yaml \
   --seed-program \
-  src/prefix_cache_evolve/problems/prefix_kv_cache/production_incumbent.py
+  src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/production_16tok_20260609/policy.py
 \end{lstlisting}
 
 \subsection{Run eviction-specialist exploration}

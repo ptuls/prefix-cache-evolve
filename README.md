@@ -47,6 +47,24 @@ The repo tests these questions with fixed multi-seed workload panels, strong
 deployable baselines, held-out probes, hidden final-adjudication workloads,
 cache-geometry sweeps, trace replay, and controlled ablations.
 
+## Headline Result
+
+Under verifier `1.0.0`, the current production-oriented 16-token policy scores
+`65.649`, ahead of TinyLFU-LRU at `63.548`, while passing held-out probe,
+hidden-panel, and tripwire checks.
+
+### Cost
+
+The following assumes the use of GPT-5.5-mini as the primary model and GPT-5.5 Thinking (medium)
+as the paradigm shift model.
+The two directly required final-stage searches cost `USD$5.070` in recorded model
+API charges: `USD$4.133` for production search and `USD$0.937` for simplification.
+The research and development total is at least `USD$44.845` across `2,989` evaluations. 
+These figures exclude engineering time, local compute, and
+experiments without retained cost metadata.
+
+Cost is likely to be much cheaper than this with open sourced models as the primary model.
+
 ## Run It
 
 Python 3.11 or newer is required.
@@ -132,7 +150,7 @@ audits. Held-out probes and hidden workloads remain outside normal selection.
 
 Detailed documentation:
 
-- [Project overview and current results](docs/project_overview.md)
+- [Project overview and documentation](docs/README.md)
 - [Technical report](docs/technical_report.tex)
 - [Research log](docs/research_log.tex)
 - [Reproducibility and model providers](docs/reproducibility.md)

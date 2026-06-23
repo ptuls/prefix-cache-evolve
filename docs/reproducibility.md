@@ -5,7 +5,8 @@ which depends on external model services and asynchronous scheduling.
 
 ## Installation
 
-Use the committed `uv.lock` and Python 3.11:
+Use the committed `uv.lock` with Python 3.11, 3.12, or 3.13. Published
+benchmark artifacts use Python 3.11 unless they state otherwise:
 
 ```bash
 # Evaluator, simulator, reports, and lab only.

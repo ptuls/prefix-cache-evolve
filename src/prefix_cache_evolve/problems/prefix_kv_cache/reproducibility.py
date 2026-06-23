@@ -71,7 +71,7 @@ def build_workload_manifest(
         evaluator_config=config.model_dump(mode="json"),
         panel_sha=panel_sha,
     )
-    manifest_core = {
+    manifest_core: dict[str, object] = {
         "schema": "prefix-kv-cache-workload-manifest-v1",
         "verifier_version": config.verifier_version,
         "evaluation_context_sha256": context_sha,

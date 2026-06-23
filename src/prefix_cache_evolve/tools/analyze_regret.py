@@ -32,7 +32,10 @@ from prefix_cache_evolve.evaluators.utilities import percentile
 from prefix_cache_evolve.evaluators.verifier import (
     require_single_score_identity,
 )
-from prefix_cache_evolve.problems.prefix_kv_cache.configuration import load_evaluator_config
+from prefix_cache_evolve.problems.prefix_kv_cache.configuration import (
+    DEFAULT_CONFIG_PATH,
+    load_evaluator_config,
+)
 from prefix_cache_evolve.problems.prefix_kv_cache.incumbents import (
     build_current_incumbent as build_production_incumbent,
 )
@@ -1669,7 +1672,7 @@ def _write_causal_component_markdown(
 @click.option(
     "--config",
     type=click.Path(path_type=Path),
-    default=Path("configs/prefix_kv_cache.yaml"),
+    default=DEFAULT_CONFIG_PATH,
     show_default=True,
 )
 @click.option("--candidate-program", type=click.Path(path_type=Path))

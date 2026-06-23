@@ -12,11 +12,26 @@ from prefix_cache_evolve.workflow.config import WorkflowFileConfig, load_yaml_do
 
 PREFIX_KV_CONFIG_ENV = "PREFIX_CACHE_EVOLVE_CONFIG"
 PREFIX_KV_QUICK_ENV = "PREFIX_CACHE_EVOLVE_QUICK"
-_REPOSITORY_CONFIG_PATH = Path(__file__).resolve().parents[4] / "configs/prefix_kv_cache.yaml"
-_PACKAGED_CONFIG_PATH = Path(__file__).resolve().parents[2] / "configs/prefix_kv_cache.yaml"
-DEFAULT_CONFIG_PATH = (
-    _REPOSITORY_CONFIG_PATH if _REPOSITORY_CONFIG_PATH.exists() else _PACKAGED_CONFIG_PATH
-)
+_REPOSITORY_CONFIG_ROOT = Path(__file__).resolve().parents[4] / "configs"
+_PACKAGED_CONFIG_ROOT = Path(__file__).resolve().parents[2] / "configs"
+
+
+def bundled_config_path(filename: str) -> Path:
+    """Return a repository or installed-package config path."""
+    repository_path = _REPOSITORY_CONFIG_ROOT / filename
+    if repository_path.is_file():
+        return repository_path
+    packaged_path = _PACKAGED_CONFIG_ROOT / filename
+    if packaged_path.is_file():
+        return packaged_path
+    raise FileNotFoundError(f"bundled config {filename!r} is missing")
+
+
+DEFAULT_CONFIG_PATH = bundled_config_path("prefix_kv_cache.yaml")
+DISCOVERY_CONFIG_PATH = bundled_config_path("prefix_kv_cache_discovery.yaml")
+EVICTION_SPECIALIST_CONFIG_PATH = bundled_config_path("prefix_kv_cache_eviction_specialist.yaml")
+REDISCOVERY_CONFIG_PATH = bundled_config_path("prefix_kv_cache_rediscovery.yaml")
+TRACE_SCHEMA_PATH = bundled_config_path("prefix_kv_trace_schema.json")
 
 
 def load_evaluator_config(path: Path = DEFAULT_CONFIG_PATH) -> EvaluatorConfig:

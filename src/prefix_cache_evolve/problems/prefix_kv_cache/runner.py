@@ -9,7 +9,7 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import click
 
@@ -30,6 +30,7 @@ from prefix_cache_evolve.evaluators.verifier import (
 )
 from prefix_cache_evolve.workflow.config import (
     ConfigLoader,
+    ConfigProvider,
     MinimalConfigProvider,
     YamlConfigProvider,
 )
@@ -114,6 +115,7 @@ from .utilities import (
 
 if TYPE_CHECKING:
     from prefix_cache_evolve.workflow.execution import LeviRunner
+    from prefix_cache_evolve.workflow.workflow import EvolutionWorkflow
 
 _DEFAULT_SEED_PATH = current_incumbent("production").source_path
 _EVICTION_SPECIALIST_SEED_PATH = Path(__file__).parent / "seeds" / "eviction_specialist.py"
@@ -192,10 +194,10 @@ def _build_runner() -> LeviRunner:
 
 
 def _build_workflow(
-    provider,
+    provider: ConfigProvider,
     *,
     program_source: ProgramSource = DEFAULT_SEED_SOURCE,
-) -> object:
+) -> EvolutionWorkflow:
     from prefix_cache_evolve.workflow.workflow import EvolutionWorkflow
 
     return EvolutionWorkflow(
@@ -243,7 +245,7 @@ def demo_run_evolution(
             or base_workflow_config.mutation_model
             or base_workflow_config.paradigm_model
         )
-        provider = MinimalConfigProvider(
+        provider: ConfigProvider = MinimalConfigProvider(
             model=quick_model,
             search_seed=(
                 search_seed if search_seed is not None else base_workflow_config.search_seed
@@ -1212,18 +1214,24 @@ def write_block_size_robustness_report(
     )
     for block_size_tokens in block_sizes:
         block_rows = [row for row in rows if row["block_size_tokens"] == block_size_tokens]
-        ranked = sorted(block_rows, key=lambda row: row["combined_score"], reverse=True)
+        ranked = sorted(
+            block_rows,
+            key=lambda row: cast(float, row["combined_score"]),
+            reverse=True,
+        )
         candidate = next(row for row in block_rows if row["policy"] == "candidate")
         candidate_rank = next(
             rank for rank, row in enumerate(ranked, start=1) if row["policy"] == "candidate"
         )
         best = ranked[0]
+        candidate_score = cast(float, candidate["combined_score"])
+        best_score = cast(float, best["combined_score"])
         lines.append(
-            f"| {block_size_tokens} | {candidate['combined_score']:.3f} | "
+            f"| {block_size_tokens} | {candidate_score:.3f} | "
             f"{candidate['raw_score_before_complexity']:.3f} | "
             f"{candidate['complexity_cost']:.3f} | "
             f"{candidate_rank} / {len(ranked)} | `{best['policy']}` | "
-            f"{candidate['combined_score'] - best['combined_score']:.3f} | "
+            f"{candidate_score - best_score:.3f} | "
             f"{candidate['token_hit_rate']:.3f} | "
             f"{candidate['cache_churn_per_1k']:.1f} |"
         )
@@ -1241,8 +1249,8 @@ def write_block_size_robustness_report(
     for row in rows:
         lines.append(
             f"| {row['block_size_tokens']} | "
-            f"{_format_int_tuple(row['capacity_blocks'])} | "
-            f"{_format_int_tuple(row['capacity_tokens'])} | "
+            f"{_format_int_tuple(cast(tuple[int, ...], row['capacity_blocks']))} | "
+            f"{_format_int_tuple(cast(tuple[int, ...], row['capacity_tokens']))} | "
             f"`{row['policy']}` | {row['combined_score']:.3f} | "
             f"{row['raw_score_before_complexity']:.3f} | "
             f"{row['complexity_cost']:.3f} | "
@@ -1283,7 +1291,7 @@ def _score_weight_sensitivity_rows(
                 context=f"score-weight sensitivity {weight} x {factor}",
             )
             rescored = {name: result.combined_score for name, result in rescored_results.items()}
-            ranking = sorted(rescored, key=rescored.get, reverse=True)
+            ranking = sorted(rescored, key=lambda name: rescored[name], reverse=True)
             rows.append(
                 {
                     "verifier_version": identity.verifier_version,
@@ -1495,138 +1503,9 @@ def _score_weight_sensitivity_rows(
 )
 def main(**kwargs: Any) -> None:
     """Run reports, trace tools, or the Levi evolution workflow."""
-    args = SimpleNamespace(**kwargs)
-    if args.model and (args.primary_model or args.secondary_model):
-        raise click.UsageError(
-            "--model cannot be combined with --primary-model or --secondary-model"
-        )
-    try:
-        capacity_sweep_blocks = _parse_capacity_sweep(args.capacity_sweep_blocks)
-        block_size_sweep = _parse_block_size_sweep(args.block_size_sweep)
-    except ValueError as error:
-        raise click.BadParameter(str(error)) from error
-    if args.show_config:
-        _show_resolved_config(
-            iterations=args.iterations,
-            config_file=args.config,
-            quick=args.quick or args.workload_preset == "small",
-            model=args.model,
-            primary_model=args.primary_model,
-            secondary_model=args.secondary_model,
-            search_seed=args.search_seed,
-            api_base=args.api_base,
-            api_key_env=args.api_key_env,
-        )
-        return
-    if args.calibrate_trace is not None:
-        calibrate_trace_report(
-            args.calibrate_trace,
-            output_path=args.trace_output,
-            arrival_bucket_ms=args.trace_arrival_bucket_ms,
-            request_limit=args.trace_request_limit,
-        )
-        return
-    if args.replay_trace is not None:
-        replay_trace_report(
-            args.replay_trace,
-            output_path=args.trace_output,
-            candidate_program=args.candidate_program,
-            arrival_bucket_ms=args.trace_arrival_bucket_ms,
-            request_limit=args.trace_request_limit,
-            config_file=args.config,
-            capacity_blocks=args.capacity_blocks,
-            capacity_sweep_blocks=capacity_sweep_blocks,
-            block_size_tokens=args.block_size_tokens,
-        )
-        return
-    if args.workload_manifest:
-        write_workload_manifest_report(
-            args.workload_manifest_output,
-            reference_path=args.workload_manifest_reference,
-            quick=args.quick or args.workload_preset == "small",
-            capacity_blocks=args.capacity_blocks,
-            capacity_sweep_blocks=capacity_sweep_blocks,
-            block_size_tokens=args.block_size_tokens,
-            config_file=args.config,
-        )
-        return
-    if args.sensitivity_report:
-        if args.candidate_program is None:
-            raise click.UsageError("--sensitivity-report requires --candidate-program")
-        write_score_weight_sensitivity_report(
-            args.sensitivity_output,
-            candidate_program=args.candidate_program,
-            config_file=args.config,
-            capacity_blocks=args.capacity_blocks,
-            capacity_sweep_blocks=capacity_sweep_blocks,
-            block_size_tokens=args.block_size_tokens,
-        )
-        return
-    if args.block_size_report:
-        write_block_size_robustness_report(
-            args.block_size_output,
-            candidate_program=args.candidate_program,
-            quick=args.quick or args.workload_preset == "small",
-            config_file=args.config,
-            block_sizes=block_size_sweep,
-        )
-        return
-    if args.baseline_report:
-        compare_baselines(
-            quick=args.quick or args.workload_preset == "small",
-            capacity_blocks=args.capacity_blocks,
-            capacity_sweep_blocks=capacity_sweep_blocks,
-            block_size_tokens=args.block_size_tokens,
-            candidate_program=args.candidate_program,
-            config_file=args.config,
-        )
-        return
-    if args.hidden_report:
-        hidden_report(
-            quick=args.quick or args.workload_preset == "small",
-            capacity_blocks=args.capacity_blocks,
-            capacity_sweep_blocks=capacity_sweep_blocks,
-            block_size_tokens=args.block_size_tokens,
-            candidate_program=args.candidate_program,
-            config_file=args.config,
-        )
-        return
-    if args.probe_report:
-        probe_report(
-            output_path=args.probe_output,
-            quick=args.quick or args.workload_preset == "small",
-            capacity_blocks=args.capacity_blocks,
-            capacity_sweep_blocks=capacity_sweep_blocks,
-            block_size_tokens=args.block_size_tokens,
-            candidate_program=args.candidate_program,
-            config_file=args.config,
-        )
-        return
-    if args.plot_report:
-        paths = write_baseline_plots(
-            Path(args.plot_output),
-            quick=args.quick or args.workload_preset == "small",
-            capacity_blocks=args.capacity_blocks,
-            capacity_sweep_blocks=capacity_sweep_blocks,
-            block_size_tokens=args.block_size_tokens,
-            config_file=args.config,
-        )
-        for path in paths:
-            print(path)
-        return
-    demo_run_evolution(
-        iterations=args.iterations,
-        config_file=args.config,
-        quick=args.quick or args.workload_preset == "small",
-        seed_program=args.seed_program,
-        artifact_output=None if args.no_save_artifacts else Path(args.artifact_output),
-        model=args.model,
-        primary_model=args.primary_model,
-        secondary_model=args.secondary_model,
-        search_seed=args.search_seed,
-        api_base=args.api_base,
-        api_key_env=args.api_key_env,
-    )
+    from .runner_commands import dispatch
+
+    dispatch(SimpleNamespace(**kwargs))
 
 
 def _show_resolved_config(
@@ -1645,7 +1524,7 @@ def _show_resolved_config(
     evaluator = load_evaluator_config(Path(config_file))
     base_workflow = _CONFIG_LOADER.load(Path(config_file))
     if quick:
-        provider = MinimalConfigProvider(
+        provider: ConfigProvider = MinimalConfigProvider(
             model=(
                 model
                 or primary_model
@@ -1806,9 +1685,12 @@ def _evaluate_candidate_program_in_worker(
     splits: tuple[str, ...],
     complexity: int,
 ) -> EvaluationResult:
-    candidate_factory = load_candidate_factory(
-        str(candidate_path),
-        exported_names=candidate_exported_names(config),
+    candidate_factory = cast(
+        Any,
+        load_candidate_factory(
+            str(candidate_path),
+            exported_names=candidate_exported_names(config),
+        ),
     )
     return candidate_evaluator(config, splits=splits)(
         candidate_factory,
@@ -1843,9 +1725,12 @@ def _evaluate_replay_candidate_program_in_worker(
     requests: tuple[WorkloadRequest, ...],
     complexity: int,
 ) -> EvaluationResult:
-    candidate_factory = load_candidate_factory(
-        str(candidate_path),
-        exported_names=candidate_exported_names(config),
+    candidate_factory = cast(
+        Any,
+        load_candidate_factory(
+            str(candidate_path),
+            exported_names=candidate_exported_names(config),
+        ),
     )
     return candidate_evaluator(config, splits=("validation",)).evaluate_requests(
         candidate_factory,

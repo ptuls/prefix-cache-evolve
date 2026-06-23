@@ -9,7 +9,11 @@ from typing import Any
 
 import click
 
-from prefix_cache_evolve.problems.prefix_kv_cache.configuration import load_evaluator_config
+from prefix_cache_evolve.problems.prefix_kv_cache.configuration import (
+    DEFAULT_CONFIG_PATH,
+    REDISCOVERY_CONFIG_PATH,
+    load_evaluator_config,
+)
 from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.registry import (
     current_incumbent,
     incumbent_record,
@@ -22,11 +26,12 @@ from prefix_cache_evolve.problems.prefix_kv_cache.utilities import (
 )
 from prefix_cache_evolve.workflow.config import yaml_documents_equal
 
+_PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-_DEFAULT_CONFIG_PATH = _REPOSITORY_ROOT / "configs/prefix_kv_cache_rediscovery.yaml"
-_DEFAULT_ADJUDICATION_CONFIG_PATH = _REPOSITORY_ROOT / "configs/prefix_kv_cache.yaml"
-_DEFAULT_OUTPUT_PATH = _REPOSITORY_ROOT / "artifacts/prefix_kv_cache_rediscovery_analysis.json"
-_POLICY_ROOT = _REPOSITORY_ROOT / "src/prefix_cache_evolve/problems/prefix_kv_cache"
+_DEFAULT_CONFIG_PATH = REDISCOVERY_CONFIG_PATH
+_DEFAULT_ADJUDICATION_CONFIG_PATH = DEFAULT_CONFIG_PATH
+_DEFAULT_OUTPUT_PATH = Path("artifacts/prefix_kv_cache_rediscovery_analysis.json")
+_POLICY_ROOT = _PACKAGE_ROOT / "problems/prefix_kv_cache"
 _REFERENCE_PATHS = {
     "weak_initial": _POLICY_ROOT / "seeds/weak_initial.py",
     "intermediate_compact": incumbent_record("historical_compact_20260607").source_path,

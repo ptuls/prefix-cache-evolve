@@ -233,43 +233,43 @@ def _candidate_source_violations(
         elif name not in used_names:
             violations.append(f"unused import {imported_from}")
 
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if node.name in _UNSUPPORTED_CALLBACKS:
-                violations.append(f"unsupported callback {node.name}")
-            if node.decorator_list:
+    for descendant in ast.walk(tree):
+        if isinstance(descendant, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if descendant.name in _UNSUPPORTED_CALLBACKS:
+                violations.append(f"unsupported callback {descendant.name}")
+            if descendant.decorator_list:
                 violations.append("decorators are not allowed in candidate code")
-        elif isinstance(node, ast.ClassDef):
-            if node.decorator_list:
+        elif isinstance(descendant, ast.ClassDef):
+            if descendant.decorator_list:
                 violations.append("decorators are not allowed in candidate code")
-        elif isinstance(node, ast.Attribute) and node.attr in _FUTURE_REUSE_FIELDS:
-            violations.append(f"future-knowledge field {node.attr} is not deployable")
-        elif isinstance(node, ast.Attribute) and node.attr in _SANITIZED_REQUEST_FIELDS:
-            violations.append(f"sanitized request field {node.attr} is not a policy signal")
-        elif isinstance(node, ast.Attribute) and _is_dunder_name(node.attr):
-            violations.append(f"dunder attribute {node.attr} is not allowed")
+        elif isinstance(descendant, ast.Attribute) and descendant.attr in _FUTURE_REUSE_FIELDS:
+            violations.append(f"future-knowledge field {descendant.attr} is not deployable")
+        elif isinstance(descendant, ast.Attribute) and descendant.attr in _SANITIZED_REQUEST_FIELDS:
+            violations.append(f"sanitized request field {descendant.attr} is not a policy signal")
+        elif isinstance(descendant, ast.Attribute) and _is_dunder_name(descendant.attr):
+            violations.append(f"dunder attribute {descendant.attr} is not allowed")
         elif (
-            isinstance(node, ast.Name)
-            and isinstance(node.ctx, ast.Load)
-            and _is_dunder_name(node.id)
+            isinstance(descendant, ast.Name)
+            and isinstance(descendant.ctx, ast.Load)
+            and _is_dunder_name(descendant.id)
         ):
-            violations.append(f"dunder name {node.id} is not allowed")
+            violations.append(f"dunder name {descendant.id} is not allowed")
         elif (
-            isinstance(node, ast.Name)
-            and isinstance(node.ctx, ast.Load)
-            and node.id in _DYNAMIC_BUILTINS
+            isinstance(descendant, ast.Name)
+            and isinstance(descendant.ctx, ast.Load)
+            and descendant.id in _DYNAMIC_BUILTINS
         ):
-            violations.append(f"{node.id}() is not allowed in candidate code")
-        elif isinstance(node, ast.ExceptHandler) and _is_broad_exception_handler(node):
+            violations.append(f"{descendant.id}() is not allowed in candidate code")
+        elif isinstance(descendant, ast.ExceptHandler) and _is_broad_exception_handler(descendant):
             violations.append("broad exception handlers are not allowed")
-        elif isinstance(node, ast.Call):
-            called_name = _called_name(node.func)
+        elif isinstance(descendant, ast.Call):
+            called_name = _called_name(descendant.func)
             if called_name in _DYNAMIC_BUILTINS:
                 violations.append(f"{called_name}() is not allowed in candidate code")
             elif called_name == "MultiTimescaleDecay":
-                violations.extend(_multi_timescale_decay_violations(node))
+                violations.extend(_multi_timescale_decay_violations(descendant))
             elif called_name == "threshold_excess":
-                violations.extend(_threshold_excess_violations(node))
+                violations.extend(_threshold_excess_violations(descendant))
 
     return tuple(dict.fromkeys(violations))
 
@@ -290,13 +290,16 @@ def _top_level_source_violations(node: ast.stmt, index: int) -> tuple[str, ...]:
         names = [target.id for target in targets if isinstance(target, ast.Name)]
         if len(names) != len(targets):
             return ("top-level assignments must target simple names",)
+        value_node = node.value
+        if value_node is None:
+            return ("top-level assignments must have values",)
         if names == ["candidate_factory"]:
-            if isinstance(node.value, ast.Name) and node.value.id == "build_candidate":
+            if isinstance(value_node, ast.Name) and value_node.id == "build_candidate":
                 return ()
             return ("candidate_factory must be a direct alias of build_candidate",)
         if names == ["__all__"]:
             try:
-                value = ast.literal_eval(node.value)
+                value = ast.literal_eval(value_node)
             except (ValueError, TypeError):
                 return ("__all__ must be a literal sequence",)
             if not isinstance(value, (list, tuple)) or not all(
@@ -307,7 +310,7 @@ def _top_level_source_violations(node: ast.stmt, index: int) -> tuple[str, ...]:
         if not names or any(not name.isupper() for name in names):
             return ("top-level assignments must define uppercase literal constants",)
         try:
-            ast.literal_eval(node.value)
+            ast.literal_eval(value_node)
         except (ValueError, TypeError):
             return ("top-level constants must use literal values",)
         return ()

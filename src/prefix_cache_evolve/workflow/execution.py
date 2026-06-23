@@ -266,8 +266,9 @@ class LeviRunner:
         )
         if spec is None or spec.loader is None:
             raise ImportError(f"unable to load evaluator from {evaluator_path}")
+        loader = spec.loader
         module = importlib.util.module_from_spec(spec)
-        _exec_registered_module(module, lambda: spec.loader.exec_module(module))  # type: ignore[call-arg]
+        _exec_registered_module(module, lambda: loader.exec_module(module))
         evaluate_factory = getattr(module, "evaluate_factory", None)
         if not callable(evaluate_factory):
             raise AttributeError(f"{evaluator_path} must expose evaluate_factory(factory)")
@@ -288,8 +289,9 @@ class LeviRunner:
         )
         if spec is None or spec.loader is None:
             return None
+        loader = spec.loader
         module = importlib.util.module_from_spec(spec)
-        _exec_registered_module(module, lambda: spec.loader.exec_module(module))  # type: ignore[call-arg]
+        _exec_registered_module(module, lambda: loader.exec_module(module))
         evaluate_source = getattr(module, "evaluate_source", None)
         return evaluate_source if callable(evaluate_source) else None
 
@@ -374,7 +376,11 @@ def _enable_levi_code_feedback_support() -> None:
             return prompt.replace(output_marker, f"\n\n{section}{output_marker}", 1)
         return f"{prompt}\n\n{section}"
 
-    build_mutation_prompt_with_feedback._prefix_cache_evolve_repair_feedback_patch = True
+    setattr(
+        build_mutation_prompt_with_feedback,
+        "_prefix_cache_evolve_repair_feedback_patch",
+        True,
+    )
     CodeAdapter.build_mutation_prompt = build_mutation_prompt_with_feedback
 
 
@@ -402,7 +408,11 @@ def _enable_levi_degenerate_centroid_fallback() -> None:
         )
         return self._n_centroids, np.argmin(distances, axis=1)
 
-    set_centroids_with_fallback._prefix_cache_evolve_degenerate_centroid_patch = True
+    setattr(
+        set_centroids_with_fallback,
+        "_prefix_cache_evolve_degenerate_centroid_patch",
+        True,
+    )
     CVTMAPElitesPool.set_centroids_from_data = set_centroids_with_fallback
 
 
@@ -413,6 +423,8 @@ def _configured_paradigm_max_tokens(config: Any) -> int | None:
     raw_value = punctuated_equilibrium.get("max_tokens")
     if raw_value is None:
         raw_value = pipeline.get("max_tokens")
+    if raw_value is None:
+        return None
     try:
         max_tokens = int(raw_value)
     except (TypeError, ValueError):
@@ -495,11 +507,19 @@ def _enable_levi_paradigm_completion_support(
             **extras,
         )
 
-    acompletion_with_paradigm_budget._prefix_cache_evolve_reasoning_budget_patch = True
-    acompletion_with_paradigm_budget._prefix_cache_evolve_seed_patch = getattr(
-        original,
+    setattr(
+        acompletion_with_paradigm_budget,
+        "_prefix_cache_evolve_reasoning_budget_patch",
+        True,
+    )
+    setattr(
+        acompletion_with_paradigm_budget,
         "_prefix_cache_evolve_seed_patch",
-        False,
+        getattr(
+            original,
+            "_prefix_cache_evolve_seed_patch",
+            False,
+        ),
     )
     PipelineState.acompletion = acompletion_with_paradigm_budget
 
@@ -564,11 +584,15 @@ def _enable_levi_reproducibility_support(
             **extras,
         )
 
-    acompletion_with_seed._prefix_cache_evolve_seed_patch = True
-    acompletion_with_seed._prefix_cache_evolve_reasoning_budget_patch = getattr(
-        original,
+    setattr(acompletion_with_seed, "_prefix_cache_evolve_seed_patch", True)
+    setattr(
+        acompletion_with_seed,
         "_prefix_cache_evolve_reasoning_budget_patch",
-        False,
+        getattr(
+            original,
+            "_prefix_cache_evolve_reasoning_budget_patch",
+            False,
+        ),
     )
     PipelineState.acompletion = acompletion_with_seed
 
@@ -616,7 +640,11 @@ def _enable_levi_paradigm_candidate_persistence(output_dir: Path) -> None:
             _persist_levi_paradigm_candidate_capture(capture, stats)
             self._prefix_cache_evolve_candidate_capture = None
 
-    trigger_with_candidate_persistence._prefix_cache_evolve_candidate_persistence_patch = True
+    setattr(
+        trigger_with_candidate_persistence,
+        "_prefix_cache_evolve_candidate_persistence_patch",
+        True,
+    )
     PunctuatedEquilibrium._evaluate = evaluate_with_capture
     PunctuatedEquilibrium.trigger = trigger_with_candidate_persistence
 

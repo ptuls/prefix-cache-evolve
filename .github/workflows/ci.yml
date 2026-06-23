@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  quality:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -33,7 +33,7 @@ jobs:
       - name: Lint
         run: uv run ruff check .
 
-      - name: Type check evaluators
+      - name: Type check package core
         run: uv run mypy
 
       - name: Verify discovery workload manifest
@@ -48,4 +48,103 @@ jobs:
         run: uv run prefix-cache-tools incumbents validate
 
       - name: Test
+        run: >-
+          uv run pytest -q
+          --cov=prefix_cache_evolve
+          --cov-report=term-missing
+          --cov-fail-under=75
+
+  compatibility:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Install core development dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Test core package
         run: uv run pytest -q
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Build distributions
+        run: uv build
+
+      - name: Install wheel in an isolated environment
+        run: |
+          wheel="$(find dist -name '*.whl' -print -quit)"
+          uv venv /tmp/prefix-cache-wheel
+          uv pip install --python /tmp/prefix-cache-wheel/bin/python "$wheel"
+
+      - name: Verify installed resources
+        working-directory: /tmp
+        run: >-
+          /tmp/prefix-cache-wheel/bin/python
+          "$GITHUB_WORKSPACE/scripts/verify_installed_package.py"
+
+      - name: Smoke installed entry points
+        working-directory: /tmp
+        run: |
+          /tmp/prefix-cache-wheel/bin/prefix-cache-evolve --show-config
+          /tmp/prefix-cache-wheel/bin/prefix-cache-tools incumbents validate
+          /tmp/prefix-cache-wheel/bin/prefix-cache-tools analyze reasoning-kv \
+            --request-count 1 \
+            --seeds 3 \
+            --output /tmp/reasoning.json \
+            --markdown /tmp/reasoning.md
+
+  sandbox:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Build sandbox image
+        run: docker build --tag prefix-cache-evolve-sandbox --file docker/sandbox/Dockerfile .
+
+      - name: Smoke candidate evaluation in sandbox
+        run: |
+          candidate="$GITHUB_WORKSPACE/src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/production_16tok_20260609/policy.py"
+          docker run --rm \
+            --network none \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --pids-limit 64 \
+            --memory 1g \
+            --cpus 2 \
+            --tmpfs /tmp:rw,noexec,nosuid,size=256m \
+            --mount "type=bind,src=$candidate,dst=/candidate/policy.py,readonly" \
+            prefix-cache-evolve-sandbox \
+            --baseline-report \
+            --quick > /tmp/sandbox-smoke.txt
+          grep -q '^candidate:' /tmp/sandbox-smoke.txt

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import copy
+from collections.abc import Sequence
 from typing import Callable
 
 from prefix_cache_evolve.evaluators.contracts import PrefixBlockInfo, PrefixKVPolicy, RequestInfo
@@ -334,7 +335,7 @@ def _assigned_names(node: ast.Assign | ast.AnnAssign) -> set[str]:
     return {target.id for target in targets if isinstance(target, ast.Name)}
 
 
-def _top_level_names(nodes: list[ast.stmt]) -> set[str]:
+def _top_level_names(nodes: Sequence[ast.stmt]) -> set[str]:
     names = set()
     for node in nodes:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):

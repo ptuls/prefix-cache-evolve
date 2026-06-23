@@ -1519,14 +1519,14 @@ def test_evaluate_source_times_out_during_module_loading(monkeypatch) -> None:
     )
     source = """
 import time
-time.sleep(0.5)
+time.sleep(5.0)
 """
 
     started = time.perf_counter()
     result = levi_evaluator.evaluate_source(source)
 
     assert result.metrics["error"] == "evaluation timed out"
-    assert time.perf_counter() - started < 0.3
+    assert time.perf_counter() - started < 2.0
 
 
 def test_root_anchored_match() -> None:

@@ -20,6 +20,7 @@ except ImportError:  # pragma: no cover - Windows does not provide resource
 
 ResultT = TypeVar("ResultT")
 _PROCESS_MEMORY_HEADROOM_BYTES = 256 * 1024 * 1024
+_PROCESS_TERMINATE_GRACE_SECONDS = 0.05
 
 
 def score_to_reward(score: float) -> float:
@@ -62,7 +63,7 @@ def run_with_timeout(
     send_conn.close()
     try:
         if not receive_conn.poll(timeout_seconds):
-            _stop_process(process)
+            _stop_process(process, force=True)
             raise TimeoutError(f"evaluation exceeded {timeout_seconds}s wall-clock limit")
         try:
             payload = receive_conn.recv()
@@ -156,11 +157,14 @@ def _set_resource_limit(resource_id: int, soft_limit: int, hard_limit: int) -> N
     resource.setrlimit(resource_id, (soft_limit, hard_limit))
 
 
-def _stop_process(process) -> None:
+def _stop_process(process, *, force: bool = False) -> None:
     """Terminates and reaps an evaluation worker if it is still running."""
     if process.is_alive():
-        process.terminate()
-    process.join(timeout=1.0)
+        if force:
+            process.kill()
+        else:
+            process.terminate()
+    process.join(timeout=_PROCESS_TERMINATE_GRACE_SECONDS)
     if process.is_alive():  # pragma: no cover - terminate should normally be enough
         process.kill()
         process.join()
@@ -179,8 +183,9 @@ def load_candidate_factory(
     if spec is None or spec.loader is None:
         raise ImportError(f"unable to load module from {path}")
 
+    loader = spec.loader
     module = importlib.util.module_from_spec(spec)
-    _exec_registered_module(module, lambda: spec.loader.exec_module(module))  # type: ignore[call-arg]
+    _exec_registered_module(module, lambda: loader.exec_module(module))
 
     factory = extract_exported_callable(module, exported_names)
     if not callable(factory):

@@ -155,7 +155,7 @@ def _load_trace_records(
 ) -> tuple[_TraceRecord, ...]:
     if request_limit is not None and request_limit <= 0:
         raise ValueError("request_limit must be positive")
-    records = []
+    records: list[_TraceRecord] = []
     with path.open("r", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
             if request_limit is not None and len(records) >= request_limit:
@@ -268,7 +268,7 @@ def _prefix_path_tokens(
     expected_depth = math.ceil(prompt_length / block_size_tokens)
     if len(prefix_path) != expected_depth:
         raise ValueError("prefix_path depth must equal ceil(prompt_length / block_size_tokens)")
-    tokens = []
+    tokens: list[int] = []
     for depth in range(1, len(prefix_path) + 1):
         tokens.extend(_opaque_block_tokens(prefix_path[:depth], block_size_tokens))
     return tuple(tokens[:prompt_length])

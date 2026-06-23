@@ -1,6 +1,6 @@
 UV ?= uv
 
-.PHONY: setup setup-evolution setup-dev show-config smoke test format check
+.PHONY: setup setup-evolution setup-dev show-config smoke test format check sandbox-image
 
 setup:
 	$(UV) sync --frozen --no-default-groups
@@ -24,6 +24,10 @@ format:
 	$(UV) run ruff format .
 
 check:
+	$(UV) run ruff format --check .
 	$(UV) run ruff check .
 	$(UV) run mypy
-	$(UV) run pytest -q
+	$(UV) run pytest -q --cov=prefix_cache_evolve --cov-report=term-missing --cov-fail-under=75
+
+sandbox-image:
+	docker build --tag prefix-cache-evolve-sandbox --file docker/sandbox/Dockerfile .

@@ -18,6 +18,7 @@ from prefix_cache_evolve.evaluators.verifier import (
     require_single_verifier_version,
 )
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import (
+    DEFAULT_CONFIG_PATH,
     load_evaluator_config,
 )
 from prefix_cache_evolve.problems.prefix_kv_cache.seeds.structured_recurrence import (
@@ -260,7 +261,7 @@ def _write_markdown(path: Path, payload: dict[str, object]) -> None:
 @click.option(
     "--config",
     type=click.Path(path_type=Path),
-    default=Path("configs/prefix_kv_cache.yaml"),
+    default=DEFAULT_CONFIG_PATH,
     show_default=True,
 )
 @click.option(

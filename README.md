@@ -18,7 +18,7 @@ With the advent of more powerful LLMs and, in particular, coding agents, we ask:
 > Can LLM-guided program evolution discover better online prefix KV-cache
 > admission and eviction heuristics than hand-written baselines?
 
-We attempt to evolve an optimal KV-cache policy. Broadly speaking, we set up a
+We attempt to evolve stronger KV-cache policies. Broadly speaking, we set up a
 strong verifier and scoring system and use LLMs as mutation operators via
 [Levi](https://ttanv.github.io/levi/docs#why-levi) to evolve candidate policies
 on a wide set of workload scenarios. The goal is to evolve a policy better than
@@ -97,7 +97,8 @@ controlled cache-policy comparisons, not end-to-end serving throughput results.
 
 ## Run It
 
-Python 3.11 or newer is required.
+Python 3.11, 3.12, or 3.13 on Linux or macOS is required. Candidate evaluation
+uses POSIX process isolation and is not supported on Windows.
 
 ```bash
 # Evaluator, simulator, reports, and interactive lab.
@@ -141,6 +142,15 @@ uv run prefix-cache-evolve --iterations 100
 Evolution uses external model services and may incur cost. Read the
 [reproducibility and model-provider guide](docs/reproducibility.md) before a
 paid run.
+
+Untrusted candidate source must be evaluated in a separate OS sandbox. The
+repository includes a locked, non-root Docker profile:
+
+```bash
+docker/sandbox/run.sh path/to/candidate.py
+```
+
+See [SECURITY.md](SECURITY.md) for the trust boundary and runtime restrictions.
 
 ## Interactive Lab
 

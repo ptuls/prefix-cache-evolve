@@ -417,10 +417,7 @@ def save_run_artifacts(
     config_snapshot_name = None
     if config_snapshot is not None and config_snapshot.is_file():
         config_snapshot_name = "config_snapshot.yaml"
-        (run_dir / config_snapshot_name).write_text(
-            config_snapshot.read_text(encoding="utf-8"),
-            encoding="utf-8",
-        )
+        shutil.copyfile(config_snapshot, run_dir / config_snapshot_name)
     summary = {
         "verifier_version": identity.verifier_version,
         "evaluation_context_sha256": identity.evaluation_context_sha256,

@@ -1069,8 +1069,10 @@ lru & Deployable & Recency baseline; evicts least recently used legal leaf. \\
 radix-cache replacement policy; retains cache-page-aligned prefixes and recursively
 evicts the least-recently-used unreferenced leaf.  Registered as a selectable
 reference but excluded from default comparisons because it maps to leaf-LRU here. \\
-\identifier{vllm_apc} & Deployable & Production-style vLLM APC baseline; caches only
-full blocks and uses LRU with deepest-prefix tie-breaking among legal victims. \\
+\identifier{vllm_apc} & Deployable & Behavioral emulation of the core vLLM APC cache
+policy: exact-prefix reuse of full blocks, active-reference protection, and LRU
+eviction of reusable unreferenced blocks.  It excludes vLLM's internal implementation
+and additional serving optimizations. \\
 lfu & Deployable & Frequency baseline with LRU tie-breaking. \\
 \identifier{depth_prefer_shallow} & Deployable & Protects shallow roots. \\
 \identifier{recompute_greedy} & Deployable & Protects expensive-to-recompute prefixes. \\
@@ -1157,6 +1159,13 @@ prefix.  Only blocks with reference count zero are evictable.  The production po
 uses LRU, with deeper blocks preferred for eviction when last-access times tie
 \cite{vllm-apc}.  This design preserves common ancestors and is equivalent in effect to
 RadixAttention's leaf-first LRU for full-attention models.
+The simulator emulates the resulting cache-policy semantics rather than vLLM's exact
+implementation: full-block exact-prefix reuse, active-reference protection, and LRU
+eviction of reusable unreferenced blocks.  It does not reproduce the hash-table and
+free-queue data structures or additional serving optimizations such as scheduling,
+allocation, continuous batching, offload, and kernels.  The comparison therefore
+isolates policy logic under a common cache contract; it is not a measurement of
+end-to-end vLLM throughput.
 
 \paragraph{SGLang RadixAttention.}
 RadixAttention stores reusable KV state in a radix tree, evicts the least-recently-used

@@ -49,7 +49,10 @@ _POLICY_DESCRIPTIONS = {
     "sglang_radix_attention": (
         "SGLang RadixAttention's default admit-all, zero-reference leaf-LRU replacement policy."
     ),
-    "vllm_apc": "vLLM automatic prefix caching model with full-block admission and LRU.",
+    "vllm_apc": (
+        "Core vLLM APC policy emulation with full-block reuse, active-reference "
+        "protection, and LRU eviction."
+    ),
     "lfu": "Admit all blocks and preserve the most frequently reused blocks.",
     "depth_prefer_shallow": "Protect shallow shared prefix blocks before deeper leaves.",
     "recompute_greedy": "Protect blocks with the highest estimated recompute cost.",

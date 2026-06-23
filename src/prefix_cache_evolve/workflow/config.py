@@ -89,6 +89,21 @@ class WorkflowFileConfig(_StrictConfigModel):
     output_dir: str | None = None
 
 
+def load_yaml_document(path: Path) -> object:
+    """Safely load one YAML document, normalizing an empty document to a mapping."""
+    with path.open("r", encoding="utf-8") as handle:
+        data = yaml.safe_load(handle)
+    return {} if data is None else data
+
+
+def yaml_documents_equal(left: Path, right: Path) -> bool:
+    """Return whether two YAML files contain equal parsed documents."""
+    try:
+        return load_yaml_document(left) == load_yaml_document(right)
+    except yaml.YAMLError:
+        return False
+
+
 def normalize_model_name(
     model: str | None,
     *,
@@ -176,7 +191,7 @@ class ConfigLoader:
 
     def load(self, path: Path) -> LeviRunConfig:
         """Load and validate a workflow YAML file."""
-        raw_data = self._read_yaml(path)
+        raw_data = load_yaml_document(path)
         return self.from_dict(raw_data)
 
     def from_dict(self, data: object) -> LeviRunConfig:
@@ -249,11 +264,6 @@ class ConfigLoader:
             run_cost=data.get("run_cost", {}) or {},
             raw=data,
         )
-
-    def _read_yaml(self, path: Path) -> object:
-        with path.open("r", encoding="utf-8") as handle:
-            data = yaml.safe_load(handle)
-        return data or {}
 
 
 def _compose_problem_description(

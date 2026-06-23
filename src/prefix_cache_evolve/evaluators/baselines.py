@@ -110,7 +110,7 @@ class _SGLangRadixAttentionPolicy(_BasePolicy):
 
 
 class _VLLMAPCPolicy(_BasePolicy):
-    """Models vLLM automatic prefix caching within the simulator contract."""
+    """Emulates core vLLM APC cache-policy behavior within the simulator contract."""
 
     def __init__(self, block_size_tokens: int) -> None:
         self._block_size_tokens = block_size_tokens
@@ -301,7 +301,7 @@ def baseline_sglang_radix_attention(
 def baseline_vllm_apc(
     capacity_blocks: int, block_size_tokens: int, seed: int | None = None
 ) -> PrefixKVPolicy:
-    """Return a vLLM automatic-prefix-caching approximation."""
+    """Return the core vLLM APC cache-policy emulation."""
     return _VLLMAPCPolicy(block_size_tokens)
 
 

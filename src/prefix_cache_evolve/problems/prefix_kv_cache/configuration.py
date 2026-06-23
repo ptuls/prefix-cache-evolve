@@ -7,10 +7,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Mapping
 
-import yaml
-
 from prefix_cache_evolve.evaluators.prefix_kv_cache import EvaluatorConfig
-from prefix_cache_evolve.workflow.config import WorkflowFileConfig
+from prefix_cache_evolve.workflow.config import WorkflowFileConfig, load_yaml_document
 
 PREFIX_KV_CONFIG_ENV = "PREFIX_CACHE_EVOLVE_CONFIG"
 PREFIX_KV_QUICK_ENV = "PREFIX_CACHE_EVOLVE_QUICK"
@@ -23,8 +21,7 @@ DEFAULT_CONFIG_PATH = (
 
 def load_evaluator_config(path: Path = DEFAULT_CONFIG_PATH) -> EvaluatorConfig:
     """Load the evaluator settings that are operative for reports and evolution."""
-    with path.open("r", encoding="utf-8") as handle:
-        data = yaml.safe_load(handle) or {}
+    data = load_yaml_document(path)
     document = WorkflowFileConfig.model_validate(data)
     if "verifier_version" not in document.problem.settings:
         raise ValueError(f"{path} must explicitly declare problem.settings.verifier_version")

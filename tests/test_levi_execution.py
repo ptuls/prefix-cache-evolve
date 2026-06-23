@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from prefix_cache_evolve.evaluator_entry import EvaluatorResult
-from prefix_cache_evolve.workflow.config import ConfigLoader
+from prefix_cache_evolve.workflow.config import ConfigLoader, yaml_documents_equal
 from prefix_cache_evolve.workflow.execution import (
     LeviRunner,
     LeviScoreFunction,
@@ -44,6 +44,34 @@ def test_workflow_config_loader_validates_top_level_and_nested_settings() -> Non
 
     with pytest.raises(ValueError, match=r"(?s)prompt.*Input should be a valid dictionary"):
         loader.from_dict({"prompt": []})
+
+
+def test_yaml_document_comparison_ignores_formatting_but_detects_value_changes(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "first.yaml"
+    second = tmp_path / "second.yaml"
+    first.write_text("search:\n  seed: 17\nllm:\n  temperature: 0.3\n", encoding="utf-8")
+    second.write_text(
+        "# Same parsed document with different key order and flow style.\n"
+        "llm: {temperature: 0.3}\nsearch: {seed: 17}\n",
+        encoding="utf-8",
+    )
+
+    assert yaml_documents_equal(first, second)
+
+    second.write_text("llm: {temperature: 0.3}\nsearch: {seed: 18}\n", encoding="utf-8")
+
+    assert not yaml_documents_equal(first, second)
+
+    second.write_text("search: [\n", encoding="utf-8")
+
+    assert not yaml_documents_equal(first, second)
+
+    first.write_text("false\n", encoding="utf-8")
+    second.write_text("{}\n", encoding="utf-8")
+
+    assert not yaml_documents_equal(first, second)
 
 
 def test_workflow_config_resolves_provider_and_search_seed() -> None:

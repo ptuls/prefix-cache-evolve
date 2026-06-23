@@ -392,7 +392,8 @@ def test_run_analysis_prefers_generated_mutation_and_reports_preliminary(
     )
     (run_dir / "metadata.json").write_text('{"search_seed": 17}\n', encoding="utf-8")
     (run_dir / "config_snapshot.yaml").write_text(
-        config_path.read_text(encoding="utf-8"),
+        "# Formatting and comments do not change YAML identity.\n"
+        + config_path.read_text(encoding="utf-8"),
         encoding="utf-8",
     )
 

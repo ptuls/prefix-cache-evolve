@@ -49,21 +49,51 @@ cache-geometry sweeps, trace replay, and controlled ablations.
 
 ## Headline Result
 
-Under verifier `1.0.0`, the current production-oriented 16-token policy scores
-`65.649`, ahead of TinyLFU-LRU at `63.548`, while passing held-out probe,
-hidden-panel, and tripwire checks.
+Evolution found deployable policies with strong but geometry-dependent results.
+Scores from different verifier geometries are not directly comparable:
+
+| Policy and evaluation | Candidate | TinyLFU-LRU | Candidate churn per 1k | TinyLFU-LRU churn per 1k |
+|---|---:|---:|---:|---:|
+| Discovery policy on the historical 8-token verifier | `77.113` | `70.362` | `92.7` | `161.1` |
+| Discovery policy transferred to the 16-token verifier | `62.757` | `63.548` | `168.1` | `499.0` |
+| Production policy on the operative 16-token verifier | `65.649` | `63.548` | `163.9` | `499.0` |
+
+The original discovery result was reported as `77.230`; hardened complexity
+accounting changes it to `77.113` without changing policy behavior. A later
+production-oriented search and simplification stage produced the separate
+16-token incumbent that clears TinyLFU-LRU.
+
+The broader geometry sweep remains mixed. The production incumbent beats
+TinyLFU-LRU at 16- and 24-token blocks, trails it at 32-, 48-, and 64-token
+blocks, and has substantially lower churn at every tested block size. A single
+policy that dominates across geometries remains an open problem.
 
 ### Cost
 
-The following assumes the use of GPT-5.5-mini as the primary model and GPT-5.5 Thinking (medium)
-as the paradigm shift model.
+The following assumes GPT-5.5-mini as the primary model and GPT-5.5 Thinking
+with medium reasoning effort as the paradigm-shift model.
 The two directly required final-stage searches cost `USD$5.070` in recorded model
 API charges: `USD$4.133` for production search and `USD$0.937` for simplification.
-The research and development total is at least `USD$44.845` across `2,989` evaluations. 
+The research and development total is at least `USD$44.845` across `2,989` evaluations.
 These figures exclude engineering time, local compute, and
 experiments without retained cost metadata.
 
-Cost is likely to be much cheaper than this with open sourced models as the primary model.
+Search cost depends on model, provider, and evaluation budget; the repository
+does not yet include a comparable cost study for open-source models.
+
+### Evidence Boundary
+
+All reported comparisons use deterministic synthetic traffic. No public or
+external production trace contributes to the headline, so transfer to real
+serving traffic remains unanswered.
+
+The `vllm_apc` baseline emulates the core APC cache-policy behavior relevant to
+this benchmark: exact-prefix reuse of full KV blocks, protection of blocks used
+by active requests, and LRU eviction of reusable unreferenced blocks. It does
+not reproduce vLLM's internal data structures or additional serving
+optimizations, such as scheduling, allocation, continuous batching, offload,
+and kernels. The SGLang entry has the same policy-level scope. These are
+controlled cache-policy comparisons, not end-to-end serving throughput results.
 
 ## Run It
 

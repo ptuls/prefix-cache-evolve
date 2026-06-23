@@ -14,13 +14,13 @@ from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.registry import (
     current_incumbent,
     incumbent_record,
 )
-from prefix_cache_evolve.problems.prefix_kv_cache.reproducibility import file_sha256
 from prefix_cache_evolve.problems.prefix_kv_cache.runner import _candidate_panel_decomposition
 from prefix_cache_evolve.problems.prefix_kv_cache.utilities import (
     agentic_surrogate_probe_gate,
     normalized_source,
     write_json,
 )
+from prefix_cache_evolve.workflow.config import yaml_documents_equal
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 _DEFAULT_CONFIG_PATH = _REPOSITORY_ROOT / "configs/prefix_kv_cache_rediscovery.yaml"
@@ -181,9 +181,7 @@ def _run_adjudication(
         else config.max_candidate_complexity
     )
     snapshot = run_dir / "config_snapshot.yaml"
-    snapshot_matches = snapshot.is_file() and file_sha256(snapshot) == file_sha256(
-        search_config_path
-    )
+    snapshot_matches = snapshot.is_file() and yaml_documents_equal(snapshot, search_config_path)
     generated = normalized_source(candidate_source) != normalized_source(seed_source)
     valid = all(bool(candidate[panel]["success"]) for panel in _PANELS)
     deployable = promotion_limit is None or candidate["effective_complexity"] <= promotion_limit

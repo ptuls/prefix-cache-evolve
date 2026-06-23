@@ -5,12 +5,23 @@ contribution opportunities, then maps the repository's detailed documentation.
 
 ## Current Results
 
-Under verifier `1.0.0`, the current production-oriented 16-token policy scores
-`65.649`, ahead of TinyLFU-LRU at `63.548`, while passing held-out probe,
-hidden-panel, and tripwire checks. On the historical 8-token discovery verifier,
-the promoted discovery policy scores `77.113` under hardened complexity
-accounting, ahead of TinyLFU-LRU at `70.362`, the vLLM APC-style approximation
-at `60.178`, and LRU at `51.186`.
+Evolution found deployable policies with strong but geometry-dependent results.
+The historical 8-token discovery policy scores `77.113` under hardened
+complexity accounting, ahead of TinyLFU-LRU at `70.362`. The same policy scores
+`62.757` when transferred to the operative 16-token verifier, below
+TinyLFU-LRU at `63.548`, although it reduces churn from `499.0` to `168.1` per
+thousand requests.
+
+A later production-oriented search and simplification stage produced a separate
+16-token policy scoring `65.649`, ahead of TinyLFU-LRU at `63.548`, with churn
+of `163.9` rather than `499.0`. In the broader geometry sweep, that policy wins
+at 16- and 24-token blocks, trails at 32-, 48-, and 64-token blocks, and retains
+substantially lower churn throughout. No single incumbent currently dominates
+across geometries.
+
+The original discovery result was reported as `77.230`; hardened complexity
+accounting changes it to `77.113` without changing policy behavior. Scores from
+different verifier geometries are not directly comparable.
 
 Producing the headline production incumbent required two directly necessary
 final-stage searches: the production search cost `$4.133`, and simplification
@@ -37,8 +48,17 @@ The incumbent was not found by one clean run from scratch. It emerged through a
 staged research process that co-evolved the verifier, generator feedback,
 archive, policy lineage, and promotion gates.
 
-All headline results use synthetic traffic. No public production trace is yet
-part of the headline comparison.
+All headline results use deterministic synthetic traffic. No public or external
+production trace contributes to them, so RQ4's real-traffic transfer question
+remains open.
+
+The `vllm_apc` baseline behaviorally emulates the core APC cache policy inside
+the controlled simulator: exact-prefix reuse of full blocks, active-reference
+protection, and LRU eviction of reusable unreferenced blocks. It does not
+reproduce vLLM's internal data structures or additional serving optimizations,
+including scheduling, allocation, continuous batching, offload, and kernels.
+The SGLang baseline has the same policy-level scope. The reported scores compare
+cache-policy logic under a common contract, not end-to-end serving throughput.
 
 ## Research Workflow
 

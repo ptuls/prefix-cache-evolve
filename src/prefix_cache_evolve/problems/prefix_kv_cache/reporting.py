@@ -280,9 +280,11 @@ def _report_notes(
             "trades lower hit rate for lower churn."
         ),
         (
-            "- `vllm_apc` models vLLM automatic prefix caching: it admits only full "
-            "blocks and uses LRU eviction with deepest-prefix tie-breaking. The "
-            "simulator supplies active-reference pinning and legal leaf filtering."
+            "- `vllm_apc` behaviorally emulates the core vLLM APC cache policy: "
+            "exact-prefix reuse of full blocks, active-reference protection, and LRU "
+            "eviction of reusable unreferenced blocks. It does not reproduce vLLM's "
+            "internal data structures or additional serving optimizations, including "
+            "scheduling, allocation, continuous batching, offload, and kernels."
         ),
         (
             "- `sglang_radix_attention` models SGLang RadixAttention's default "

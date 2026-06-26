@@ -7,12 +7,10 @@ import copy
 from collections.abc import Sequence
 from typing import Callable
 
+from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
 from prefix_cache_evolve.evaluators.contracts import PrefixBlockInfo, PrefixKVPolicy, RequestInfo
-from prefix_cache_evolve.evaluators.prefix_kv_cache import (
-    EvaluationResult,
-    EvaluatorConfig,
-    PrefixKVCacheEvaluator,
-)
+from prefix_cache_evolve.evaluators.prefix_kv_cache import PrefixKVCacheEvaluator
+from prefix_cache_evolve.evaluators.results import EvaluationResult
 
 from .incumbents import build_discovery_incumbent
 from .incumbents.registry import current_incumbent

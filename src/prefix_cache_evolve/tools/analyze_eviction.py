@@ -2,27 +2,27 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
 
 import click
 
+from prefix_cache_evolve.artifacts import write_json
 from prefix_cache_evolve.evaluators.complexity import scoring_fn_complexity
+from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
 from prefix_cache_evolve.evaluators.contracts import PrefixBlockInfo, RequestInfo
 from prefix_cache_evolve.evaluators.prefix_kv_cache import (
-    EvaluationResult,
-    EvaluatorConfig,
     PrefixKVCacheEvaluator,
     PrefixKVCacheSimulator,
-    build_workload,
 )
+from prefix_cache_evolve.evaluators.results import EvaluationResult
 from prefix_cache_evolve.evaluators.telemetry import EvictionDecisionSnapshot
 from prefix_cache_evolve.evaluators.verifier import (
     require_single_score_identity,
     require_single_verifier_version,
 )
+from prefix_cache_evolve.evaluators.workloads import build_workload
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import (
     EVICTION_SPECIALIST_CONFIG_PATH,
     load_evaluator_config,
@@ -705,7 +705,7 @@ def _write_markdown(path: Path, payload: dict[str, object]) -> None:
 @click.command()
 @click.option(
     "--config",
-    type=click.Path(path_type=Path),
+    type=click.Path(path_type=Path, exists=True, dir_okay=False, readable=True),
     default=EVICTION_SPECIALIST_CONFIG_PATH,
     show_default=True,
 )
@@ -724,8 +724,7 @@ def _write_markdown(path: Path, payload: dict[str, object]) -> None:
 def main(config: Path, output: Path, markdown: Path) -> None:
     """Analyze eviction choice, regret, and specialist distillations."""
     payload = run_analysis(config)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json(output, payload)
     markdown.parent.mkdir(parents=True, exist_ok=True)
     _write_markdown(markdown, payload)
     click.echo(output)

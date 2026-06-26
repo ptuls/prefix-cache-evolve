@@ -15,14 +15,10 @@ from prefix_cache_evolve.evaluator_entry import (
     load_candidate_factory_from_source,
     run_with_timeout,
 )
-from prefix_cache_evolve.evaluators.prefix_kv_cache import (
-    EvaluationResult as PrefixEvaluationResult,
-)
-from prefix_cache_evolve.evaluators.prefix_kv_cache import (
-    EvaluatorConfig,
-    PrefixKVCacheEvaluator,
-    scoring_fn_complexity,
-)
+from prefix_cache_evolve.evaluators.complexity import scoring_fn_complexity
+from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
+from prefix_cache_evolve.evaluators.prefix_kv_cache import PrefixKVCacheEvaluator
+from prefix_cache_evolve.evaluators.results import EvaluationResult as PrefixEvaluationResult
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import (
     active_evaluator_config,
 )

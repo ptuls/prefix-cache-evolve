@@ -110,6 +110,7 @@ testpaths = ["tests"]
 [tool.mypy]
 python_version = "3.11"
 files = [
+  "src/prefix_cache_evolve/artifacts.py",
   "src/prefix_cache_evolve/evaluator_entry.py",
   "src/prefix_cache_evolve/evaluators",
   "src/prefix_cache_evolve/workflow",
@@ -120,6 +121,8 @@ files = [
   "src/prefix_cache_evolve/problems/prefix_kv_cache/runner_commands.py",
   "src/prefix_cache_evolve/problems/prefix_kv_cache/specialist.py",
   "src/prefix_cache_evolve/problems/prefix_kv_cache/trace_replay.py",
+  "src/prefix_cache_evolve/tools/cli.py",
+  "src/prefix_cache_evolve/tools/lazy_group.py",
 ]
 ignore_missing_imports = true
 show_error_codes = true

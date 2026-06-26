@@ -8,26 +8,22 @@ import shutil
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 
 import click
 
 from prefix_cache_evolve.evaluator_entry import load_candidate_factory, run_with_timeout
 from prefix_cache_evolve.evaluators.baseline_suite import BASELINE_SUITE_EVALUATOR
-from prefix_cache_evolve.evaluators.prefix_kv_cache import (
-    BASELINES,
-    REPORTING_BASELINES,
-    EvaluationResult,
-    EvaluatorConfig,
-    PrefixKVCacheEvaluator,
-    WorkloadRequest,
-    scoring_fn_complexity,
-)
+from prefix_cache_evolve.evaluators.baselines import BASELINES, REPORTING_BASELINES
+from prefix_cache_evolve.evaluators.complexity import scoring_fn_complexity
+from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
+from prefix_cache_evolve.evaluators.prefix_kv_cache import PrefixKVCacheEvaluator
+from prefix_cache_evolve.evaluators.results import EvaluationResult
 from prefix_cache_evolve.evaluators.verifier import (
     require_single_score_identity,
     require_single_verifier_version,
 )
+from prefix_cache_evolve.evaluators.workloads import WorkloadRequest
 from prefix_cache_evolve.workflow.config import (
     ConfigLoader,
     ConfigProvider,
@@ -1334,7 +1330,7 @@ def _score_weight_sensitivity_rows(
 @click.option("--baseline-report", is_flag=True)
 @click.option(
     "--candidate-program",
-    type=click.Path(path_type=Path),
+    type=click.Path(path_type=Path, exists=True, readable=True),
     help="Candidate .py file or run directory to compare in --baseline-report.",
 )
 @click.option("--hidden-report", is_flag=True)
@@ -1371,7 +1367,7 @@ def _score_weight_sensitivity_rows(
 )
 @click.option(
     "--seed-program",
-    type=click.Path(path_type=Path),
+    type=click.Path(path_type=Path, exists=True, readable=True),
     help=(
         "Candidate .py file or saved run directory to use as the evolution seed; "
         "defaults to the current production incumbent."
@@ -1384,7 +1380,7 @@ def _score_weight_sensitivity_rows(
 )
 @click.option(
     "--config",
-    type=click.Path(path_type=str),
+    type=click.Path(path_type=str, exists=True, dir_okay=False, readable=True),
     default=_DEFAULT_CONFIG_FILE,
     show_default=True,
     help="Path to the Levi YAML config file.",
@@ -1424,12 +1420,12 @@ def _score_weight_sensitivity_rows(
 )
 @click.option(
     "--calibrate-trace",
-    type=click.Path(path_type=Path),
+    type=click.Path(path_type=Path, exists=True, dir_okay=False, readable=True),
     help="Summarize an anonymized metadata-only JSONL production trace.",
 )
 @click.option(
     "--replay-trace",
-    type=click.Path(path_type=Path),
+    type=click.Path(path_type=Path, exists=True, dir_okay=False, readable=True),
     help="Replay an anonymized metadata-only JSONL production trace.",
 )
 @click.option(
@@ -1503,9 +1499,9 @@ def _score_weight_sensitivity_rows(
 )
 def main(**kwargs: Any) -> None:
     """Run reports, trace tools, or the Levi evolution workflow."""
-    from .runner_commands import dispatch
+    from .runner_commands import RunnerOptions, dispatch
 
-    dispatch(SimpleNamespace(**kwargs))
+    dispatch(RunnerOptions.from_mapping(kwargs))
 
 
 def _show_resolved_config(

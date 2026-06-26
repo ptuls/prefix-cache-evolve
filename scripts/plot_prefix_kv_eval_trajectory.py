@@ -370,7 +370,7 @@ def render_trajectory(repo_root: Path) -> str:
 @click.command()
 @click.option(
     "--repo-root",
-    type=click.Path(path_type=Path),
+    type=click.Path(path_type=Path, exists=True, file_okay=False, readable=True),
     default=Path.cwd,
     show_default="current directory",
 )

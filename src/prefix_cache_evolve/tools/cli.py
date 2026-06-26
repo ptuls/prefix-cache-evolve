@@ -11,12 +11,38 @@ from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.registry import (
     incumbent_records,
     validate_incumbent_registry,
 )
-from prefix_cache_evolve.tools.ablate_structured import main as structured_ablation
-from prefix_cache_evolve.tools.analyze_eviction import main as eviction_analysis
-from prefix_cache_evolve.tools.analyze_reasoning_kv import main as reasoning_kv_analysis
-from prefix_cache_evolve.tools.analyze_rediscovery import main as rediscovery_analysis
-from prefix_cache_evolve.tools.analyze_regret import main as regret_analysis
-from prefix_cache_evolve.tools.tune_compact import main as compact_tuning
+from prefix_cache_evolve.tools.lazy_group import LazyCommand, LazyGroup
+
+_ANALYZE_COMMANDS = {
+    "eviction": LazyCommand(
+        "prefix_cache_evolve.tools.analyze_eviction:main",
+        "Analyze eviction choice, regret, and specialist distillations.",
+    ),
+    "reasoning-kv": LazyCommand(
+        "prefix_cache_evolve.tools.analyze_reasoning_kv:main",
+        "Compare policies under shared reasoning decode KV pressure.",
+    ),
+    "rediscovery": LazyCommand(
+        "prefix_cache_evolve.tools.analyze_rediscovery:main",
+        "Adjudicate weak-seed evolution runs against the incumbent.",
+    ),
+    "regret": LazyCommand(
+        "prefix_cache_evolve.tools.analyze_regret:main",
+        "Audit admission and eviction regret.",
+    ),
+}
+_ABLATE_COMMANDS = {
+    "structured": LazyCommand(
+        "prefix_cache_evolve.tools.ablate_structured:main",
+        "Ablate structured policy terms.",
+    ),
+}
+_TUNE_COMMANDS = {
+    "compact": LazyCommand(
+        "prefix_cache_evolve.tools.tune_compact:main",
+        "Tune the compact deployable policy.",
+    ),
+}
 
 
 @click.group()
@@ -24,17 +50,17 @@ def main() -> None:
     """Run prefix-cache analyses, ablations, and tuning tools."""
 
 
-@main.group()
+@main.group(cls=LazyGroup, lazy_subcommands=_ANALYZE_COMMANDS)
 def analyze() -> None:
     """Run diagnostic and causal analyses."""
 
 
-@main.group()
+@main.group(cls=LazyGroup, lazy_subcommands=_ABLATE_COMMANDS)
 def ablate() -> None:
     """Run controlled policy ablations."""
 
 
-@main.group()
+@main.group(cls=LazyGroup, lazy_subcommands=_TUNE_COMMANDS)
 def tune() -> None:
     """Run deterministic policy tuning."""
 
@@ -73,14 +99,6 @@ def validate_incumbents() -> None:
     """Fail closed if any incumbent source or manifest has drifted."""
     records = validate_incumbent_registry()
     click.echo(f"validated_incumbents={len(records)}")
-
-
-analyze.add_command(eviction_analysis, name="eviction")
-analyze.add_command(rediscovery_analysis, name="rediscovery")
-analyze.add_command(regret_analysis, name="regret")
-analyze.add_command(reasoning_kv_analysis, name="reasoning-kv")
-ablate.add_command(structured_ablation, name="structured")
-tune.add_command(compact_tuning, name="compact")
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ from prefix_cache_evolve.tools.analyze_eviction import main as eviction_analysis
 from prefix_cache_evolve.tools.analyze_reasoning_kv import main as reasoning_kv_analysis
 from prefix_cache_evolve.tools.analyze_rediscovery import main as rediscovery_analysis
 from prefix_cache_evolve.tools.analyze_regret import main as regret_analysis
+from prefix_cache_evolve.tools.prepare_wildchat import main as prepare_wildchat
 from prefix_cache_evolve.tools.tune_compact import main as compact_tuning
 
 
@@ -42,6 +43,11 @@ def tune() -> None:
 @main.group()
 def incumbents() -> None:
     """Inspect and validate immutable incumbent bundles."""
+
+
+@main.group()
+def datasets() -> None:
+    """Prepare public datasets for replay-safe evaluation."""
 
 
 @incumbents.command("list")
@@ -80,6 +86,7 @@ analyze.add_command(rediscovery_analysis, name="rediscovery")
 analyze.add_command(regret_analysis, name="regret")
 analyze.add_command(reasoning_kv_analysis, name="reasoning-kv")
 ablate.add_command(structured_ablation, name="structured")
+datasets.add_command(prepare_wildchat, name="wildchat")
 tune.add_command(compact_tuning, name="compact")
 
 

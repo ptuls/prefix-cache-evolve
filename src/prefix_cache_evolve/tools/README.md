@@ -26,6 +26,8 @@ prefix-cache-tools
 │   └── regret
 ├── ablate
 │   └── structured
+├── datasets
+│   └── wildchat
 ├── incumbents
 │   ├── list
 │   └── validate
@@ -244,6 +246,39 @@ Trace calibration and replay consume user-supplied anonymized metadata:
 
 See `configs/prefix_kv_trace_schema.json` and `docs/reproducibility.md` before
 publishing trace-derived results.
+
+### WildChat Conversion
+
+Install the optional dataset and tokenizer dependencies, then stream the
+official [WildChat-1M](https://huggingface.co/datasets/allenai/WildChat-1M)
+dataset or convert a local JSON, JSONL, or Parquet export:
+
+```bash
+make setup-wildchat
+export PREFIX_CACHE_TRACE_HASH_KEY="$(openssl rand -hex 32)"
+
+.venv/bin/prefix-cache-tools datasets wildchat \
+  --conversation-limit 10000 \
+  --minimum-requests-per-conversation 2
+```
+
+Default outputs:
+
+- `artifacts/traces/wildchat.jsonl`
+- `artifacts/traces/wildchat.jsonl.manifest.json`
+
+The manifest records the resolved Hugging Face commit, tokenizer, HMAC-key
+fingerprint, conversion parameters, source limitations, and output SHA-256.
+The converter does not write raw messages or identifiers to the trace,
+manifest, or temporary sorting database. Hugging Face and local source caching
+remain governed by the source loader. The same private HMAC key is required to
+reproduce identical prefix hashes.
+
+WildChat supplies one timestamp per conversation rather than one timestamp per
+model request. `--turn-spacing-ms` therefore controls an explicitly synthetic
+intra-conversation interval. The canonical chat serialization also cannot
+reproduce the provider's private system prompt or exact serving template.
+Report this as conversation-derived replay, not production-trace replay.
 
 ## Standalone Report Scripts
 

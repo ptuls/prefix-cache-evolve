@@ -75,6 +75,8 @@ def test_runner_show_config_does_not_start_evolution() -> None:
         ["incumbents", "--help"],
         ["incumbents", "list", "--help"],
         ["incumbents", "validate", "--help"],
+        ["datasets", "--help"],
+        ["datasets", "wildchat", "--help"],
         ["tune", "compact", "--help"],
     ),
 )

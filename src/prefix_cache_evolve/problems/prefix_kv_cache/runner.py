@@ -12,10 +12,8 @@ from typing import TYPE_CHECKING, Any, cast
 
 import click
 
-from prefix_cache_evolve.evaluator_entry import load_candidate_factory, run_with_timeout
 from prefix_cache_evolve.evaluators.baseline_suite import BASELINE_SUITE_EVALUATOR
 from prefix_cache_evolve.evaluators.baselines import BASELINES, REPORTING_BASELINES
-from prefix_cache_evolve.evaluators.complexity import scoring_fn_complexity
 from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
 from prefix_cache_evolve.evaluators.prefix_kv_cache import PrefixKVCacheEvaluator
 from prefix_cache_evolve.evaluators.results import EvaluationResult
@@ -23,7 +21,6 @@ from prefix_cache_evolve.evaluators.verifier import (
     require_single_score_identity,
     require_single_verifier_version,
 )
-from prefix_cache_evolve.evaluators.workloads import WorkloadRequest
 from prefix_cache_evolve.workflow.config import (
     ConfigLoader,
     ConfigProvider,
@@ -34,6 +31,19 @@ from prefix_cache_evolve.workflow.program import ProgramSource
 from prefix_cache_evolve.workflow.reporting import EvolutionReporter
 
 from . import reporting as baseline_reporting
+from .candidate_panels import (
+    HIDDEN_PANEL,
+    PROBE_PANEL,
+    SELECTION_PANEL,
+    VALIDATION_PANEL,
+    CandidatePanelBuilder,
+)
+from .candidate_panels import (
+    evaluate_candidate_program as _evaluate_candidate_program,
+)
+from .candidate_panels import (
+    evaluate_replay_candidate_program as _evaluate_replay_candidate_program,
+)
 from .configuration import (
     DEFAULT_CONFIG_PATH,
     load_evaluator_config,
@@ -48,8 +58,6 @@ from .reproducibility import (
     stable_workload_manifest_payload,
 )
 from .specialist import (
-    candidate_evaluator,
-    candidate_exported_names,
     compose_eviction_specialist_source,
 )
 from .trace_replay import calibrate_anonymized_trace, load_anonymized_trace
@@ -110,7 +118,7 @@ from .utilities import (
 )
 
 if TYPE_CHECKING:
-    from prefix_cache_evolve.workflow.execution import LeviRunner
+    from prefix_cache_evolve.workflow.execution import LeviRunner, LeviRunResult
     from prefix_cache_evolve.workflow.workflow import EvolutionWorkflow
 
 _DEFAULT_SEED_PATH = current_incumbent("production").source_path
@@ -193,7 +201,7 @@ def _build_workflow(
     provider: ConfigProvider,
     *,
     program_source: ProgramSource = DEFAULT_SEED_SOURCE,
-) -> EvolutionWorkflow:
+) -> EvolutionWorkflow[LeviRunResult]:
     from prefix_cache_evolve.workflow.workflow import EvolutionWorkflow
 
     return EvolutionWorkflow(
@@ -303,10 +311,11 @@ def compare_baselines(
     results = _evaluate_baselines(config, include_reporting=True)
     if candidate_program is not None:
         candidate_path = _resolve_candidate_program(candidate_program)
-        results = {
-            "candidate": _evaluate_candidate_program(config, candidate_path),
-            **results,
-        }
+        results = _candidate_panel_builder().add_candidate(
+            config,
+            candidate_path,
+            results,
+        )
         report_path = candidate_path.parent / "baseline_comparison.md"
         write_baseline_comparison_report(
             report_path,
@@ -499,10 +508,11 @@ def save_run_artifacts(
     try:
         config = report_config or _artifact_report_config()
         candidate_path = run_dir / "best_program.py"
-        report_results = {
-            "candidate": _evaluate_candidate_program(config, candidate_path),
-            **_evaluate_baselines(config, include_reporting=True),
-        }
+        report_results = _candidate_panel_builder().build_comparison(
+            config,
+            candidate_path,
+            lambda: _evaluate_baselines(config, include_reporting=True),
+        )
         write_baseline_comparison_report(
             run_dir / "baseline_comparison.md",
             report_results,
@@ -793,25 +803,7 @@ def _candidate_panel_decomposition(
     candidate_path: Path,
 ) -> dict[str, Any]:
     """Evaluate one candidate on selection, probe, and hidden panels."""
-    source = candidate_path.read_text(encoding="utf-8")
-    raw_complexity = scoring_fn_complexity(source)
-    effective_complexity = scoring_fn_complexity(
-        source,
-        form_aware=config.form_aware_complexity,
-    )
-    selection = _evaluate_candidate_program(config, candidate_path)
-    probe = _evaluate_candidate_program(config, candidate_path, splits=("probe",))
-    hidden = _evaluate_candidate_program(config, candidate_path, splits=("hidden",))
-    return {
-        "candidate": str(candidate_path),
-        "raw_complexity": raw_complexity,
-        "effective_complexity": effective_complexity,
-        "primitive_subsidy_nodes": raw_complexity - effective_complexity,
-        "primitive_subsidy_exercised": effective_complexity < raw_complexity,
-        "selection": _evaluation_result_summary(selection),
-        "probe": _evaluation_result_summary(probe),
-        "hidden": _evaluation_result_summary(hidden),
-    }
+    return _candidate_panel_builder().build_decomposition(config, candidate_path)
 
 
 def hidden_report(
@@ -833,17 +825,21 @@ def hidden_report(
     )
     if candidate_program is None:
         print("default_candidate:")
-        champion = PrefixKVCacheEvaluator(config, splits=("hidden",))(build_candidate)
+        champion = PrefixKVCacheEvaluator(config, splits=HIDDEN_PANEL.splits)(build_candidate)
     else:
         candidate_path = _resolve_candidate_program(candidate_program)
         print(f"candidate={candidate_path}")
-        champion = _evaluate_candidate_program(config, candidate_path, splits=("hidden",))
+        champion = _candidate_panel_builder().evaluate(
+            config,
+            candidate_path,
+            panel=HIDDEN_PANEL,
+        )
     print(f"verifier_version={champion.verifier_version}")
     print(f"  combined_score={champion.combined_score:.3f}")
     results = _evaluate_baselines(
         config,
         include_reporting=True,
-        splits=("hidden",),
+        splits=HIDDEN_PANEL.splits,
     )
     for name, result in results.items():
         print(f"{name}: combined_score={result.combined_score:.3f}")
@@ -868,14 +864,16 @@ def probe_report(
         config_file=config_file,
     )
     candidate_path = _resolve_candidate_program(candidate_program or _COMPACT_SEED_PATH)
-    results = {
-        "candidate": _evaluate_candidate_program(
+    results = _candidate_panel_builder().build_comparison(
+        config,
+        candidate_path,
+        lambda: _evaluate_baselines(
             config,
-            candidate_path,
-            splits=("probe",),
+            include_reporting=True,
+            splits=PROBE_PANEL.splits,
         ),
-        **_evaluate_baselines(config, include_reporting=True, splits=("probe",)),
-    }
+        panel=PROBE_PANEL,
+    )
     identity = require_single_score_identity(
         results.values(),
         context="structure probe report",
@@ -1050,10 +1048,11 @@ def write_score_weight_sensitivity_report(
         config_file=config_file,
     )
     candidate_path = _resolve_candidate_program(candidate_program)
-    results = {
-        "candidate": _evaluate_candidate_program(config, candidate_path),
-        **_evaluate_baselines(config),
-    }
+    results = _candidate_panel_builder().build_comparison(
+        config,
+        candidate_path,
+        lambda: _evaluate_baselines(config),
+    )
     verifier_version = require_single_score_identity(
         results.values(),
         context="score-weight sensitivity report",
@@ -1108,6 +1107,7 @@ def write_block_size_robustness_report(
     candidate_path = _resolve_candidate_program(candidate_program or _DEFAULT_SEED_PATH)
     capacity_tokens = base.effective_capacity_tokens()
     rows = []
+    panel_builder = _candidate_panel_builder()
     for block_size_tokens in block_sizes:
         capacity_blocks = _capacity_blocks_for_token_tiers(
             capacity_tokens,
@@ -1118,18 +1118,16 @@ def write_block_size_robustness_report(
             capacity_sweep_blocks=capacity_blocks,
             block_size_tokens=block_size_tokens,
         )
-        results = {
-            "candidate": _evaluate_candidate_program(
-                config,
-                candidate_path,
-                splits=("validation",),
-            ),
-            **BASELINE_SUITE_EVALUATOR.evaluate(
+        results = panel_builder.build_comparison(
+            config,
+            candidate_path,
+            lambda: BASELINE_SUITE_EVALUATOR.evaluate(
                 config,
                 {name: BASELINES[name] for name in _BLOCK_SIZE_ROBUSTNESS_BASELINES},
-                splits=("validation",),
+                splits=VALIDATION_PANEL.splits,
             ),
-        }
+            panel=VALIDATION_PANEL,
+        )
         for name, result in results.items():
             validation = result.split_metrics["validation"]
             complexity_cost = float(result.score_breakdown.get("complexity_cost", 0.0))
@@ -1614,10 +1612,18 @@ def _evaluate_baselines(
     config: EvaluatorConfig,
     *,
     include_reporting: bool = False,
-    splits: tuple[str, ...] = ("train", "validation", "probe"),
+    splits: tuple[str, ...] = SELECTION_PANEL.splits,
 ) -> dict[str, EvaluationResult]:
     baselines = REPORTING_BASELINES if include_reporting else BASELINES
     return BASELINE_SUITE_EVALUATOR.evaluate(config, baselines, splits=splits)
+
+
+def _candidate_panel_builder() -> CandidatePanelBuilder:
+    """Build panel orchestration from runner-level evaluation dependencies."""
+    return CandidatePanelBuilder(
+        evaluate_program=_evaluate_candidate_program,
+        summarize_result=_evaluation_result_summary,
+    )
 
 
 def _artifact_report_config() -> EvaluatorConfig:
@@ -1651,88 +1657,6 @@ def _baseline_report_command(
     parts.append(f"--candidate-program {candidate_program}")
     parts.append(f"--config {config_file}")
     return " ".join(parts)
-
-
-def _evaluate_candidate_program(
-    config: EvaluatorConfig,
-    candidate_path: Path,
-    *,
-    splits: tuple[str, ...] = ("train", "validation", "probe"),
-) -> EvaluationResult:
-    source = candidate_path.read_text(encoding="utf-8")
-    return run_with_timeout(
-        _evaluate_candidate_program_in_worker,
-        config,
-        candidate_path,
-        splits,
-        scoring_fn_complexity(
-            source,
-            form_aware=config.form_aware_complexity,
-        ),
-        timeout_seconds=config.timeout_s,
-        memory_limit_bytes=config.max_memory_bytes,
-        cpu_limit_seconds=config.timeout_s,
-    )
-
-
-def _evaluate_candidate_program_in_worker(
-    config: EvaluatorConfig,
-    candidate_path: Path,
-    splits: tuple[str, ...],
-    complexity: int,
-) -> EvaluationResult:
-    candidate_factory = cast(
-        Any,
-        load_candidate_factory(
-            str(candidate_path),
-            exported_names=candidate_exported_names(config),
-        ),
-    )
-    return candidate_evaluator(config, splits=splits)(
-        candidate_factory,
-        scoring_fn_complexity=complexity,
-    )
-
-
-def _evaluate_replay_candidate_program(
-    config: EvaluatorConfig,
-    candidate_path: Path,
-    requests: tuple[WorkloadRequest, ...],
-) -> EvaluationResult:
-    source = candidate_path.read_text(encoding="utf-8")
-    return run_with_timeout(
-        _evaluate_replay_candidate_program_in_worker,
-        config,
-        candidate_path,
-        requests,
-        scoring_fn_complexity(
-            source,
-            form_aware=config.form_aware_complexity,
-        ),
-        timeout_seconds=config.timeout_s,
-        memory_limit_bytes=config.max_memory_bytes,
-        cpu_limit_seconds=config.timeout_s,
-    )
-
-
-def _evaluate_replay_candidate_program_in_worker(
-    config: EvaluatorConfig,
-    candidate_path: Path,
-    requests: tuple[WorkloadRequest, ...],
-    complexity: int,
-) -> EvaluationResult:
-    candidate_factory = cast(
-        Any,
-        load_candidate_factory(
-            str(candidate_path),
-            exported_names=candidate_exported_names(config),
-        ),
-    )
-    return candidate_evaluator(config, splits=("validation",)).evaluate_requests(
-        candidate_factory,
-        requests,
-        scoring_fn_complexity=complexity,
-    )
 
 
 def _resolve_candidate_program(path: Path) -> Path:

@@ -11,7 +11,7 @@ import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Callable, Generic, Sequence, TypeVar
+from typing import Any, Callable, Generic, Sequence, TypeVar, cast
 
 try:
     import resource
@@ -75,7 +75,7 @@ def run_with_timeout(
 
     status, *values = payload
     if status == "result":
-        return values[0]  # type: ignore[no-any-return]
+        return cast(ResultT, values[0])
     if status == "error":
         raise values[0]
     error_type, error_message, full_traceback = values
@@ -232,7 +232,7 @@ def extract_exported_callable(
     """Returns the first supported exported callable from ``module``."""
     for name in exported_names:
         if hasattr(module, name):
-            return getattr(module, name)  # type: ignore[return-value]
+            return cast(Callable[..., object], getattr(module, name))
     joined_names = " or ".join(f"`{name}`" for name in exported_names)
     raise AttributeError(f"candidate module must expose {joined_names}")
 

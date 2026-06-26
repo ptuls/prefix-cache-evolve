@@ -1,12 +1,24 @@
 """Human-readable reporting for completed evolution runs."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from loguru import logger
+
+if TYPE_CHECKING:
+    from prefix_cache_evolve.workflow.execution import LeviRunResult
 
 
 class EvolutionReporter:
     """Formats evolution results for terminal output."""
 
-    def report(self, result, iterations: int, config_label: str) -> None:
+    def report(
+        self,
+        result: LeviRunResult,
+        iterations: int,
+        config_label: str,
+    ) -> None:
         """Log a summary of one evolution result."""
         logger.info("\n{}", "=" * 60)
         logger.info("EVOLUTION SUMMARY")
@@ -32,7 +44,7 @@ class EvolutionReporter:
         snippet = getattr(result, "best_program", "") or getattr(result, "best_code", "")
         logger.info("\nBest program snippet:\n{}...\n", snippet[:200])
 
-    def _report_run_cost(self, result) -> None:
+    def _report_run_cost(self, result: LeviRunResult) -> None:
         metadata = getattr(result, "metadata", None) or {}
         run_cost = metadata.get("run_cost")
         if not run_cost:

@@ -3,7 +3,7 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Protocol
+from typing import Any, Protocol
 
 import yaml
 from pydantic import (
@@ -360,7 +360,7 @@ class MinimalConfigProvider(ConfigProvider):
         self,
         problem_description: str = "Optimize the candidate_factory implementation.",
         function_signature: str = "def candidate_factory(*args, **kwargs):",
-        model: Optional[str] = None,
+        model: str | None = None,
         search_seed: int = 0,
         api_base: str | None = None,
         api_key_env: str | None = None,

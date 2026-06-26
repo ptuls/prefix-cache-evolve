@@ -14,7 +14,6 @@ DEPTH_BANDS: tuple[tuple[str, int, int | None], ...] = (
     ("depth_9_plus", 9, None),
 )
 PREFIX_ROLES = ("system", "developer", "user")
-TOKEN_PREFIX_ROLES: dict[int, str] = {}
 
 
 def percentile(values: list[float], percentile_value: int) -> float:
@@ -143,9 +142,9 @@ def structural_metrics(
     return metrics
 
 
-def prefix_role(tokens: tuple[int, ...]) -> str:
-    """Resolve a generated prompt block's role from registered token metadata."""
-    roles = {TOKEN_PREFIX_ROLES[token] for token in tokens if token in TOKEN_PREFIX_ROLES}
+def prefix_role(token_roles: tuple[str, ...]) -> str:
+    """Resolve a generated prompt block's role from explicit request metadata."""
+    roles = {role for role in token_roles if role != "unknown"}
     if len(roles) == 1:
         return roles.pop()
     return "unknown"

@@ -43,6 +43,12 @@ _TUNE_COMMANDS = {
         "Tune the compact deployable policy.",
     ),
 }
+_DATASET_COMMANDS = {
+    "wildchat": LazyCommand(
+        "prefix_cache_evolve.tools.prepare_wildchat:main",
+        "Prepare deterministic WildChat trace-replay data.",
+    ),
+}
 
 
 @click.group()
@@ -68,6 +74,11 @@ def tune() -> None:
 @main.group()
 def incumbents() -> None:
     """Inspect and validate immutable incumbent bundles."""
+
+
+@main.group(cls=LazyGroup, lazy_subcommands=_DATASET_COMMANDS)
+def datasets() -> None:
+    """Prepare public datasets for replay-safe evaluation."""
 
 
 @incumbents.command("list")

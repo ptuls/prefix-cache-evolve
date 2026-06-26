@@ -126,6 +126,8 @@ assert all(module not in sys.modules for module in modules)
         ["incumbents", "--help"],
         ["incumbents", "list", "--help"],
         ["incumbents", "validate", "--help"],
+        ["datasets", "--help"],
+        ["datasets", "wildchat", "--help"],
         ["tune", "compact", "--help"],
     ),
 )

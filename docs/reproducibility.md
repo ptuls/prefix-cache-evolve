@@ -229,6 +229,47 @@ Run `--show-config` before a paid search. It validates the YAML and prints the
 resolved model, endpoint, search seed, workload seeds, policy seed, capacities,
 and worker settings without contacting the provider.
 
+## WildChat Replay
+
+[WildChat-1M](https://huggingface.co/datasets/allenai/WildChat-1M) can supply
+real multi-turn conversation structure for prefix-cache replay without
+retaining prompt text in the benchmark artifact:
+
+```bash
+make setup-wildchat
+export PREFIX_CACHE_TRACE_HASH_KEY="$(openssl rand -hex 32)"
+
+uv run prefix-cache-tools datasets wildchat \
+  --conversation-limit 10000 \
+  --minimum-requests-per-conversation 2
+uv run prefix-cache-evolve \
+  --calibrate-trace artifacts/traces/wildchat.jsonl
+```
+
+The converter resolves `allenai/WildChat-1M` to an exact Hugging Face commit and
+records it in `wildchat.jsonl.manifest.json`. Local JSON, JSONL, and Parquet
+exports are also supported with `--input`; their SHA-256 is recorded instead.
+Keep the HMAC key private and stable for a published experiment. The manifest
+contains only its SHA-256 fingerprint.
+
+Each assistant response becomes one request. Its prompt is the deterministic
+cumulative conversation prefix, tokenized with the selected tiktoken encoding.
+Tenant IDs, conversation IDs, and every token block are HMAC-SHA256 identifiers.
+The converter does not write message text or raw identifiers to the trace,
+manifest, or temporary sorting database. Hugging Face and local source caching
+remain governed by the source loader.
+
+This evidence has two explicit limitations:
+
+1. WildChat provides one timestamp per conversation, so `--turn-spacing-ms`
+   creates synthetic request times within that conversation.
+2. The canonical serialization does not reproduce the original provider's
+   private system prompt or exact chat template.
+
+Accordingly, describe results as **WildChat conversation-derived replay**, not
+as production serving-trace replay. Comply with the dataset's ODC-BY license and
+do not commit or redistribute the source conversations through this repository.
+
 ## Publishing a Result
 
 Archive these files for each reported experiment:
@@ -240,6 +281,9 @@ Archive these files for each reported experiment:
 5. Any trace input or download script plus its SHA-256.
 6. Provider model identifiers, date, search seed, evaluation budget, wall time,
    and reported API cost.
+
+For WildChat replay, also archive the conversion manifest and retain the HMAC
+key securely outside the publication artifact.
 
 Report evaluation reproducibility separately from search reproducibility. A
 candidate score can be exactly replayable even when the search trajectory that

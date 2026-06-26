@@ -52,6 +52,10 @@ evolution = [
   "levi @ git+https://github.com/ttanv/levi.git@ba14b302433a0f74687d4c98d3ea36c1bc8d0072",
   "numpy>=1.26,<3",
 ]
+wildchat = [
+  "datasets>=5.0,<6",
+  "tiktoken>=0.13,<1",
+]
 
 [dependency-groups]
 dev = [
@@ -121,8 +125,10 @@ files = [
   "src/prefix_cache_evolve/problems/prefix_kv_cache/runner_commands.py",
   "src/prefix_cache_evolve/problems/prefix_kv_cache/specialist.py",
   "src/prefix_cache_evolve/problems/prefix_kv_cache/trace_replay.py",
+  "src/prefix_cache_evolve/problems/prefix_kv_cache/wildchat.py",
   "src/prefix_cache_evolve/tools/cli.py",
   "src/prefix_cache_evolve/tools/lazy_group.py",
+  "src/prefix_cache_evolve/tools/prepare_wildchat.py",
 ]
 ignore_missing_imports = true
 show_error_codes = true

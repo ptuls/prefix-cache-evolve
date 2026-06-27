@@ -2,11 +2,8 @@
 
 import importlib
 import importlib.util
-import inspect
 import json
 import math
-import os
-import random
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -14,21 +11,18 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Callable
 
-import numpy as np
-
+from prefix_cache_evolve.artifacts import write_json
 from prefix_cache_evolve.evaluator_entry import (
     EvaluatorResult,
     _exec_registered_module,
     load_candidate_factory_from_source,
 )
+from prefix_cache_evolve.workflow.config import LeviRunConfig
+from prefix_cache_evolve.workflow.levi_compat import (
+    LeviRuntimeSettings,
+    activate_levi_runtime,
+)
 
-_levi_paradigm_max_tokens: int | None = None
-_levi_paradigm_model_names: frozenset[str] = frozenset()
-_levi_paradigm_candidate_output_dir: Path | None = None
-_levi_search_seed = 0
-_levi_completion_index = 0
-_levi_api_base: str | None = None
-_levi_api_key_env: str | None = None
 _SCORE_IDENTITY_KEYS = (
     "verifier_version",
     "evaluation_context_sha256",
@@ -148,7 +142,7 @@ class LeviRunner:
         self._evaluate_factory = self._load_evaluate_factory(evaluator_path)
         self._evaluate_source = self._load_evaluate_source(evaluator_path)
 
-    def run(self, program_path: Path, config) -> LeviRunResult:
+    def run(self, program_path: Path, config: LeviRunConfig) -> LeviRunResult:
         """Run Levi from a seed program and resolved configuration."""
         seed_program = program_path.read_text(encoding="utf-8")
         score_fn = LeviScoreFunction(self._evaluate_factory, self._evaluate_source)
@@ -163,25 +157,22 @@ class LeviRunner:
             output_dir = f"runs/{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
             kwargs["output_dir"] = output_dir
 
-        _enable_levi_code_feedback_support()
-        _enable_levi_degenerate_centroid_fallback()
         paradigm_max_tokens = _configured_paradigm_max_tokens(config)
         paradigm_model_names = _configured_paradigm_model_names(config)
-        _enable_levi_paradigm_completion_support(
-            paradigm_max_tokens,
-            paradigm_model_names=paradigm_model_names,
-        )
         search_seed = int(getattr(config, "search_seed", 0))
-        _enable_levi_reproducibility_support(
-            search_seed,
+        runtime_settings = LeviRuntimeSettings(
+            search_seed=search_seed,
+            paradigm_max_tokens=paradigm_max_tokens,
+            paradigm_model_names=paradigm_model_names,
             api_base=getattr(config, "api_base", None),
             api_key_env=getattr(config, "api_key_env", None),
+            paradigm_candidate_output_dir=Path(output_dir) / "paradigm_candidates",
         )
-        _enable_levi_paradigm_candidate_persistence(Path(output_dir) / "paradigm_candidates")
-        result = self._evolve_code(
-            getattr(config, "problem_description", None) or self._problem_description,
-            **kwargs,
-        )
+        with activate_levi_runtime(runtime_settings):
+            result = self._evolve_code(
+                getattr(config, "problem_description", None) or self._problem_description,
+                **kwargs,
+            )
 
         best_program = getattr(result, "best_program", "")
         evaluation = self._evaluate_best_program(best_program)
@@ -327,95 +318,6 @@ def _candidate_source(factory: Callable[..., object], inputs: Any) -> str | None
     return None
 
 
-def _enable_levi_code_feedback_support() -> None:
-    """Make older Levi code adapters accept producer-supplied failure feedback."""
-    from levi.artifacts.code import CodeAdapter
-
-    original = CodeAdapter.build_mutation_prompt
-    if getattr(original, "_prefix_cache_evolve_repair_feedback_patch", False):
-        return
-    accepts_feedback = "feedback" in inspect.signature(original).parameters
-
-    def build_mutation_prompt_with_feedback(
-        self,
-        parents,
-        *,
-        feedback: list[str] | None = None,
-        **kwargs,
-    ) -> str:
-        if accepts_feedback:
-            prompt = original(self, parents, feedback=feedback, **kwargs)
-        else:
-            prompt = original(self, parents, **kwargs)
-        sections = []
-        feedback_lines = [line.strip() for line in feedback or [] if line.strip()]
-        if feedback_lines:
-            sections.append(
-                "## Evaluator Feedback\n"
-                "### Failure Cases With Measurements\n"
-                "Each item is an aggregate from one evaluated workload, not an isolated "
-                "anecdote. Use its outcome, admission-regret, eviction-regret, and cache-"
-                "economics measurements to select one causal change. Do not optimize every "
-                "metric at once or infer access to quarantined probe results.\n"
-                + "\n".join(f"- {line}" for line in feedback_lines)
-            )
-        sections.append(
-            "## Preflight Repair Checks\n"
-            "- Keep the documented entry point and produce complete valid Python.\n"
-            "- Use only documented fields and callbacks; remove guessed fallbacks and broad "
-            "exception handlers.\n"
-            "- Keep imports top-level and delete unused imports.\n"
-            "- For an exploration-only over-cap parent, perform the requested dedicated "
-            "simplification mutation: preserve behavior, add nothing, and delete at least the "
-            "reported excess.\n"
-            "- When near a complexity cap, make a net deletion before adding behavior."
-        )
-        section = "\n\n".join(sections)
-        output_marker = "\n\n## Output\n"
-        if output_marker in prompt:
-            return prompt.replace(output_marker, f"\n\n{section}{output_marker}", 1)
-        return f"{prompt}\n\n{section}"
-
-    setattr(
-        build_mutation_prompt_with_feedback,
-        "_prefix_cache_evolve_repair_feedback_patch",
-        True,
-    )
-    CodeAdapter.build_mutation_prompt = build_mutation_prompt_with_feedback
-
-
-def _enable_levi_degenerate_centroid_fallback() -> None:
-    """Keep a usable CVT archive when valid initialization behaviors are duplicates."""
-    from levi.pool.cvt_map_elites import CVTMAPElitesPool
-
-    original = CVTMAPElitesPool.set_centroids_from_data
-    if getattr(original, "_prefix_cache_evolve_degenerate_centroid_patch", False):
-        return
-
-    def set_centroids_with_fallback(self, behavior_vectors, n_centroids=50):
-        data = np.asarray(behavior_vectors, dtype=float)
-        actual_n_centroids = min(n_centroids, len(data))
-        if not len(data) or len(np.unique(data, axis=0)) >= actual_n_centroids:
-            return original(self, behavior_vectors, n_centroids)
-
-        self._n_centroids = n_centroids
-        self._centroids = self._init_cvt_centroids()
-        self._mins = np.zeros(self._n_dims)
-        self._maxs = np.ones(self._n_dims)
-        self._ranges = np.ones(self._n_dims)
-        distances = np.sum(
-            (data[:, np.newaxis, :] - self._centroids[np.newaxis, :, :]) ** 2, axis=2
-        )
-        return self._n_centroids, np.argmin(distances, axis=1)
-
-    setattr(
-        set_centroids_with_fallback,
-        "_prefix_cache_evolve_degenerate_centroid_patch",
-        True,
-    )
-    CVTMAPElitesPool.set_centroids_from_data = set_centroids_with_fallback
-
-
 def _configured_paradigm_max_tokens(config: Any) -> int | None:
     """Return the paradigm output budget, falling back to the pipeline budget."""
     punctuated_equilibrium = getattr(config, "punctuated_equilibrium", {}) or {}
@@ -454,242 +356,6 @@ def _configured_paradigm_model_names(config: Any) -> frozenset[str]:
     )
 
 
-def _enable_levi_paradigm_completion_support(
-    max_tokens: int | None,
-    *,
-    paradigm_model_names: frozenset[str],
-) -> None:
-    """Override Levi's legacy 4096-token cap for configured paradigm models.
-
-    Levi revisions without native ``punctuated_equilibrium.max_tokens`` support
-    hard-code 4096 on paradigm generation. The compatibility wrapper recognizes
-    only that legacy sentinel and only for configured paradigm models. Once Levi
-    forwards the configured value itself, the wrapper becomes a no-op.
-    """
-    global _levi_paradigm_max_tokens
-    global _levi_paradigm_model_names
-    _levi_paradigm_max_tokens = max_tokens
-    _levi_paradigm_model_names = paradigm_model_names
-    if max_tokens is None or not paradigm_model_names:
-        return
-
-    from levi.clients.base import client_name
-    from levi.pipeline.state import PipelineState
-
-    original = PipelineState.acompletion
-    if getattr(original, "_prefix_cache_evolve_reasoning_budget_patch", False):
-        return
-
-    async def acompletion_with_paradigm_budget(
-        self,
-        client_spec,
-        *,
-        prompt,
-        temperature=None,
-        max_tokens=None,
-        timeout=None,
-        **extras,
-    ):
-        is_configured_paradigm_model = client_name(client_spec) in _levi_paradigm_model_names
-        if (
-            max_tokens == 4_096
-            and is_configured_paradigm_model
-            and _levi_paradigm_max_tokens is not None
-        ):
-            max_tokens = _levi_paradigm_max_tokens
-        return await original(
-            self,
-            client_spec,
-            prompt=prompt,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            timeout=timeout,
-            **extras,
-        )
-
-    setattr(
-        acompletion_with_paradigm_budget,
-        "_prefix_cache_evolve_reasoning_budget_patch",
-        True,
-    )
-    setattr(
-        acompletion_with_paradigm_budget,
-        "_prefix_cache_evolve_seed_patch",
-        getattr(
-            original,
-            "_prefix_cache_evolve_seed_patch",
-            False,
-        ),
-    )
-    PipelineState.acompletion = acompletion_with_paradigm_budget
-
-
-def _enable_levi_reproducibility_support(
-    seed: int,
-    *,
-    api_base: str | None = None,
-    api_key_env: str | None = None,
-) -> None:
-    """Seed Levi and apply secret-safe model request defaults."""
-    global _levi_api_base
-    global _levi_api_key_env
-    global _levi_completion_index
-    global _levi_search_seed
-
-    _levi_search_seed = int(seed)
-    _levi_completion_index = 0
-    _levi_api_base = api_base
-    _levi_api_key_env = api_key_env
-    random.seed(_levi_search_seed)
-    np.random.seed(_levi_search_seed)
-
-    from levi.pipeline.state import PipelineState
-
-    original = PipelineState.acompletion
-    if getattr(original, "_prefix_cache_evolve_seed_patch", False):
-        return
-
-    async def acompletion_with_seed(
-        self,
-        client_spec,
-        *,
-        prompt,
-        temperature=None,
-        max_tokens=None,
-        timeout=None,
-        **extras,
-    ):
-        global _levi_completion_index
-
-        request_seed = _levi_search_seed + _levi_completion_index
-        _levi_completion_index += 1
-        extras.setdefault("seed", request_seed)
-        extras.setdefault("drop_params", True)
-        if _levi_api_base:
-            extras.setdefault("api_base", _levi_api_base)
-        if _levi_api_key_env:
-            api_key = os.environ.get(_levi_api_key_env)
-            if not api_key:
-                raise ValueError(
-                    f"configured LLM API key environment variable {_levi_api_key_env!r} is not set"
-                )
-            extras.setdefault("api_key", api_key)
-        return await original(
-            self,
-            client_spec,
-            prompt=prompt,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            timeout=timeout,
-            **extras,
-        )
-
-    setattr(acompletion_with_seed, "_prefix_cache_evolve_seed_patch", True)
-    setattr(
-        acompletion_with_seed,
-        "_prefix_cache_evolve_reasoning_budget_patch",
-        getattr(
-            original,
-            "_prefix_cache_evolve_reasoning_budget_patch",
-            False,
-        ),
-    )
-    PipelineState.acompletion = acompletion_with_seed
-
-
-def _enable_levi_paradigm_candidate_persistence(output_dir: Path) -> None:
-    """Persist every evaluated PE candidate, including archive rejections."""
-    global _levi_paradigm_candidate_output_dir
-    _levi_paradigm_candidate_output_dir = output_dir
-
-    from levi.equilibrium.equilibrium import PunctuatedEquilibrium
-
-    original_trigger = PunctuatedEquilibrium.trigger
-    if getattr(original_trigger, "_prefix_cache_evolve_candidate_persistence_patch", False):
-        return
-    original_evaluate = PunctuatedEquilibrium._evaluate
-
-    async def evaluate_with_capture(self, code):
-        result = await original_evaluate(self, code)
-        capture = getattr(self, "_prefix_cache_evolve_candidate_capture", None)
-        if isinstance(capture, dict):
-            capture.setdefault("candidates", []).append(
-                {
-                    "code": code,
-                    "result": result,
-                }
-            )
-        return result
-
-    async def trigger_with_candidate_persistence(
-        self,
-        n_evaluations: int,
-        budget_progress: float = 0.0,
-    ):
-        capture = {
-            "trigger_evaluation": n_evaluations,
-            "budget_progress": budget_progress,
-            "candidates": [],
-        }
-        self._prefix_cache_evolve_candidate_capture = capture
-        stats = None
-        try:
-            stats = await original_trigger(self, n_evaluations, budget_progress)
-            return stats
-        finally:
-            _persist_levi_paradigm_candidate_capture(capture, stats)
-            self._prefix_cache_evolve_candidate_capture = None
-
-    setattr(
-        trigger_with_candidate_persistence,
-        "_prefix_cache_evolve_candidate_persistence_patch",
-        True,
-    )
-    PunctuatedEquilibrium._evaluate = evaluate_with_capture
-    PunctuatedEquilibrium.trigger = trigger_with_candidate_persistence
-
-
-def _persist_levi_paradigm_candidate_capture(capture: dict[str, Any], stats: Any) -> None:
-    """Write one PE event's evaluated source files and results."""
-    output_dir = _levi_paradigm_candidate_output_dir
-    if output_dir is None or not capture.get("candidates"):
-        return
-
-    event_dir = output_dir / f"eval_{int(capture['trigger_evaluation']):04d}"
-    event_dir.mkdir(parents=True, exist_ok=True)
-    manifest_candidates = []
-    for index, candidate in enumerate(capture["candidates"]):
-        candidate_type = "paradigm_shift" if index == 0 else "variant"
-        stem = f"{index:02d}_{candidate_type}"
-        source_name = f"{stem}.py"
-        result_name = f"{stem}_result.json"
-        (event_dir / source_name).write_text(str(candidate["code"]), encoding="utf-8")
-        _write_levi_json(event_dir / result_name, candidate["result"])
-        result = candidate["result"] if isinstance(candidate["result"], dict) else {}
-        manifest_candidates.append(
-            {
-                "candidate_type": candidate_type,
-                "source": source_name,
-                "result": result_name,
-                "score": result.get("score"),
-                "verifier_version": result.get("verifier_version"),
-                "evaluation_context_sha256": result.get("evaluation_context_sha256"),
-                "panel_sha256": result.get("panel_sha256"),
-                "error": result.get("error"),
-            }
-        )
-
-    _write_levi_json(
-        event_dir / "manifest.json",
-        {
-            "trigger_evaluation": capture["trigger_evaluation"],
-            "budget_progress": capture["budget_progress"],
-            "stats": stats,
-            "candidates": manifest_candidates,
-        },
-    )
-
-
 def _stamp_levi_snapshot_score_identity(
     path: Path,
     score_identity: dict[str, str],
@@ -709,14 +375,7 @@ def _stamp_levi_snapshot_score_identity(
             for record in records:
                 if isinstance(record, dict):
                     record.update(score_identity)
-    _write_levi_json(path, snapshot)
-
-
-def _write_levi_json(path: Path, payload: Any) -> None:
-    path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
-        encoding="utf-8",
-    )
+    write_json(path, snapshot)
 
 
 def _module_name_from_package_path(path: Path) -> str | None:

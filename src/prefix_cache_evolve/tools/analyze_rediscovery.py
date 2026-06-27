@@ -374,13 +374,13 @@ def run_analysis(
 @click.command()
 @click.option(
     "--config",
-    type=click.Path(path_type=Path),
+    type=click.Path(path_type=Path, exists=True, dir_okay=False, readable=True),
     default=_DEFAULT_CONFIG_PATH,
     show_default=True,
 )
 @click.option(
     "--adjudication-config",
-    type=click.Path(path_type=Path),
+    type=click.Path(path_type=Path, exists=True, dir_okay=False, readable=True),
     default=_DEFAULT_ADJUDICATION_CONFIG_PATH,
     show_default=True,
     help="Canonical config used for final selection, probe, and hidden scoring.",
@@ -388,7 +388,7 @@ def run_analysis(
 @click.option(
     "--run",
     "run_dirs",
-    type=click.Path(path_type=Path, file_okay=False),
+    type=click.Path(path_type=Path, exists=True, file_okay=False, readable=True),
     multiple=True,
     help="Saved weak-seed evolution run directory. May be repeated.",
 )

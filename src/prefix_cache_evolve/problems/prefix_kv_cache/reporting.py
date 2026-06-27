@@ -7,10 +7,8 @@ from pathlib import Path
 from typing import Protocol
 
 from prefix_cache_evolve.evaluators.baselines import BASELINE_REGISTRY
-from prefix_cache_evolve.evaluators.prefix_kv_cache import (
-    EvaluationResult,
-    EvaluatorConfig,
-)
+from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
+from prefix_cache_evolve.evaluators.results import EvaluationResult
 from prefix_cache_evolve.evaluators.verifier import require_single_score_identity
 
 QUICK_REPORT_WARNING = (

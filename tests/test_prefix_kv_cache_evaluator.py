@@ -44,6 +44,10 @@ from prefix_cache_evolve.evaluators.verifier import (
 )
 from prefix_cache_evolve.problems.prefix_kv_cache import evaluator as levi_evaluator
 from prefix_cache_evolve.problems.prefix_kv_cache import runner as prefix_runner
+from prefix_cache_evolve.problems.prefix_kv_cache.candidate_panels import (
+    PROBE_PANEL,
+    CandidatePanelBuilder,
+)
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import (
     DEFAULT_CONFIG_PATH,
     PREFIX_KV_CONFIG_ENV,
@@ -62,6 +66,7 @@ from prefix_cache_evolve.problems.prefix_kv_cache.runner import (
     write_baseline_plots,
 )
 from prefix_cache_evolve.problems.prefix_kv_cache.specialist import (
+    _EvictionOnlyPolicy,
     candidate_evaluator,
     compose_eviction_specialist_source,
     eviction_only_source_violations,
@@ -161,6 +166,151 @@ def _report_result(
             "complexity_cost": 0.0,
         },
     )
+
+
+def test_candidate_panel_builder_preserves_candidate_first_order(tmp_path) -> None:
+    candidate_path = tmp_path / "candidate.py"
+    candidate_path.write_text("candidate source\n", encoding="utf-8")
+    calls = []
+
+    def evaluate_candidate(config, path, *, splits):
+        del config
+        calls.append(("candidate", path, splits))
+        return _report_result(12.0)
+
+    def build_baselines():
+        calls.append(("baselines",))
+        return {"lru": _report_result(10.0)}
+
+    builder = CandidatePanelBuilder(
+        evaluate_program=evaluate_candidate,
+        summarize_result=lambda result: {"combined_score": result.combined_score},
+    )
+
+    results = builder.build_comparison(
+        EvaluatorConfig(),
+        candidate_path,
+        build_baselines,
+        panel=PROBE_PANEL,
+    )
+
+    assert list(results) == ["candidate", "lru"]
+    assert calls == [
+        ("candidate", candidate_path, ("probe",)),
+        ("baselines",),
+    ]
+
+
+def test_candidate_panel_builder_preserves_decomposition_schema(tmp_path) -> None:
+    candidate_path = tmp_path / "candidate.py"
+    candidate_path.write_text("candidate source\n", encoding="utf-8")
+    evaluated_splits = []
+    complexity_calls = []
+    scores = {
+        ("train", "validation", "probe"): 12.0,
+        ("probe",): 8.0,
+        ("hidden",): 6.0,
+    }
+
+    def evaluate_candidate(config, path, *, splits):
+        del config
+        assert path == candidate_path
+        evaluated_splits.append(splits)
+        return _report_result(scores[splits])
+
+    def evaluate_complexity(source, *, form_aware=False):
+        complexity_calls.append((source, form_aware))
+        return 7 if form_aware else 10
+
+    builder = CandidatePanelBuilder(
+        evaluate_program=evaluate_candidate,
+        summarize_result=lambda result: {"combined_score": result.combined_score},
+        evaluate_complexity=evaluate_complexity,
+    )
+
+    payload = builder.build_decomposition(
+        EvaluatorConfig(form_aware_complexity=True),
+        candidate_path,
+    )
+
+    assert payload == {
+        "candidate": str(candidate_path),
+        "raw_complexity": 10,
+        "effective_complexity": 7,
+        "primitive_subsidy_nodes": 3,
+        "primitive_subsidy_exercised": True,
+        "selection": {"combined_score": 12.0},
+        "probe": {"combined_score": 8.0},
+        "hidden": {"combined_score": 6.0},
+    }
+    assert evaluated_splits == [
+        ("train", "validation", "probe"),
+        ("probe",),
+        ("hidden",),
+    ]
+    assert complexity_calls == [
+        ("candidate source\n", False),
+        ("candidate source\n", True),
+    ]
+
+
+def test_runner_candidate_panel_decomposition_preserves_artifact_schema(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    candidate_path = tmp_path / "candidate.py"
+    candidate_path.write_text(
+        "def build_candidate(capacity_blocks, block_size_tokens, seed=None):\n    return None\n",
+        encoding="utf-8",
+    )
+    scores = {
+        ("train", "validation", "probe"): 12.0,
+        ("probe",): 8.0,
+        ("hidden",): 6.0,
+    }
+
+    def evaluate_candidate(config, path, *, splits):
+        del config
+        assert path == candidate_path
+        return _report_result(scores[splits])
+
+    monkeypatch.setattr(
+        prefix_runner,
+        "_evaluate_candidate_program",
+        evaluate_candidate,
+    )
+
+    payload = prefix_runner._candidate_panel_decomposition(
+        EvaluatorConfig(),
+        candidate_path,
+    )
+
+    assert list(payload) == [
+        "candidate",
+        "raw_complexity",
+        "effective_complexity",
+        "primitive_subsidy_nodes",
+        "primitive_subsidy_exercised",
+        "selection",
+        "probe",
+        "hidden",
+    ]
+    assert list(payload["selection"]) == [
+        "verifier_version",
+        "evaluation_context_sha256",
+        "panel_sha256",
+        "combined_score",
+        "success",
+        "invalid_fraction",
+        "split_metrics",
+        "workload_metrics",
+        "capacity_metrics",
+        "candidate_metadata",
+        "score_breakdown",
+    ]
+    assert payload["selection"]["combined_score"] == 12.0
+    assert payload["probe"]["combined_score"] == 8.0
+    assert payload["hidden"]["combined_score"] == 6.0
 
 
 def _agentic_gate_metrics(
@@ -305,6 +455,29 @@ def test_eviction_only_specialist_freezes_admission_and_callbacks() -> None:
     assert "base_hit" in calls
     assert "base_miss" in calls
     assert ("eviction", 2.0, 3.0) in calls
+
+
+def test_eviction_only_policy_uses_explicit_feature_provider() -> None:
+    class FeatureProvider:
+        def eviction_features(self, block, now):
+            assert block.prefix_hash == 1
+            assert now == 7
+            return 4.0, 5.0
+
+    observed_features = []
+
+    def score_eviction(block, now, frequency, priority):
+        observed_features.append((frequency, priority))
+        return float(now - block.last_accessed_at)
+
+    policy = _EvictionOnlyPolicy(
+        base_policy=AdmitAllLRU(),
+        eviction_features=FeatureProvider(),
+        score_eviction=score_eviction,
+    )
+
+    assert policy.score_eviction(_block_info(last_accessed_at=3), now=7) == 4.0
+    assert observed_features == [(4.0, 5.0)]
 
 
 def test_fixed_admission_factory_rejects_unknown_policy() -> None:

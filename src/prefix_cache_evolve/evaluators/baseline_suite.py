@@ -9,12 +9,10 @@ from prefix_cache_evolve.evaluators.baselines import (
     BASELINE_REGISTRY,
     PolicyFactory,
 )
-from prefix_cache_evolve.evaluators.prefix_kv_cache import (
-    EvaluationResult,
-    EvaluatorConfig,
-    PrefixKVCacheEvaluator,
-    WorkloadRequest,
-)
+from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
+from prefix_cache_evolve.evaluators.prefix_kv_cache import PrefixKVCacheEvaluator
+from prefix_cache_evolve.evaluators.results import EvaluationResult
+from prefix_cache_evolve.evaluators.workloads import WorkloadRequest
 
 
 class BaselineCapabilities(Protocol):

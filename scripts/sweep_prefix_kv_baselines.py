@@ -137,7 +137,7 @@ def _run_job(job: SweepJob) -> dict[str, Any]:
 @click.command()
 @click.option(
     "--config",
-    type=click.Path(path_type=Path),
+    type=click.Path(path_type=Path, exists=True, dir_okay=False, readable=True),
     default=_DEFAULT_CONFIG,
     show_default=True,
 )

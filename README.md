@@ -143,6 +143,44 @@ Evolution uses external model services and may incur cost. Read the
 [reproducibility and model-provider guide](docs/reproducibility.md) before a
 paid run.
 
+For conversation-derived
+[WildChat-1M](https://huggingface.co/datasets/allenai/WildChat-1M) replay:
+
+```bash
+# Install the optional dataset and tokenizer dependencies.
+make setup-wildchat
+
+# Generate and retain this key for reproducible conversions.
+export PREFIX_CACHE_TRACE_HASH_KEY="$(openssl rand -hex 32)"
+
+# Start with a small smoke conversion.
+uv run prefix-cache-tools datasets wildchat \
+  --conversation-limit 100 \
+  --minimum-requests-per-conversation 2
+
+# Inspect the resulting trace before replaying a policy.
+uv run prefix-cache-evolve \
+  --calibrate-trace artifacts/traces/wildchat.jsonl
+
+# Replay the production incumbent over the converted workload.
+uv run prefix-cache-evolve \
+  --replay-trace artifacts/traces/wildchat.jsonl \
+  --candidate-program \
+  src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/production_16tok_20260609/policy.py
+```
+
+The conversion creates `artifacts/traces/wildchat.jsonl` and
+`artifacts/traces/wildchat.jsonl.manifest.json`. Increase or remove
+`--conversation-limit` for a larger experiment. Retain the same
+`PREFIX_CACHE_TRACE_HASH_KEY` value to reproduce identical identifiers and
+prefix hashes.
+
+The converter writes only HMAC identifiers, token lengths, timestamps, and
+opaque prefix-block hashes. It does not retain prompt text. WildChat has one
+timestamp per conversation, so the converter records synthetic
+intra-conversation spacing and labels the artifact as conversation-derived
+rather than a production serving trace.
+
 Untrusted candidate source must be evaluated in a separate OS sandbox. The
 repository includes a locked, non-root Docker profile:
 

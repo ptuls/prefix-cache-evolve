@@ -1,12 +1,15 @@
 UV ?= uv
 
-.PHONY: setup setup-evolution setup-dev show-config smoke test format check sandbox-image
+.PHONY: setup setup-evolution setup-wildchat setup-dev show-config smoke test format check sandbox-image
 
 setup:
 	$(UV) sync --frozen --no-default-groups
 
 setup-evolution:
 	$(UV) sync --frozen --no-default-groups --extra evolution
+
+setup-wildchat:
+	$(UV) sync --frozen --no-default-groups --extra wildchat
 
 setup-dev:
 	$(UV) sync --frozen --group dev

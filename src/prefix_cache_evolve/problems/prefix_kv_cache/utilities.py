@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import math
 from pathlib import Path
 from typing import Any
 
-from prefix_cache_evolve.evaluators.prefix_kv_cache import EvaluationResult
+from prefix_cache_evolve.artifacts import write_json as write_json
+from prefix_cache_evolve.evaluators.results import EvaluationResult
 from prefix_cache_evolve.evaluators.verifier import (
     require_single_score_identity,
     require_single_verifier_version,
@@ -40,15 +40,6 @@ SURROGATE_PROBE_TRIPWIRE_SPECS = (
         "threshold": CYCLIC_SURROGATE_PROBE_DIVERGENCE_THRESHOLD,
     },
 )
-
-
-def write_json(path: Path, payload: Any) -> None:
-    """Write stable, human-reviewable JSON and create parent directories."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
-        encoding="utf-8",
-    )
 
 
 def evaluation_result_summary(result: EvaluationResult) -> dict[str, Any]:

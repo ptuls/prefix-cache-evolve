@@ -5,15 +5,14 @@ from __future__ import annotations
 import ast
 import copy
 from collections.abc import Sequence
-from typing import Callable
+from typing import Callable, Protocol, runtime_checkable
 
+from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
 from prefix_cache_evolve.evaluators.contracts import PrefixBlockInfo, PrefixKVPolicy, RequestInfo
-from prefix_cache_evolve.evaluators.prefix_kv_cache import (
-    EvaluationResult,
-    EvaluatorConfig,
-    PrefixKVCacheEvaluator,
-)
+from prefix_cache_evolve.evaluators.prefix_kv_cache import PrefixKVCacheEvaluator
+from prefix_cache_evolve.evaluators.results import EvaluationResult
 
+from .candidate_contracts import candidate_contract
 from .incumbents import build_discovery_incumbent
 from .incumbents.registry import current_incumbent
 
@@ -30,6 +29,44 @@ _FULL_POLICY_METHODS = {
     "on_cache_miss",
 }
 _POLICY_FACTORY_NAMES = {"build_candidate", "candidate_factory"}
+
+
+class EvictionFeatureProvider(Protocol):
+    """Provides the incumbent features consumed by eviction specialists."""
+
+    def eviction_features(
+        self,
+        block: PrefixBlockInfo,
+        now: int,
+    ) -> tuple[float, float]:
+        """Return the incumbent frequency and priority for one block."""
+        ...
+
+
+@runtime_checkable
+class _LegacyEvictionFeatureSource(Protocol):
+    """Compatibility shape implemented by immutable incumbent policies."""
+
+    def _values(self, key: int, now: int) -> tuple[float, float]:
+        """Return the legacy incumbent frequency and priority values."""
+        ...
+
+
+class LegacyPolicyEvictionFeatureAdapter:
+    """Adapts immutable incumbent state to the specialist feature capability."""
+
+    def __init__(self, policy: PrefixKVPolicy) -> None:
+        if not isinstance(policy, _LegacyEvictionFeatureSource):
+            raise TypeError("fixed admission policy does not provide eviction specialist features")
+        self._policy = policy
+
+    def eviction_features(
+        self,
+        block: PrefixBlockInfo,
+        now: int,
+    ) -> tuple[float, float]:
+        """Return frequency and priority through the specialist-owned interface."""
+        return self._policy._values(block.prefix_hash, now)
 
 
 def candidate_evaluator(
@@ -66,9 +103,7 @@ def fixed_admission_factory(
 
 def candidate_exported_names(config: EvaluatorConfig) -> tuple[str, ...]:
     """Return the candidate entry points accepted by one evaluator configuration."""
-    if config.candidate_policy_surface == "eviction_only":
-        return ("score_eviction",)
-    return ("candidate_factory", "build_candidate")
+    return candidate_contract(config).exported_names
 
 
 class EvictionOnlyEvaluator:
@@ -129,8 +164,10 @@ class EvictionOnlyEvaluator:
             block_size_tokens: int,
             seed: int | None = None,
         ) -> PrefixKVPolicy:
+            base_policy = base_factory(capacity_blocks, block_size_tokens, seed)
             return _EvictionOnlyPolicy(
-                base_policy=base_factory(capacity_blocks, block_size_tokens, seed),
+                base_policy=base_policy,
+                eviction_features=LegacyPolicyEvictionFeatureAdapter(base_policy),
                 score_eviction=score_eviction,
             )
 
@@ -144,9 +181,11 @@ class _EvictionOnlyPolicy:
         self,
         *,
         base_policy: PrefixKVPolicy,
+        eviction_features: EvictionFeatureProvider,
         score_eviction: Callable[..., float],
     ) -> None:
         self._base_policy = base_policy
+        self._eviction_features = eviction_features
         self._score_eviction = score_eviction
 
     def on_request_start(self, request: RequestInfo, now: int) -> None:
@@ -156,8 +195,7 @@ class _EvictionOnlyPolicy:
         return self._base_policy.score_admission(block, now)
 
     def score_eviction(self, block: PrefixBlockInfo, now: int) -> float:
-        values = getattr(self._base_policy, "_values")
-        frequency, priority = values(block.prefix_hash, now)
+        frequency, priority = self._eviction_features.eviction_features(block, now)
         return self._score_eviction(block, now, frequency, priority)
 
     def on_cache_hit(self, block: PrefixBlockInfo, request: RequestInfo, now: int) -> None:

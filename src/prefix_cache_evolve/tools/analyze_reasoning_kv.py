@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import click
 
+from prefix_cache_evolve.artifacts import write_json
 from prefix_cache_evolve.evaluators.baselines import BASELINE_REGISTRY, REPORTING_BASELINES
 from prefix_cache_evolve.evaluators.complexity import scoring_fn_complexity
-from prefix_cache_evolve.evaluators.prefix_kv_cache import (
-    EvaluationResult,
-    PrefixKVCacheEvaluator,
-)
+from prefix_cache_evolve.evaluators.prefix_kv_cache import PrefixKVCacheEvaluator
+from prefix_cache_evolve.evaluators.results import EvaluationResult
 from prefix_cache_evolve.evaluators.verifier import (
     require_single_score_identity,
     require_single_verifier_version,
@@ -276,7 +274,7 @@ def _write_markdown(path: Path, payload: dict[str, object]) -> None:
 @click.command()
 @click.option(
     "--config",
-    type=click.Path(path_type=Path),
+    type=click.Path(path_type=Path, exists=True, dir_okay=False, readable=True),
     default=DEFAULT_CONFIG_PATH,
     show_default=True,
 )
@@ -307,8 +305,7 @@ def main(
         request_count=request_count,
         seeds=seeds or None,
     )
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json(output, payload)
     markdown.parent.mkdir(parents=True, exist_ok=True)
     _write_markdown(markdown, payload)
     click.echo(output)

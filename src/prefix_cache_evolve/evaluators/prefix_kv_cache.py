@@ -6,7 +6,7 @@ import inspect
 import math
 import tracemalloc
 from collections import deque
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 from statistics import mean, pstdev
 from typing import Callable, Iterable
 
@@ -88,11 +88,32 @@ from prefix_cache_evolve.evaluators.fingerprints import (
     panel_sha256,
     request_stream_fingerprint_record,
 )
+from prefix_cache_evolve.evaluators.results import (
+    AdmissionDecisionDiagnostic as AdmissionDecisionDiagnostic,
+)
+from prefix_cache_evolve.evaluators.results import (
+    EvaluationResult,
+    TrialMetrics,
+)
 from prefix_cache_evolve.evaluators.scoring import (
     aggregate_by as _aggregate_by,
 )
 from prefix_cache_evolve.evaluators.scoring import (
     workload_base_score as _workload_base_score,
+)
+from prefix_cache_evolve.evaluators.simulator_support import (
+    _ActiveDecode,
+    _AdmissionAccounting,
+    _AdmissionAudit,
+    _AdmissionOutcome,
+    _BlockState,
+    _CapacityOutcome,
+    _FutureReuseTracker,
+    _request_arrival_steps,
+    _window_mean,
+)
+from prefix_cache_evolve.evaluators.simulator_support import (
+    _correlation as _correlation,
 )
 from prefix_cache_evolve.evaluators.telemetry import (
     CacheBlockSnapshot,
@@ -115,9 +136,6 @@ from prefix_cache_evolve.evaluators.utilities import (
     prefix_role as _prefix_role,
 )
 from prefix_cache_evolve.evaluators.utilities import (
-    request_prefix_hashes as _request_prefix_hashes,
-)
-from prefix_cache_evolve.evaluators.utilities import (
     stable_hash as _stable_hash,
 )
 from prefix_cache_evolve.evaluators.utilities import (
@@ -138,629 +156,8 @@ _KV_CAPACITY_MODES = ("prefix_only", "shared")
 _aggregate_trials = _scoring.aggregate_trials
 
 
-def _request_arrival_steps(requests: tuple[WorkloadRequest, ...]) -> tuple[int, ...]:
-    """Returns monotonic logical arrival times, preserving sequential defaults."""
-    arrival_steps = []
-    previous_step = -1
-    for request_index, request in enumerate(requests):
-        arrival_step = request_index if request.arrival_step is None else request.arrival_step
-        if arrival_step < previous_step:
-            raise ValueError("workload arrival steps must be monotonic")
-        arrival_steps.append(arrival_step)
-        previous_step = arrival_step
-    return tuple(arrival_steps)
-
-
-def _correlation(left: list[float], right: list[float]) -> float:
-    """Return a finite Pearson correlation, or zero for a constant series."""
-    if len(left) != len(right) or len(left) < 2:
-        return 0.0
-    left_mean = mean(left)
-    right_mean = mean(right)
-    left_centered = [value - left_mean for value in left]
-    right_centered = [value - right_mean for value in right]
-    denominator = math.sqrt(
-        sum(value**2 for value in left_centered) * sum(value**2 for value in right_centered)
-    )
-    if denominator == 0.0:
-        return 0.0
-    return (
-        sum(
-            left_value * right_value
-            for left_value, right_value in zip(left_centered, right_centered, strict=True)
-        )
-        / denominator
-    )
-
-
-def _window_mean(values: Iterable[float]) -> float:
-    """Return the mean of a bounded online window, or zero before observations."""
-    values = tuple(values)
-    return sum(values) / len(values) if values else 0.0
-
-
-@dataclass
-class TrialMetrics:
-    """Metrics for one workload family and random seed."""
-
-    split: str
-    workload: str
-    seed: int
-    capacity_blocks: int = 0
-    panel_sha256: str = ""
-    block_hit_rate: float = 0.0
-    token_hit_rate: float = 0.0
-    priority_weighted_token_hit_rate: float = 0.0
-    high_priority_token_hit_rate: float = 0.0
-    low_priority_token_hit_rate: float = 0.0
-    priority_request_fraction: float = 0.0
-    request_token_hit_rate_p10: float = 0.0
-    request_token_hit_rate_p50: float = 0.0
-    high_priority_request_token_hit_rate_p10: float = 0.0
-    worst_quarter_token_hit_rate: float = 0.0
-    final_quarter_token_hit_rate: float = 0.0
-    quarter_token_hit_rate_stddev: float = 0.0
-    prefill_tokens_saved: float = 0.0
-    recompute_tokens: float = 0.0
-    recompute_cost: float = 0.0
-    lookup_block_count: int = 0
-    lookup_blocks_per_request: float = 0.0
-    eviction_count: int = 0
-    admission_count: int = 0
-    admission_score_count: int = 0
-    admission_rejection_count: int = 0
-    admission_rate: float = 0.0
-    avoidable_admission_count: int = 0
-    avoidable_admission_rate: float = 0.0
-    avoidable_admission_regret_tokens: float = 0.0
-    avoidable_admission_regret_token_rate: float = 0.0
-    avoidable_rejection_count: int = 0
-    avoidable_rejection_rate: float = 0.0
-    avoidable_rejection_regret_tokens: float = 0.0
-    avoidable_rejection_regret_token_rate: float = 0.0
-    oracle_shadow_price_mean: float = 0.0
-    oracle_shadow_price_stddev: float = 0.0
-    oracle_shadow_price_change_mean: float = 0.0
-    oracle_shadow_price_change_p95: float = 0.0
-    shadow_price_score_scale: float = 0.0
-    shadow_price_tracking_rmse: float = 0.0
-    shadow_price_tracking_mae: float = 0.0
-    shadow_price_tracking_bias: float = 0.0
-    fast_shadow_price_decision_fraction: float = 0.0
-    fast_shadow_price_regret_share: float = 0.0
-    fast_shadow_price_regret_lift: float = 0.0
-    shadow_price_change_regret_correlation: float = 0.0
-    useful_admission_count: int = 0
-    useful_admission_rate: float = 0.0
-    wasted_admission_count: int = 0
-    wasted_admission_rate: float = 0.0
-    admitted_token_count: int = 0
-    useful_admission_token_count: int = 0
-    useful_admission_token_rate: float = 0.0
-    wasted_admission_token_count: int = 0
-    wasted_admission_token_rate: float = 0.0
-    admission_saved_tokens: int = 0
-    admission_saved_tokens_per_admission: float = 0.0
-    admission_token_utility: float = 0.0
-    evicted_without_hit_count: int = 0
-    evicted_without_hit_rate: float = 0.0
-    policy_bypass_tokens: int = 0
-    policy_bypass_token_rate: float = 0.0
-    policy_underfill_rate: float = 0.0
-    cache_churn_per_1k: float = 0.0
-    forced_bypass_count: int = 0
-    forced_bypass_tokens: int = 0
-    forced_bypass_token_rate: float = 0.0
-    short_reuse_after_eviction_missed_tokens: int = 0
-    short_reuse_after_eviction_missed_token_rate: float = 0.0
-    eviction_reuse_distance_p50: float = 0.0
-    eviction_reuse_distance_p95: float = 0.0
-    avoidable_eviction_count: int = 0
-    avoidable_eviction_rate: float = 0.0
-    avoidable_short_reuse_eviction_count: int = 0
-    avoidable_short_reuse_eviction_rate: float = 0.0
-    value_weighted_avoidable_eviction_count: int = 0
-    value_weighted_avoidable_eviction_rate: float = 0.0
-    value_weighted_avoidable_eviction_regret_tokens: float = 0.0
-    value_weighted_avoidable_eviction_regret_token_rate: float = 0.0
-    tenant_count: int = 0
-    tenant_fairness_penalty: float = 0.0
-    tenant_token_hit_rate_p10: float = 0.0
-    tenant_jain_fairness: float = 1.0
-    p50_latency_proxy: float = 0.0
-    p95_latency_proxy: float = 0.0
-    p99_latency_proxy: float = 0.0
-    high_priority_p95_latency_proxy: float = 0.0
-    high_priority_p99_latency_proxy: float = 0.0
-    p95_recompute_cost: float = 0.0
-    recovery_request_count: int = 0
-    recovery_token_hit_rate: float = 0.0
-    recovery_p95_latency_proxy: float = 0.0
-    recovery_phase_count: int = 0
-    worst_recovery_phase_token_hit_rate: float = 0.0
-    final_recovery_phase_token_hit_rate: float = 0.0
-    worst_recovery_phase_p95_latency_proxy: float = 0.0
-    memory_occupancy_mean: float = 0.0
-    memory_occupancy_peak: int = 0
-    prefix_kv_occupancy_mean: float = 0.0
-    prefix_kv_occupancy_peak: int = 0
-    decode_kv_occupancy_mean: float = 0.0
-    decode_kv_occupancy_peak: int = 0
-    decode_kv_blocks_requested: int = 0
-    decode_kv_blocks_allocated: int = 0
-    decode_kv_allocation_failure_blocks: int = 0
-    decode_kv_allocation_failure_rate: float = 0.0
-    decode_pressure_eviction_count: int = 0
-    decode_pressure_eviction_rate: float = 0.0
-    arrival_span_steps: int = 0
-    active_request_count_peak: int = 0
-    max_prefill_cost: float = 0.0
-    scoring_fn_complexity: int = 0
-    invalid: bool = False
-    invalid_reason: str = ""
-    matched_lengths: tuple[int, ...] = ()
-    structural_metrics: dict[str, float] = field(default_factory=dict)
-    admission_decisions: tuple[AdmissionDecisionDiagnostic, ...] = ()
-
-    def as_dict(self) -> dict[str, float | int | bool | str]:
-        """Return scalar trial metrics as a serializable mapping."""
-        metrics: dict[str, float | int | bool | str] = {
-            "block_hit_rate": self.block_hit_rate,
-            "capacity_blocks": self.capacity_blocks,
-            "token_hit_rate": self.token_hit_rate,
-            "priority_weighted_token_hit_rate": self.priority_weighted_token_hit_rate,
-            "high_priority_token_hit_rate": self.high_priority_token_hit_rate,
-            "low_priority_token_hit_rate": self.low_priority_token_hit_rate,
-            "priority_request_fraction": self.priority_request_fraction,
-            "request_token_hit_rate_p10": self.request_token_hit_rate_p10,
-            "request_token_hit_rate_p50": self.request_token_hit_rate_p50,
-            "high_priority_request_token_hit_rate_p10": (
-                self.high_priority_request_token_hit_rate_p10
-            ),
-            "worst_quarter_token_hit_rate": self.worst_quarter_token_hit_rate,
-            "final_quarter_token_hit_rate": self.final_quarter_token_hit_rate,
-            "quarter_token_hit_rate_stddev": self.quarter_token_hit_rate_stddev,
-            "prefill_tokens_saved": self.prefill_tokens_saved,
-            "recompute_tokens": self.recompute_tokens,
-            "recompute_cost": self.recompute_cost,
-            "lookup_block_count": self.lookup_block_count,
-            "lookup_blocks_per_request": self.lookup_blocks_per_request,
-            "eviction_count": self.eviction_count,
-            "admission_count": self.admission_count,
-            "admission_score_count": self.admission_score_count,
-            "admission_rejection_count": self.admission_rejection_count,
-            "admission_rate": self.admission_rate,
-            "avoidable_admission_count": self.avoidable_admission_count,
-            "avoidable_admission_rate": self.avoidable_admission_rate,
-            "avoidable_admission_regret_tokens": self.avoidable_admission_regret_tokens,
-            "avoidable_admission_regret_token_rate": (self.avoidable_admission_regret_token_rate),
-            "avoidable_rejection_count": self.avoidable_rejection_count,
-            "avoidable_rejection_rate": self.avoidable_rejection_rate,
-            "avoidable_rejection_regret_tokens": self.avoidable_rejection_regret_tokens,
-            "avoidable_rejection_regret_token_rate": (self.avoidable_rejection_regret_token_rate),
-            "oracle_shadow_price_mean": self.oracle_shadow_price_mean,
-            "oracle_shadow_price_stddev": self.oracle_shadow_price_stddev,
-            "oracle_shadow_price_change_mean": self.oracle_shadow_price_change_mean,
-            "oracle_shadow_price_change_p95": self.oracle_shadow_price_change_p95,
-            "shadow_price_score_scale": self.shadow_price_score_scale,
-            "shadow_price_tracking_rmse": self.shadow_price_tracking_rmse,
-            "shadow_price_tracking_mae": self.shadow_price_tracking_mae,
-            "shadow_price_tracking_bias": self.shadow_price_tracking_bias,
-            "fast_shadow_price_decision_fraction": self.fast_shadow_price_decision_fraction,
-            "fast_shadow_price_regret_share": self.fast_shadow_price_regret_share,
-            "fast_shadow_price_regret_lift": self.fast_shadow_price_regret_lift,
-            "shadow_price_change_regret_correlation": (self.shadow_price_change_regret_correlation),
-            "useful_admission_count": self.useful_admission_count,
-            "useful_admission_rate": self.useful_admission_rate,
-            "wasted_admission_count": self.wasted_admission_count,
-            "wasted_admission_rate": self.wasted_admission_rate,
-            "admitted_token_count": self.admitted_token_count,
-            "useful_admission_token_count": self.useful_admission_token_count,
-            "useful_admission_token_rate": self.useful_admission_token_rate,
-            "wasted_admission_token_count": self.wasted_admission_token_count,
-            "wasted_admission_token_rate": self.wasted_admission_token_rate,
-            "admission_saved_tokens": self.admission_saved_tokens,
-            "admission_saved_tokens_per_admission": (self.admission_saved_tokens_per_admission),
-            "admission_token_utility": self.admission_token_utility,
-            "evicted_without_hit_count": self.evicted_without_hit_count,
-            "evicted_without_hit_rate": self.evicted_without_hit_rate,
-            "policy_bypass_tokens": self.policy_bypass_tokens,
-            "policy_bypass_token_rate": self.policy_bypass_token_rate,
-            "policy_underfill_rate": self.policy_underfill_rate,
-            "cache_churn_per_1k": self.cache_churn_per_1k,
-            "forced_bypass_count": self.forced_bypass_count,
-            "forced_bypass_tokens": self.forced_bypass_tokens,
-            "forced_bypass_token_rate": self.forced_bypass_token_rate,
-            "short_reuse_after_eviction_missed_tokens": (
-                self.short_reuse_after_eviction_missed_tokens
-            ),
-            "short_reuse_after_eviction_missed_token_rate": (
-                self.short_reuse_after_eviction_missed_token_rate
-            ),
-            "eviction_reuse_distance_p50": self.eviction_reuse_distance_p50,
-            "eviction_reuse_distance_p95": self.eviction_reuse_distance_p95,
-            "avoidable_eviction_count": self.avoidable_eviction_count,
-            "avoidable_eviction_rate": self.avoidable_eviction_rate,
-            "avoidable_short_reuse_eviction_count": (self.avoidable_short_reuse_eviction_count),
-            "avoidable_short_reuse_eviction_rate": (self.avoidable_short_reuse_eviction_rate),
-            "value_weighted_avoidable_eviction_count": (
-                self.value_weighted_avoidable_eviction_count
-            ),
-            "value_weighted_avoidable_eviction_rate": (self.value_weighted_avoidable_eviction_rate),
-            "value_weighted_avoidable_eviction_regret_tokens": (
-                self.value_weighted_avoidable_eviction_regret_tokens
-            ),
-            "value_weighted_avoidable_eviction_regret_token_rate": (
-                self.value_weighted_avoidable_eviction_regret_token_rate
-            ),
-            "tenant_count": self.tenant_count,
-            "tenant_fairness_penalty": self.tenant_fairness_penalty,
-            "tenant_token_hit_rate_p10": self.tenant_token_hit_rate_p10,
-            "tenant_jain_fairness": self.tenant_jain_fairness,
-            "p50_latency_proxy": self.p50_latency_proxy,
-            "p95_latency_proxy": self.p95_latency_proxy,
-            "p99_latency_proxy": self.p99_latency_proxy,
-            "high_priority_p95_latency_proxy": self.high_priority_p95_latency_proxy,
-            "high_priority_p99_latency_proxy": self.high_priority_p99_latency_proxy,
-            "p95_recompute_cost": self.p95_recompute_cost,
-            "recovery_request_count": self.recovery_request_count,
-            "recovery_token_hit_rate": self.recovery_token_hit_rate,
-            "recovery_p95_latency_proxy": self.recovery_p95_latency_proxy,
-            "recovery_phase_count": self.recovery_phase_count,
-            "worst_recovery_phase_token_hit_rate": (self.worst_recovery_phase_token_hit_rate),
-            "final_recovery_phase_token_hit_rate": (self.final_recovery_phase_token_hit_rate),
-            "worst_recovery_phase_p95_latency_proxy": (self.worst_recovery_phase_p95_latency_proxy),
-            "memory_occupancy_mean": self.memory_occupancy_mean,
-            "memory_occupancy_peak": self.memory_occupancy_peak,
-            "prefix_kv_occupancy_mean": self.prefix_kv_occupancy_mean,
-            "prefix_kv_occupancy_peak": self.prefix_kv_occupancy_peak,
-            "decode_kv_occupancy_mean": self.decode_kv_occupancy_mean,
-            "decode_kv_occupancy_peak": self.decode_kv_occupancy_peak,
-            "decode_kv_blocks_requested": self.decode_kv_blocks_requested,
-            "decode_kv_blocks_allocated": self.decode_kv_blocks_allocated,
-            "decode_kv_allocation_failure_blocks": self.decode_kv_allocation_failure_blocks,
-            "decode_kv_allocation_failure_rate": self.decode_kv_allocation_failure_rate,
-            "decode_pressure_eviction_count": self.decode_pressure_eviction_count,
-            "decode_pressure_eviction_rate": self.decode_pressure_eviction_rate,
-            "arrival_span_steps": self.arrival_span_steps,
-            "active_request_count_peak": self.active_request_count_peak,
-            "max_prefill_cost": self.max_prefill_cost,
-            "scoring_fn_complexity": self.scoring_fn_complexity,
-            "invalid": self.invalid,
-            "invalid_reason": self.invalid_reason,
-        }
-        metrics.update(self.structural_metrics)
-        return metrics
-
-
-@dataclass
-class EvaluationResult:
-    """Aggregated evaluator result."""
-
-    verifier_version: str
-    evaluation_context_sha256: str
-    panel_sha256: str
-    combined_score: float
-    success: bool
-    invalid_fraction: float
-    split_metrics: dict[str, dict[str, float | int | bool | str]]
-    workload_metrics: dict[str, dict[str, float | int | bool | str]]
-    capacity_metrics: dict[str, dict[str, float | int | bool | str]]
-    candidate_metadata: dict[str, float | int | bool | str]
-    score_breakdown: dict[str, float]
-    trials: tuple[TrialMetrics, ...] = ()
-
-
-@dataclass
-class _BlockState:
-    prefix_hash: int
-    parent_hash: int | None
-    depth: int
-    start_token: int
-    end_token: int
-    token_count: int
-    prefix_role: str
-    tenant_id: int
-    created_at: int
-    last_accessed_at: int
-    prev_last_accessed_at: int | None = None
-    last_access_gap: int | None = None
-    observed_accessed_at: int | None = None
-    access_gap_mean: float | None = None
-    access_gap_mean_square: float | None = None
-    access_gap_sample_count: int = 0
-    hit_count: int = 0
-    active_ref_count: int = 0
-    resident: bool = False
-    admission_tracked: bool = False
-    resident_hit_count: int = 0
-    resident_children: set[int] = field(default_factory=set)
-    known_children: set[int] = field(default_factory=set)
-
-    @property
-    def block_id(self) -> int:
-        return self.prefix_hash
-
-
-@dataclass
-class _AdmissionAccounting:
-    """Finalized utility for successful admission residency intervals."""
-
-    useful_count: int = 0
-    wasted_count: int = 0
-    admitted_tokens: int = 0
-    useful_tokens: int = 0
-    wasted_tokens: int = 0
-    saved_tokens: int = 0
-    evicted_without_hit_count: int = 0
-
-    def record(self, block: _BlockState, *, evicted: bool) -> None:
-        """Record one tracked interval before its state is reset."""
-        if not block.admission_tracked:
-            return
-        self.admitted_tokens += block.token_count
-        self.saved_tokens += block.resident_hit_count * block.token_count
-        if block.resident_hit_count > 0:
-            self.useful_count += 1
-            self.useful_tokens += block.token_count
-            return
-        self.wasted_count += 1
-        self.wasted_tokens += block.token_count
-        if evicted:
-            self.evicted_without_hit_count += 1
-
-
-@dataclass(frozen=True, slots=True)
-class AdmissionDecisionDiagnostic:
-    """One scored admission decision with quarantined oracle quantities."""
-
-    now: int
-    request_index: int
-    prefix_hash: int
-    depth: int
-    token_count: int
-    capacity_weight_tokens: int
-    score: float
-    accepted: bool
-    feasible: bool
-    incoming_value_tokens: float
-    displaced_value_tokens: float
-    incoming_value_density: float
-    oracle_shadow_price: float
-    oracle_surplus_density: float
-    regret_tokens: float
-
-
-@dataclass
-class _AdmissionAudit:
-    """Same-state admission regret measured in future reusable tokens."""
-
-    accepted_count: int = 0
-    rejected_count: int = 0
-    avoidable_admission_count: int = 0
-    avoidable_admission_regret_tokens: float = 0.0
-    avoidable_rejection_count: int = 0
-    avoidable_rejection_regret_tokens: float = 0.0
-    record_decisions: bool = False
-    decisions: list[AdmissionDecisionDiagnostic] = field(default_factory=list)
-    shadow_samples: list[tuple[float, float, float, float]] = field(default_factory=list)
-
-    def record(
-        self,
-        *,
-        now: int,
-        request_index: int,
-        block: _BlockState,
-        score: float,
-        accepted: bool,
-        feasible: bool,
-        incoming_value_tokens: float,
-        displaced_value_tokens: float,
-        capacity_weight_tokens: int,
-    ) -> None:
-        """Record one explicit policy admission score against a local oracle."""
-        regret = 0.0
-        if accepted:
-            self.accepted_count += 1
-            if feasible:
-                regret = max(0.0, displaced_value_tokens - incoming_value_tokens)
-            if regret:
-                self.avoidable_admission_count += 1
-                self.avoidable_admission_regret_tokens += regret
-        else:
-            self.rejected_count += 1
-            if feasible:
-                regret = max(0.0, incoming_value_tokens - displaced_value_tokens)
-            if regret:
-                self.avoidable_rejection_count += 1
-                self.avoidable_rejection_regret_tokens += regret
-
-        weight = max(1, capacity_weight_tokens)
-        incoming_density = incoming_value_tokens / weight
-        oracle_shadow_price = displaced_value_tokens / weight
-        oracle_surplus_density = incoming_density - oracle_shadow_price
-        if feasible:
-            self.shadow_samples.append(
-                (
-                    score,
-                    oracle_surplus_density,
-                    oracle_shadow_price,
-                    regret / weight,
-                )
-            )
-        if self.record_decisions:
-            self.decisions.append(
-                AdmissionDecisionDiagnostic(
-                    now=now,
-                    request_index=request_index,
-                    prefix_hash=block.prefix_hash,
-                    depth=block.depth,
-                    token_count=block.token_count,
-                    capacity_weight_tokens=weight,
-                    score=score,
-                    accepted=accepted,
-                    feasible=feasible,
-                    incoming_value_tokens=incoming_value_tokens,
-                    displaced_value_tokens=displaced_value_tokens,
-                    incoming_value_density=incoming_density,
-                    oracle_shadow_price=oracle_shadow_price,
-                    oracle_surplus_density=oracle_surplus_density,
-                    regret_tokens=regret,
-                )
-            )
-
-    def shadow_price_metrics(self) -> dict[str, float]:
-        """Return calibrated policy-versus-oracle water-level diagnostics."""
-        if not self.shadow_samples:
-            return {}
-        score_square = sum(score**2 for score, _, _, _ in self.shadow_samples)
-        score_surplus = sum(score * surplus for score, surplus, _, _ in self.shadow_samples)
-        scale = max(0.0, score_surplus / score_square) if score_square else 0.0
-        tracking_errors = [surplus - scale * score for score, surplus, _, _ in self.shadow_samples]
-        shadow_prices = [shadow_price for _, _, shadow_price, _ in self.shadow_samples]
-        changes = [
-            0.0,
-            *(
-                abs(current - previous)
-                for previous, current in zip(shadow_prices, shadow_prices[1:])
-            ),
-        ]
-        regret_densities = [regret for _, _, _, regret in self.shadow_samples]
-        positive_changes = [change for change in changes if change > 0.0]
-        fast_threshold = _percentile(positive_changes, 75) if positive_changes else math.inf
-        fast_indexes = [index for index, change in enumerate(changes) if change >= fast_threshold]
-        fast_regret = sum(regret_densities[index] for index in fast_indexes)
-        total_regret = sum(regret_densities)
-        fast_mean = (
-            sum(regret_densities[index] for index in fast_indexes) / len(fast_indexes)
-            if fast_indexes
-            else 0.0
-        )
-        overall_mean = total_regret / len(self.shadow_samples)
-        return {
-            "oracle_shadow_price_mean": mean(shadow_prices),
-            "oracle_shadow_price_stddev": (
-                pstdev(shadow_prices) if len(shadow_prices) > 1 else 0.0
-            ),
-            "oracle_shadow_price_change_mean": mean(changes),
-            "oracle_shadow_price_change_p95": _percentile(changes, 95),
-            "shadow_price_score_scale": scale,
-            "shadow_price_tracking_rmse": math.sqrt(mean(error**2 for error in tracking_errors)),
-            "shadow_price_tracking_mae": mean(abs(error) for error in tracking_errors),
-            "shadow_price_tracking_bias": mean(tracking_errors),
-            "fast_shadow_price_decision_fraction": (len(fast_indexes) / len(self.shadow_samples)),
-            "fast_shadow_price_regret_share": (fast_regret / total_regret if total_regret else 0.0),
-            "fast_shadow_price_regret_lift": (
-                fast_mean / overall_mean if overall_mean > 0.0 else 1.0
-            ),
-            "shadow_price_change_regret_correlation": _correlation(
-                changes,
-                regret_densities,
-            ),
-        }
-
-
-@dataclass
-class _CapacityOutcome:
-    """Capacity effects produced outside one prompt admission."""
-
-    evictions: int = 0
-    high_descendant_evictions: int = 0
-    avoidable_evictions: int = 0
-    avoidable_short_reuse_evictions: int = 0
-    value_weighted_avoidable_evictions: int = 0
-    value_weighted_avoidable_eviction_regret_tokens: float = 0.0
-    decode_blocks_requested: int = 0
-    decode_blocks_allocated: int = 0
-    decode_allocation_failure_blocks: int = 0
-    decode_pressure_evictions: int = 0
-
-    def merge(self, other: _CapacityOutcome) -> None:
-        """Accumulate another capacity outcome."""
-        self.evictions += other.evictions
-        self.high_descendant_evictions += other.high_descendant_evictions
-        self.avoidable_evictions += other.avoidable_evictions
-        self.avoidable_short_reuse_evictions += other.avoidable_short_reuse_evictions
-        self.value_weighted_avoidable_evictions += other.value_weighted_avoidable_evictions
-        self.value_weighted_avoidable_eviction_regret_tokens += (
-            other.value_weighted_avoidable_eviction_regret_tokens
-        )
-        self.decode_blocks_requested += other.decode_blocks_requested
-        self.decode_blocks_allocated += other.decode_blocks_allocated
-        self.decode_allocation_failure_blocks += other.decode_allocation_failure_blocks
-        self.decode_pressure_evictions += other.decode_pressure_evictions
-
-
-@dataclass
-class _AdmissionOutcome:
-    """Result of one accepted admission attempt."""
-
-    admitted: bool = False
-    capacity: _CapacityOutcome = field(default_factory=_CapacityOutcome)
-
-
-@dataclass
-class _ActiveDecode:
-    """Decode KV allocation state for one in-flight request."""
-
-    started_at: int
-    release_at: int
-    total_tokens: int
-    attempted_blocks: int = 0
-    allocated_blocks: int = 0
-
-
 class InvalidCandidateError(RuntimeError):
     """Raised when a candidate returns an invalid score or crashes."""
-
-
-class _FutureReuseTracker:
-    """Live future-reuse metadata for oracle-style reporting baselines."""
-
-    def __init__(
-        self,
-        requests: tuple[WorkloadRequest, ...],
-        *,
-        block_size_tokens: int,
-        enabled: bool,
-    ) -> None:
-        self.enabled = enabled
-        self._remaining_counts: dict[int, int] = {}
-        self._future_positions: dict[int, deque[int]] = {}
-        if not enabled:
-            return
-
-        arrival_steps = _request_arrival_steps(requests)
-        for now, request in zip(arrival_steps, requests, strict=True):
-            for prefix_hash in _request_prefix_hashes(request, block_size_tokens):
-                self._remaining_counts[prefix_hash] = self._remaining_counts.get(prefix_hash, 0) + 1
-                self._future_positions.setdefault(prefix_hash, deque()).append(now)
-
-    def advance(self, blocks: list[_BlockState], now: int) -> None:
-        if not self.enabled:
-            return
-        for block in blocks:
-            prefix_hash = block.prefix_hash
-            self._remaining_counts[prefix_hash] = max(
-                0,
-                self._remaining_counts.get(prefix_hash, 0) - 1,
-            )
-            positions = self._future_positions.get(prefix_hash)
-            if positions:
-                positions.popleft()
-
-    def remaining_count(self, prefix_hash: int) -> float | None:
-        if not self.enabled:
-            return None
-        return float(self._remaining_counts.get(prefix_hash, 0))
-
-    def next_distance(self, prefix_hash: int, now: int) -> float | None:
-        if not self.enabled:
-            return None
-        positions = self._future_positions.get(prefix_hash) or ()
-        if not positions:
-            return math.inf
-        return float(max(0, positions[0] - now))
 
 
 class PrefixKVCacheSimulator:
@@ -812,6 +209,7 @@ class PrefixKVCacheSimulator:
         self._last_evicted_at: dict[int, int] = {}
         self._active_decodes: list[_ActiveDecode] = []
         self._decode_resident_blocks = 0
+        self._decode_step: int | None = None
         self._recent_admission_pressure: deque[float] = deque(maxlen=_REGIME_WINDOW_REQUESTS)
         self._recent_miss_rates: deque[float] = deque(maxlen=_REGIME_WINDOW_REQUESTS)
 
@@ -1757,7 +1155,7 @@ class PrefixKVCacheSimulator:
         outcome = _CapacityOutcome()
         if self.kv_capacity_mode != "shared":
             return outcome
-        previous_step = getattr(self, "_decode_step", None)
+        previous_step = self._decode_step
         first_step = now if previous_step is None else previous_step + 1
         for step in range(first_step, now + 1):
             self._release_expired(step)
@@ -1899,7 +1297,9 @@ class PrefixKVCacheSimulator:
                     start_token=start,
                     end_token=start + len(chunk),
                     token_count=len(chunk),
-                    prefix_role=_prefix_role(chunk),
+                    prefix_role=_prefix_role(
+                        request.prompt_token_roles[start : start + len(chunk)]
+                    ),
                     tenant_id=request.info.tenant_id,
                     created_at=now,
                     last_accessed_at=now,

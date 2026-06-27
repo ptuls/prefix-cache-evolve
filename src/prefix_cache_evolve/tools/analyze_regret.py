@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean, median
@@ -10,6 +9,7 @@ from typing import Callable, Iterable
 
 import click
 
+from prefix_cache_evolve.artifacts import write_json
 from prefix_cache_evolve.evaluator_entry import load_candidate_factory
 from prefix_cache_evolve.evaluators.baselines import (
     baseline_cost_aware_lru,
@@ -20,11 +20,11 @@ from prefix_cache_evolve.evaluators.baselines import (
     baseline_tinylfu_lru,
     baseline_vllm_apc,
 )
+from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
 from prefix_cache_evolve.evaluators.contracts import PrefixKVPolicy
-from prefix_cache_evolve.evaluators.prefix_kv_cache import (
+from prefix_cache_evolve.evaluators.prefix_kv_cache import PrefixKVCacheEvaluator
+from prefix_cache_evolve.evaluators.results import (
     AdmissionDecisionDiagnostic,
-    EvaluatorConfig,
-    PrefixKVCacheEvaluator,
     TrialMetrics,
 )
 from prefix_cache_evolve.evaluators.scoring import workload_base_score
@@ -1671,11 +1671,14 @@ def _write_causal_component_markdown(
 @click.command()
 @click.option(
     "--config",
-    type=click.Path(path_type=Path),
+    type=click.Path(path_type=Path, exists=True, dir_okay=False, readable=True),
     default=DEFAULT_CONFIG_PATH,
     show_default=True,
 )
-@click.option("--candidate-program", type=click.Path(path_type=Path))
+@click.option(
+    "--candidate-program",
+    type=click.Path(path_type=Path, exists=True, dir_okay=False, readable=True),
+)
 @click.option("--request-count", type=click.IntRange(min=1))
 @click.option("--seeds", type=int, multiple=True)
 @click.option("--splits", type=click.Choice(_DEFAULT_SPLITS), multiple=True)
@@ -1726,6 +1729,10 @@ def main(
         )
     if capacity_blocks and not (shadow_price or causal_components):
         raise click.UsageError("--capacity-blocks requires --shadow-price or --causal-components")
+    if all_admission_policies and candidate_program is not None:
+        raise click.UsageError(
+            "--candidate-program cannot be combined with --all-admission-policies"
+        )
     if all_admission_policies:
         output_path = output or Path(
             "artifacts/prefix_kv_cache_admission_eviction_policy_matrix.json"
@@ -1740,11 +1747,7 @@ def main(
             splits=selected_splits,
             workloads=workloads or None,
         )
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        write_json(output_path, payload)
         markdown_path.parent.mkdir(parents=True, exist_ok=True)
         _write_admission_eviction_matrix_markdown(markdown_path, payload)
         click.echo(output_path)
@@ -1768,11 +1771,7 @@ def main(
             factory=factory,
             policy_name=policy_name,
         )
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        write_json(output_path, payload)
         click.echo(output_path)
         if markdown is not None:
             markdown.parent.mkdir(parents=True, exist_ok=True)
@@ -1797,11 +1796,7 @@ def main(
             factory=factory,
             policy_name=policy_name,
         )
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        write_json(output_path, payload)
         click.echo(output_path)
         if markdown is not None:
             markdown.parent.mkdir(parents=True, exist_ok=True)
@@ -1825,11 +1820,7 @@ def main(
         factory=factory,
         policy_name=policy_name,
     )
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    write_json(output_path, payload)
     markdown_path.parent.mkdir(parents=True, exist_ok=True)
     _write_markdown(markdown_path, payload)
     click.echo(output_path)

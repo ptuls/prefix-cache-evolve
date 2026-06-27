@@ -16,16 +16,13 @@ from prefix_cache_evolve.evaluators.baselines import (
     ALL_REPORTING_BASELINES,
     BASELINE_REGISTRY,
 )
+from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
 from prefix_cache_evolve.evaluators.contracts import PolicyFactory
-from prefix_cache_evolve.evaluators.prefix_kv_cache import (
-    EvaluatorConfig,
-    PrefixKVCacheSimulator,
-    TrialMetrics,
-    WorkloadRequest,
-    build_workload,
-)
+from prefix_cache_evolve.evaluators.prefix_kv_cache import PrefixKVCacheSimulator
+from prefix_cache_evolve.evaluators.results import TrialMetrics
 from prefix_cache_evolve.evaluators.telemetry import RequestSnapshot
 from prefix_cache_evolve.evaluators.verifier import VERIFIER_VERSION
+from prefix_cache_evolve.evaluators.workloads import WorkloadRequest, build_workload
 from prefix_cache_evolve.problems.prefix_kv_cache.incumbents import (
     build_current_incumbent as build_candidate,
 )

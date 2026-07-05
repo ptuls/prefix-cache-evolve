@@ -31,6 +31,12 @@ _ANALYZE_COMMANDS = {
         "Audit admission and eviction regret.",
     ),
 }
+_VERIFY_COMMANDS = {
+    "significance": LazyCommand(
+        "prefix_cache_evolve.tools.verify_significance:main",
+        "Test whether the headline score gap exceeds seed noise.",
+    ),
+}
 _ABLATE_COMMANDS = {
     "structured": LazyCommand(
         "prefix_cache_evolve.tools.ablate_structured:main",
@@ -59,6 +65,11 @@ def main() -> None:
 @main.group(cls=LazyGroup, lazy_subcommands=_ANALYZE_COMMANDS)
 def analyze() -> None:
     """Run diagnostic and causal analyses."""
+
+
+@main.group(cls=LazyGroup, lazy_subcommands=_VERIFY_COMMANDS)
+def verify() -> None:
+    """Run statistical verification of headline claims."""
 
 
 @main.group(cls=LazyGroup, lazy_subcommands=_ABLATE_COMMANDS)

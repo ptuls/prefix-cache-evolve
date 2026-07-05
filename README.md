@@ -43,9 +43,10 @@ vLLM, SGLang, TensorRT-LLM, or another serving stack.
 4. Can evolved policies transfer across cache geometries and from synthetic
    workloads to production trace replay?
 
-The repo tests these questions with fixed multi-seed workload panels, strong
-deployable baselines, held-out probes, hidden final-adjudication workloads,
-cache-geometry sweeps, trace replay, and controlled ablations.
+The repo tests these questions with fixed panels containing both deterministic
+and seed-varying workload families, strong deployable baselines, held-out probes,
+hidden final-adjudication workloads, cache-geometry sweeps, trace replay, and
+controlled ablations.
 
 ## Headline Result
 
@@ -62,6 +63,22 @@ The original discovery result was reported as `77.230`; hardened complexity
 accounting changes it to `77.113` without changing policy behavior. A later
 production-oriented search and simplification stage produced the separate
 16-token incumbent that clears TinyLFU-LRU.
+
+On the operative 16-token verifier, the production policy's charged-score lead
+over TinyLFU-LRU is `+2.101` (`65.649` versus `63.548`). A paired diagnostic over
+the validation panel's `(workload, capacity, seed)` cells finds a mean uncharged
+behavioral-score difference of `+3.50`; the incumbent leads in `9 of 10` workload
+families, with `rolling_template_versions` as the single family-level regression.
+This is evidence of consistency across the designed benchmark panel, not a
+general estimate of seed uncertainty: 12 of 20 family-by-capacity cells produce
+identical per-seed differences, only three seeds are evaluated, and the workload
+families are fixed, hand-designed scenarios rather than a random population
+sample. Family-clustered bootstrap, sign-test, and permutation results are
+therefore reported as descriptive robustness diagnostics. Naive per-cell tests
+overstate the effective sample size because they count seed-invariant cells as
+replicates. Reproduce the diagnostics with
+`uv run prefix-cache-tools verify significance`; the artifact is at
+[`docs/results/prefix_kv_cache_score_gap_significance.json`](docs/results/prefix_kv_cache_score_gap_significance.json).
 
 The broader geometry sweep remains mixed. The production incumbent beats
 TinyLFU-LRU at 16- and 24-token blocks, trails it at 32-, 48-, and 64-token

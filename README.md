@@ -63,6 +63,23 @@ accounting changes it to `77.113` without changing policy behavior. A later
 production-oriented search and simplification stage produced the separate
 16-token incumbent that clears TinyLFU-LRU.
 
+The 16-token production lead is larger than seed noise, though not by as wide a
+margin as a naive per-group count would suggest. The operative validation panel
+decomposes into paired `(workload, capacity, seed)` groups on which both policies
+replay an identical request stream; the incumbent leads by a mean of `+3.50`
+points on the per-group behavioral score. Several workload families are
+seed-invariant (12 of 20 family-by-capacity cells produce identical per-seed
+scores), so the independent statistical unit is the workload family, not the
+group. Clustered to the 10 workload families, the incumbent wins `9 of 10`
+(mean `+3.50`, 95% bootstrap CI `[+0.69, +6.19]`, sign test `p = 0.021`,
+permutation `p = 0.042`); the single family-level regression is
+`rolling_template_versions`. Clustered to the 20 family-by-capacity cells it wins
+`16 of 19` non-tied cells (`p = 0.004`). The gap is statistically distinguishable
+from workload noise at the family level, but the per-group `p = 0.0001` is
+inflated by pseudo-replication and is reported for transparency only. Reproduce
+with `uv run prefix-cache-tools verify significance`; the artifact is at
+[`docs/results/prefix_kv_cache_score_gap_significance.json`](docs/results/prefix_kv_cache_score_gap_significance.json).
+
 The broader geometry sweep remains mixed. The production incumbent beats
 TinyLFU-LRU at 16- and 24-token blocks, trails it at 32-, 48-, and 64-token
 blocks, and has substantially lower churn at every tested block size. A single

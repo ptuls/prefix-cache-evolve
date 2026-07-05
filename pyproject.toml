@@ -59,6 +59,7 @@ wildchat = [
 
 [dependency-groups]
 dev = [
+  "hypothesis>=6.0,<7",
   "mypy>=1.15,<2",
   "numpy>=1.26,<3",
   "pytest>=8.0,<9",

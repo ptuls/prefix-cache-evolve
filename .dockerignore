@@ -1,0 +1,17 @@
+.DS_Store
+.git
+.github
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.uv-cache
+.venv
+artifacts
+assets
+dist
+docs
+runs
+scripts
+tests
+**/__pycache__
+**/*.pyc

@@ -98,19 +98,45 @@ prompt:
     rather than broadly increasing admission. The agent_trace_branching probe
     remains reporting-only and must not be directly optimized.
 
-    The promoted production parent scores 65.649 on this 16-token verifier,
-    ahead of TinyLFU-LRU at 63.548, with effective complexity 572. Preserve
-    that charged-score lead, the per-family surrogate-to-probe tripwire suite,
-    and the positive hidden-panel margin. A structured-admission plus LFU
-    composition raises mean token hit but scores only 60.556 because its churn
-    is too high. Preserve the parent's pressure-aware admission economics,
-    bounded canonical decay state, and low turnover. Pure LRU leaves measurable
-    hit rate unused; prefer one compact, validated correction over a large
-    eviction subsystem.
+    The promoted production parent scores 66.145 on this 16-token verifier,
+    ahead of TinyLFU-LRU at 63.548, with effective complexity 372. It is an
+    explicit shadow-price dual: one retention index V(block) built from decayed
+    frequency, recency, and priority evidence plus descendant count and
+    recompute cost; a scalar price calibrated each eviction round toward the
+    cheapest eviction candidate; and a fixed switching margin of 0.9 subtracted
+    at admission so marginal swaps are refused. Preserve that structure: the
+    value-versus-price comparison, the marginal-victim price calibration, and
+    an explicit switching barrier. Every coefficient is a provisional first
+    guess and a legitimate mutation target: the decay half-lives (12.0, 1.5,
+    3.5), the value weights, the price calibration rate (0.5), the
+    between-request relaxation (0.97), the pressure floor (0.6), and the margin
+    itself. Preserve the charged-score lead, the per-family
+    surrogate-to-probe tripwire suite, and the positive hidden-panel margin.
+
+    Do not optimize shadow-price tracking fidelity. On this panel the oracle
+    displacement price is usually pinned at zero, so tracking it faster adds
+    churn without hit rate; high-fidelity variants of this parent are
+    Pareto-dominated. Score follows churn control. The measured weaknesses to
+    attack instead are: (1) fairness robustness, where TinyLFU-LRU overtakes
+    the parent once the fairness weight grows; a per-tenant price or
+    tenant-conditioned margin is the natural mechanism since tenant_id is
+    visible on blocks and requests; (2) rolling_template_versions, where the
+    parent trails TinyLFU-LRU by about 4.9 because superseded template
+    versions retain decayed-frequency value after rollover; last_access_gap
+    and access-gap statistics are available staleness signals; (3)
+    tenant_phase_shift_cycles, trailing by about 1.6, likely the same
+    per-tenant gap; and (4) the fixed margin sits on a plateau next to a
+    higher, narrow peak, so a margin adapted to observed admission pressure or
+    displacement-price movement may capture the peak robustly. Charged score
+    peaks near 90-140 evictions per 1,000 requests; treat that churn band as
+    the operating region.
 
     Default to local improvement of the supplied parent. Make exactly one
     semantic change per mutation. Preserve the existing class, imports, and
-    state representation unless the mutation deletes or simplifies them.
+    state representation unless the mutation deletes or simplifies them. When
+    adding per-tenant state, bound it: a small dictionary of scalar prices or
+    a tenant-keyed canonical decay is acceptable; unbounded per-key tables of
+    tuples are not.
     Production promotion requires effective complexity at or below 650 AST
     nodes. Exploratory proposals may temporarily reach roughly 750 nodes so the
     evaluator can measure their behavior; any proposal above 650 is
@@ -143,7 +169,11 @@ prompt:
     - "Use prefix_hash/block_id for stable per-block state; never use object identity."
     - "Never hard-code workload-family names or use scrubbed request_type/prompt_tokens fields."
     - "Do not inspect hidden workloads; hidden is final reporting only."
-    - "Improve on the incumbent's 65.649 charged score without falling below TinyLFU-LRU's 63.548 score or exceeding 650 effective AST nodes."
+    - "Improve on the incumbent's 66.145 charged score without falling below TinyLFU-LRU's 63.548 score or exceeding 650 effective AST nodes."
+    - "Preserve the value-versus-price structure with an explicit switching barrier; treat every coefficient as provisional."
+    - "Do not chase shadow-price tracking fidelity; keep churn near the 90-140 per-1k operating band."
+    - "Reduce the rolling_template_versions and tenant_phase_shift_cycles deficits without regressing the eight winning families."
+    - "Improve fairness robustness, for example via bounded per-tenant prices or a tenant-conditioned margin."
 
 evaluator:
   timeout: 90
@@ -301,7 +331,7 @@ problem:
       invalid_surcharge: 1000
 
 search:
-  seed: 20260609
+  seed: 20260706
   notes: >
     Candidates should keep the build_candidate(capacity_blocks,
     block_size_tokens, seed=None) entry point and the documented score methods.
@@ -311,11 +341,14 @@ search:
     with no benchmark value. Treat every score term and state table as
     provisional: try removing terms, and retain them only when their validation
     benefit pays for their complexity. Default to one local semantic change and
-    preserve the supplied parent's state representation. If the parent uses
-    bounded canonical vector-decay state, mutate or ablate that representation
-    before introducing a custom state dictionary. Candidates above 650
-    effective nodes are exploratory parents only: use their evaluator feedback
-    for a dedicated behavior-preserving simplification mutation. Promotion
-    requires a charged combined score above the 65.649 incumbent, no invalid
-    groups, effective complexity at or below 650, and subsequent probe and
-    hidden non-regression review.
+    preserve the supplied parent's state representation. The parent is the
+    switching-cost shadow-price dual: keep the value-versus-price comparison
+    and the marginal-victim price calibration, and mutate coefficients or add
+    one bounded mechanism at a time, such as a per-tenant price, a staleness
+    depreciation, or an adaptive margin. Do not reward faster price tracking
+    for its own sake; on this panel it raises churn without hit rate.
+    Candidates above 650 effective nodes are exploratory parents only: use
+    their evaluator feedback for a dedicated behavior-preserving simplification
+    mutation. Promotion requires a charged combined score above the 66.145
+    incumbent, no invalid groups, effective complexity at or below 650, and
+    subsequent probe and hidden non-regression review.

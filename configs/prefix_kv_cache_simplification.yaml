@@ -98,29 +98,50 @@ prompt:
     rather than broadly increasing admission. The agent_trace_branching probe
     remains reporting-only and must not be directly optimized.
 
-    This is a dedicated simplification pass. The supplied parent scores 65.649
-    on this 16-token verifier ahead of TinyLFU-LRU at 63.548, but carries
-    effective complexity 572, which costs 7.60 charged points at every cache
-    geometry. Its pre-complexity behavioral score is the asset to preserve; its
-    node count is the liability to cut. Your goal is the smallest policy that
-    retains the parent's behavioral score, not a new architecture. Preserve the
-    per-family surrogate-to-probe tripwire suite and the positive hidden-panel
-    margin. Preserve the parent's pressure-aware admission economics, bounded
-    canonical decay state, and low turnover, but express them with far fewer
-    nodes. Pure LRU leaves measurable hit rate unused; keep only the compact,
-    validated corrections whose measured behavioral benefit survives deletion.
+    The promoted production parent scores 66.145 on this 16-token verifier,
+    ahead of TinyLFU-LRU at 63.548, with effective complexity 372. It is an
+    explicit shadow-price dual: one retention index V(block) built from decayed
+    frequency, recency, and priority evidence plus descendant count and
+    recompute cost; a scalar price calibrated each eviction round toward the
+    cheapest eviction candidate; and a fixed switching margin of 0.9 subtracted
+    at admission so marginal swaps are refused. Preserve that structure: the
+    value-versus-price comparison, the marginal-victim price calibration, and
+    an explicit switching barrier. Every coefficient is a provisional first
+    guess and a legitimate mutation target: the decay half-lives (12.0, 1.5,
+    3.5), the value weights, the price calibration rate (0.5), the
+    between-request relaxation (0.97), the pressure floor (0.6), and the margin
+    itself. Preserve the charged-score lead, the per-family
+    surrogate-to-probe tripwire suite, and the positive hidden-panel margin.
 
-    Default to deletion and consolidation of the supplied parent. Make exactly
-    one semantic change per mutation and prefer removals: drop a score term,
-    fold a redundant depth or pressure sub-expression, or route hand-rolled
-    decay math through the canonical MultiTimescaleDecay/decay_vector primitives,
-    which receive the bounded form-aware complexity subsidy. The parent earns
-    only 17 of its 147-node subsidy cap, so moving arithmetic onto canonical
-    primitive call sites reduces charged complexity with no behavioral change;
-    exhaust that subsidy before deleting behavior. Effective complexity must
-    stay at or below 105 AST nodes; proposals above 105 are rejected. Keep a
-    score term or state channel only when removing it measurably lowers the
-    pre-complexity behavioral score. Do not add broad exception handlers, future-reuse references,
+    Do not optimize shadow-price tracking fidelity. On this panel the oracle
+    displacement price is usually pinned at zero, so tracking it faster adds
+    churn without hit rate; high-fidelity variants of this parent are
+    Pareto-dominated. Score follows churn control. The measured weaknesses to
+    attack instead are: (1) fairness robustness, where TinyLFU-LRU overtakes
+    the parent once the fairness weight grows; a per-tenant price or
+    tenant-conditioned margin is the natural mechanism since tenant_id is
+    visible on blocks and requests; (2) rolling_template_versions, where the
+    parent trails TinyLFU-LRU by about 4.9 because superseded template
+    versions retain decayed-frequency value after rollover; last_access_gap
+    and access-gap statistics are available staleness signals; (3)
+    tenant_phase_shift_cycles, trailing by about 1.6, likely the same
+    per-tenant gap; and (4) the fixed margin sits on a plateau next to a
+    higher, narrow peak, so a margin adapted to observed admission pressure or
+    displacement-price movement may capture the peak robustly. Charged score
+    peaks near 90-140 evictions per 1,000 requests; treat that churn band as
+    the operating region.
+
+    This is a dedicated simplification pass. The parent's pre-complexity
+    behavioral score is the asset to preserve; its node count is the liability
+    to cut. Your goal is the smallest policy that retains the parent's
+    behavioral score, not a new architecture. Default to deletion and
+    consolidation: drop a value term, fold a redundant sub-expression, or
+    route decay math through the canonical primitives, which receive the
+    bounded form-aware complexity subsidy. Make exactly one semantic change
+    per mutation and prefer removals. Keep a value term or state channel only
+    when removing it measurably lowers the pre-complexity behavioral score.
+    Effective complexity must stay at or below 105 AST nodes; proposals above
+    105 are rejected. Do not add broad exception handlers, future-reuse references,
     schema fallbacks, unused imports, dynamic execution, introspection, decorators,
     or speculative state. Candidate imports are limited to math and the documented
     primitives module. Keep executable policy code in normal top-level class or
@@ -131,8 +152,8 @@ prompt:
     without regressing cache economics or complexity.
   objectives:
     - "Minimize effective AST complexity to 105 nodes or fewer while holding the parent's pre-complexity behavioral score."
-    - "Exhaust the form-aware primitive subsidy first: express decay and pressure math through MultiTimescaleDecay/decay_vector/threshold_excess call sites before deleting behavior."
-    - "Prefer deletion and consolidation: drop low-weight admission terms and merge the redundant depth and pressure sub-expressions the parent duplicates."
+    - "Exhaust the form-aware primitive subsidy before deleting behavior."
+    - "Prefer deletion and consolidation over new structure."
     - "Maximize mean validation workload score while keeping the weakest workload competitive."
     - "Keep p95 deterministic latency and churn low."
     - "Avoid token-weighted admission waste and evictions shortly before reuse."
@@ -150,7 +171,11 @@ prompt:
     - "Use prefix_hash/block_id for stable per-block state; never use object identity."
     - "Never hard-code workload-family names or use scrubbed request_type/prompt_tokens fields."
     - "Do not inspect hidden workloads; hidden is final reporting only."
-    - "Improve on the incumbent's 65.649 charged score without falling below TinyLFU-LRU's 63.548 score or exceeding 650 effective AST nodes."
+    - "Improve on the incumbent's 66.145 charged score without falling below TinyLFU-LRU's 63.548 score or exceeding 650 effective AST nodes."
+    - "Preserve the value-versus-price structure with an explicit switching barrier; treat every coefficient as provisional."
+    - "Do not chase shadow-price tracking fidelity; keep churn near the 90-140 per-1k operating band."
+    - "Reduce the rolling_template_versions and tenant_phase_shift_cycles deficits without regressing the eight winning families."
+    - "Improve fairness robustness, for example via bounded per-tenant prices or a tenant-conditioned margin."
 
 evaluator:
   timeout: 90
@@ -247,12 +272,11 @@ problem:
     latency_norm: 0
     max_memory_bytes: 67108864
     form_aware_complexity: true
-    # Simplification pass: hard-cap effective complexity well below the parent's
-    # 572 nodes so the search can only explore compact policies, and rank the
-    # feasible set by pre-complexity behavioral score so it minimizes nodes
-    # without sacrificing the 16-token caching behavior. 105 nodes is the
-    # break-even where the 0.065 * complexity**0.75 charge (~2.10) drops below
-    # the parent's measured 32-token behavioral edge over LFU (+2.14).
+    # Simplification lane: hard-cap effective complexity well below the dual
+    # parent's 372 nodes and rank the feasible set by pre-complexity behavioral
+    # score, so search minimizes nodes without sacrificing caching behavior.
+    # At 105 nodes the 0.065 * complexity**0.75 charge falls from 5.51 to
+    # ~2.10, a ~3.4-point headline lift at every geometry if behavior holds.
     max_candidate_complexity: 105
     promotion_max_candidate_complexity: 105
     search_score_mode: raw_before_complexity
@@ -316,7 +340,7 @@ problem:
       invalid_surcharge: 1000
 
 search:
-  seed: 20260609
+  seed: 20260706
   notes: >
     Candidates should keep the build_candidate(capacity_blocks,
     block_size_tokens, seed=None) entry point and the documented score methods.
@@ -326,11 +350,14 @@ search:
     with no benchmark value. Treat every score term and state table as
     provisional: try removing terms, and retain them only when their validation
     benefit pays for their complexity. Default to one local semantic change and
-    preserve the supplied parent's state representation. If the parent uses
-    bounded canonical vector-decay state, mutate or ablate that representation
-    before introducing a custom state dictionary. Candidates above 650
-    effective nodes are exploratory parents only: use their evaluator feedback
-    for a dedicated behavior-preserving simplification mutation. Promotion
-    requires a charged combined score above the 65.649 incumbent, no invalid
-    groups, effective complexity at or below 650, and subsequent probe and
-    hidden non-regression review.
+    preserve the supplied parent's state representation. The parent is the
+    switching-cost shadow-price dual: keep the value-versus-price comparison
+    and the marginal-victim price calibration, and mutate coefficients or add
+    one bounded mechanism at a time, such as a per-tenant price, a staleness
+    depreciation, or an adaptive margin. Do not reward faster price tracking
+    for its own sake; on this panel it raises churn without hit rate.
+    Candidates above 650 effective nodes are exploratory parents only: use
+    their evaluator feedback for a dedicated behavior-preserving simplification
+    mutation. Promotion requires a charged combined score above the 66.145
+    incumbent, no invalid groups, effective complexity at or below 650, and
+    subsequent probe and hidden non-regression review.

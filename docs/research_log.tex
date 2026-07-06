@@ -1160,6 +1160,50 @@ That is a benchmark-design lever, not a policy one.  The frontier here is also t
 a single value-function family varying one parameter, so it is an achievable frontier,
 not a proven-optimal one; a better value function could dominate it.
 
+The charged score the verifier actually optimizes is not monotone in churn: plotting it
+against churn (Figure~\ref{fig:score-churn}) gives an inverted-U with an interior
+optimum near 90--140 evictions per 1{,}000 requests.  Only the low-churn plateau clears
+the TinyLFU-LRU baseline; the promoted \(m=0.9\) sits on that plateau rather than at the
+marginally higher but narrow \(m=1.1\) spike.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  every node/.style={font=\footnotesize},
+  lab/.style={font=\scriptsize},
+  frontierpt/.style={circle,fill=navy,inner sep=1.7pt},
+  dompt/.style={circle,draw=gray,fill=white,line width=0.7pt,inner sep=1.7pt},
+  promo/.style={star,star points=5,star point ratio=2.2,fill=navy,draw=navy,inner sep=1.6pt},
+]
+% x = (log10(churn)-1.7)*8 (log churn); y = (charged-58)*0.7
+\draw[->,thick] (0,0) -- (10.9,0) node[below right] {churn / 1{,}000 requests (log)};
+\draw[->,thick] (0,0) -- (0,7.4) node[above left] {charged score};
+\foreach \x/\lab in {0.63/60,2.4/100,4.81/200,7.22/400,9.62/800} {\draw (\x,0) -- (\x,-0.09) node[below] {\lab};}
+\foreach \y/\lab in {1.4/60,2.8/62,4.2/64,5.6/66,7.0/68} {\draw (0,\y) -- (-0.09,\y) node[left] {\lab};}
+% TinyLFU-LRU baseline
+\draw[gray,dashed] (0,3.884) -- (10.6,3.884);
+\node[gray,lab,anchor=west] at (6.5,4.15) {TinyLFU-LRU ($63.548$)};
+% margin sweep trajectory (ordered by churn)
+\draw[navy,thick] (0.74,2.990) -- (2.15,6.533) -- (3.09,5.502) -- (3.49,5.702)
+  -- (5.99,3.653) -- (8.84,3.046) -- (9.87,0.543);
+% points
+\node[frontierpt,label={[lab]below:$m{=}1.2$}] at (0.74,2.990) {};
+\node[frontierpt,label={[lab]above:$m{=}1.1$ peak}] at (2.15,6.533) {};
+\node[frontierpt,label={[lab]below left:$m{=}1.0$}] at (3.09,5.502) {};
+\node[promo,label={[lab,navy]above right:$m{=}0.9$ promoted}] at (3.49,5.702) {};
+\node[frontierpt,label={[lab]below right:$m{=}0.7$}] at (5.99,3.653) {};
+\node[frontierpt,label={[lab]above:$m{=}0.4$}] at (8.84,3.046) {};
+\node[frontierpt,label={[lab]above left:$m{=}0$}] at (9.87,0.543) {};
+\node[dompt,label={[lab]right:evolved incumbent}] at (4.12,5.354) {};
+\end{tikzpicture}
+\caption{Charged score versus churn across the switching margin (log churn axis).  The
+verifier's objective is an inverted-U in churn: score rises as churn falls, peaks near
+the promoted \(m=0.9\) plateau, then collapses once the margin starves admission.  Only
+the low-churn plateau clears the TinyLFU-LRU baseline (dashed).  The evolved incumbent
+(open circle) is shown for comparison.}
+\label{fig:score-churn}
+\end{figure}
+
 \subsection{Chronology: from the evolved incumbent to the switching-cost dual}
 \label{sec:derivation-chronology}
 

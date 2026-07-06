@@ -1,4 +1,4 @@
-"""Tests for the score-gap significance verification tool."""
+"""Tests for the score-gap robustness verification tool."""
 
 from __future__ import annotations
 
@@ -8,10 +8,8 @@ from prefix_cache_evolve.tools.verify_significance import (
     bootstrap_mean_ci,
     cluster_mean_differences,
     format_report,
-    permutation_p_value,
     run_significance_analysis,
     seed_degeneracy_report,
-    sign_test_p_value,
 )
 
 
@@ -22,6 +20,7 @@ def _unit(workload: str, capacity: int, seed: int, difference: float) -> PairedU
         split="validation",
         workload=workload,
         capacity_blocks=capacity,
+        base_seed=seed,
         seed=seed,
         candidate_score=difference,
         baseline_score=0.0,
@@ -52,39 +51,6 @@ def test_bootstrap_on_positive_differences_excludes_zero() -> None:
     assert result["confidence"] == 0.95
 
 
-def test_sign_test_matches_exact_binomial_tail() -> None:
-    result = sign_test_p_value([1.0, 1.0, 1.0, -1.0])
-
-    assert result["positive"] == 3
-    assert result["negative"] == 1
-    assert result["ties"] == 0
-    # Two-sided exact tail: 2 * (C(4,0) + C(4,1)) / 2**4 = 2 * 5 / 16.
-    assert abs(float(result["p_value"]) - 0.625) < 1e-12
-
-
-def test_sign_test_reports_all_ties_as_inconclusive() -> None:
-    result = sign_test_p_value([0.0, 0.0, 0.0])
-
-    assert result["ties"] == 3
-    assert result["p_value"] == 1.0
-
-
-def test_permutation_is_deterministic_and_small_for_strong_signal() -> None:
-    values = [5.0, 6.0, 7.0, 8.0, 9.0, 10.0]
-    first = permutation_p_value(values, resamples=3000, seed=3)
-    second = permutation_p_value(values, resamples=3000, seed=3)
-
-    assert first == second
-    assert float(first["p_value"]) < 0.05
-
-
-def test_permutation_is_large_for_symmetric_noise() -> None:
-    values = [1.0, -1.0, 1.0, -1.0, 1.0, -1.0]
-    result = permutation_p_value(values, resamples=3000, seed=0)
-
-    assert float(result["p_value"]) > 0.2
-
-
 def test_cluster_mean_differences_collapses_replicates() -> None:
     units = [
         _unit("a", 24, 1, 2.0),
@@ -111,37 +77,53 @@ def test_seed_degeneracy_flags_identical_replicates() -> None:
     assert report["seed_invariant_cells"] == ["degenerate/capacity_24"]
 
 
-def test_run_significance_analysis_clusters_and_is_reproducible() -> None:
+def test_run_significance_analysis_reports_descriptive_robustness() -> None:
     kwargs = dict(
         request_count=4,
-        seeds=(3,),
+        seeds=(3, 7, 11),
         splits=("validation",),
-        workloads=("shared_system_prompt",),
+        workloads=("shared_system_prompt", "rag_template_reuse"),
         bootstrap_resamples=2000,
-        permutation_resamples=2000,
     )
     payload = run_significance_analysis(DEFAULT_CONFIG_PATH, **kwargs)
     repeat = run_significance_analysis(DEFAULT_CONFIG_PATH, **kwargs)
 
-    assert payload["schema"] == "prefix-kv-cache-score-gap-significance-v1"
+    assert payload["schema"] == "prefix-kv-cache-score-gap-robustness-v2"
     assert payload["candidate"] == "production_incumbent"
     assert payload["baseline"] == "tinylfu_lru"
-    # Two capacity tiers, one seed, one workload family.
-    assert payload["paired_unit_count"] == 2
-    assert len(payload["units"]) == 2
-    assert payload["primary_clustering"] == "workload_family"
-    # The primary verdict is driven by the family-level clustering.
-    assert payload["verdict"] == payload["clustered"]["by_workload_family"]["verdict"]
-    assert payload["clustered"]["by_workload_family"]["cluster_count"] == 1
+    # Two capacities, three seeds, and two workload families.
+    assert payload["paired_unit_count"] == 12
+    assert len(payload["units"]) == 12
+    assert payload["descriptive_family_summary"]["family_count"] == 2
+    seed_summary = payload["whole_panel_outer_seed_summary"]
+    assert seed_summary["outer_seed_count"] == 3
+    assert not seed_summary["inference_ready"]
+    assert seed_summary["paired_outer_seed_bootstrap_confidence_interval"] is None
+    assert len(payload["leave_one_family_out_sensitivity"]["omissions"]) == 2
     assert "seed_invariant_cell_count" in payload["seed_degeneracy"]
     assert payload["mean_difference"] == repeat["mean_difference"]
-    assert payload["clustered"] == repeat["clustered"]
-    assert payload["per_group_naive"] == repeat["per_group_naive"]
-    assert "candidate_combined_score" in payload["combined_score_context"]
+    assert payload["descriptive_family_summary"] == repeat["descriptive_family_summary"]
+    assert payload["whole_panel_outer_seed_summary"] == repeat["whole_panel_outer_seed_summary"]
+    assert "difference" in payload["charged_score"]
 
     report = format_report(payload)
-    assert "Score-gap significance analysis" in report
-    assert "Cluster-robust significance" in report
+    assert "Score-gap robustness analysis" in report
+    assert "confidence interval: omitted" in report
+
+
+def test_outer_seed_interval_requires_twenty_whole_panel_replicates() -> None:
+    payload = run_significance_analysis(
+        DEFAULT_CONFIG_PATH,
+        request_count=2,
+        seeds=tuple(range(20)),
+        splits=("validation",),
+        workloads=("shared_system_prompt",),
+        bootstrap_resamples=1000,
+    )
+
+    seed_summary = payload["whole_panel_outer_seed_summary"]
+    assert seed_summary["inference_ready"]
+    assert seed_summary["paired_outer_seed_bootstrap_confidence_interval"] is not None
 
 
 def test_run_significance_analysis_rejects_unknown_baseline() -> None:

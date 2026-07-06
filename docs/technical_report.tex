@@ -110,7 +110,16 @@ next-use oracle and ahead of all deployable credibility baselines.  It scores
 \(77.113\), compared with \(97.074\) for the reporting-only oracle and \(70.362\) for
 TinyLFU-LRU.  A subsequent production-oriented search on the operative \(16\)-token
 verifier promoted a \(572\)-node policy scoring \(65.649\), ahead of TinyLFU-LRU at
-\(63.548\).  It passes all seven checks in the held-out agentic surrogate gate and the
+\(63.548\), a charged-score difference of \(2.101\).  A paired validation-panel
+diagnostic finds a mean uncharged behavioral-score difference of \(3.50\), with the
+incumbent leading in 9 of 10 workload families.  This is panel-specific robustness
+evidence rather than a general estimate of seed uncertainty: 12 of 20
+family--capacity cells have identical paired differences across the three seeds, and
+the workload families are fixed, hand-designed scenarios.  Paired whole-panel charged
+differences range from \(-0.083\) to \(5.440\), while leave-one-family-out charged
+differences range from \(-1.124\) to \(5.158\).  No confidence interval is inferred
+from only three outer seeds.  The policy passes all seven
+checks in the held-out agentic surrogate gate and the
 cyclic working-set tripwire with a \(0.2198<0.25\) token-hit gap.  It also scores
 \(3.064\) on the hidden panel versus \(-2.789\) for TinyLFU-LRU and retains
 substantially lower churn.
@@ -173,8 +182,9 @@ policy-caused underfill, avoidable eviction decisions, and source complexity.
   \item \important{Simulator ownership.} Candidate code produces scores; it does not
   mutate cache state, choose illegal victims, or bypass prefix-tree invariants.
   \item \important{Robust ranking.} Validation spans multiple families, two capacities,
-  and three seeds.  The score includes mean behavior, weakest workload-capacity
-  behavior, and worst-seed behavior.
+  and three seeds.  The panel contains both deterministic and seed-varying families;
+  the score includes mean behavior, weakest workload-capacity behavior, and worst-seed
+  behavior where the generated scenario responds materially to the seed.
   \item \important{Interpretability.} The verifier emits fine-grained metrics and a
   top-level score breakdown rather than only a scalar.
   \item \important{Compact policies.} Complexity is charged with an unbounded concave
@@ -766,6 +776,20 @@ Hidden final report & 10 & 2 & 3 & 60 \\
 \bottomrule
 \end{tabular}
 \end{center}
+
+These trial counts describe evaluator executions, not independent statistical
+replicates.  On the operative validation panel, 12 of the 20 family--capacity cells
+produce identical incumbent-minus-TinyLFU-LRU behavioral-score differences across the
+three seeds.  Repeating those cells is useful for deterministic replay and uniform
+evaluation, but it does not add seed variation.  Comparisons therefore report
+the charged-score difference, family wins and losses, the range across paired
+whole-panel seed realizations, and leave-one-family-out sensitivity.  A family
+bootstrap is retained only as a descriptive stability interval.  The families are
+fixed, hand-designed scenarios rather than a random sample from a workload population,
+so that interval does not support a population-level claim.  A conditional seed
+confidence interval requires at least 20 independent outer-seed panel realizations;
+generalization beyond the fixed families additionally requires a declared
+family-sampling distribution and hierarchical resampling.
 
 Each family receives a deterministic seed offset of \(1000(i+1)\), where \(i\) is its
 position within its split.  The main combined score uses validation trials only.
@@ -1956,12 +1980,67 @@ them with worse admission/churn behavior.  The recommended compact seed therefor
 retains both decays.  This inversion demonstrates why the structure probe must be
 reviewed alongside the validation scalar.
 
+\subsection{Explicit-dual reformulation and switching cost}
+\label{sec:explicit-dual}
+
+The pressure-aware admission economics can be read as a Lagrangian index rule:
+admission compares a per-block value density against a shadow price, and eviction
+removes the minimum-index leaf.  The admission shadow-price audit shows the incumbent
+tracks the oracle water level only as a slow congestion aggregate, not its fast
+per-decision movement.  An exploratory reformulation makes the dual explicit.  A
+single retention index
+\[
+  V_b=\log(1{+}f_b)+0.2\log(1{+}r_b)+0.28\,p_b+0.35\log(1{+}d_b)+1.2\log(1{+}c_b/96)
+\]
+scores both actions from decayed frequency \(f_b\), recency \(r_b\), and priority
+evidence \(p_b\) with descendant count \(d_b\) and recompute cost \(c_b\).  A scalar
+dual \(\lambda\) is calibrated toward the cheapest eviction candidate
+\(\hat\mu=\min_b V_b\) as \(\lambda\leftarrow\lambda+\tfrac12(\hat\mu-\lambda)\);
+admission accepts when \(V_b-\lambda-m>0\) and eviction removes \(\arg\min_b V_b\).
+
+A dual calibrated to \(\hat\mu\) tracks the oracle price far better than the incumbent
+(fast/slow admission-regret-density lift \(12.1\times\) versus \(0.35\times\)) but
+churns about five times as much, because with \(\lambda\) at the cheapest resident
+value any marginal improvement is admitted.  The switching margin \(m\) supplies the
+same admission barrier as the compact policy's constant offset.  On the operative
+validation panel the incumbent scores a charged \(65.649\); the reformulation reaches
+\(66.1\) at \(m=0.9\) and \(67.3\) at \(m=1.1\), at roughly half the churn and \(372\)
+rather than \(572\) effective nodes.  Tracking fidelity and churn trade off directly,
+and the charged score follows churn: the operative object is a restless-bandit index
+with an explicit switching cost.  This is exploratory---it is not promotion-gated, its
+peak is narrow, and only \(m\) is tuned---but it is a simpler, lower-churn seed than
+the current incumbent.  The prototypes are under \filepath{experiments/}.
+
 \section{Results and Robustness}
 
 \subsection{Current production-oriented result}
 
-On the operative 16-token verifier, the promoted 572-node policy scores \(65.649\),
-ahead of TinyLFU-LRU at \(63.548\).  It passes all seven checks in the agentic
+The current production incumbent is the switching-cost explicit-dual policy of
+\S\ref{sec:explicit-dual}: it scores a charged \(66.145\) at \(372\) effective nodes,
+ahead of the previously promoted evolved policy (\(65.649\) at \(572\) nodes) on
+validation, and also on the held-out probe (\(77.177\) versus \(74.899\)) and hidden
+(\(4.042\) versus \(3.064\)) panels, at lower churn.  Its one known weakness is
+fairness robustness: TinyLFU-LRU overtakes it once the fairness weight reaches
+\(1.5\times\) nominal.  The remainder of this subsection reports the diagnostic
+evidence for the superseded evolved policy, which established the panel-sensitivity
+methodology now applied to its successor.
+
+On the operative 16-token verifier, the evolved 572-node policy scores \(65.649\),
+ahead of TinyLFU-LRU at \(63.548\), for a charged-score lead of \(2.101\).  A paired
+diagnostic over the 60 validation workload--capacity--seed cells gives a mean
+uncharged behavioral-score difference of \(3.50\).  Collapsing cells to the 10 designed
+workload families, the incumbent leads in 9; \identifier{rolling_template_versions}
+is the single family-level regression.  These results show consistency across this
+benchmark panel, but they do not establish a general population effect or precisely
+estimate seed uncertainty because only three seeds are evaluated and 12 of 20
+family--capacity cells are seed-invariant in the paired comparison.  The three paired
+whole-panel charged-score differences range from \(-0.083\) to \(5.440\), crossing
+zero.  Leave-one-family-out charged differences range from \(-1.124\) to \(5.158\);
+omitting \identifier{stochastic_serving_mix} reverses the aggregate lead.  These are
+deterministic sensitivity diagnostics, not confidence bounds, and no confidence
+interval is reported from the current three outer seeds.
+
+The policy passes all seven checks in the agentic
 surrogate gate and the cyclic working-set tripwire with a \(0.2198\) gap against a
 \(0.25\) limit.  It scores \(3.064\) on the hidden panel versus \(-2.789\) for
 TinyLFU-LRU and retains substantially lower churn.  The result supports two-stage
@@ -2261,6 +2340,12 @@ The following items are deliberately not promoted to retained principles:
   \item \risk{Trace-calibrated and live metadata may reorder the synthetic findings.}
   The metadata-only calibration and replay path exists, but retained principles still
   require confirmation on held-out production-derived traces.
+  \item \risk{An explicit shadow-price dual with a switching cost may beat the
+  pressure-aware incumbent at lower complexity.}  The explicit-dual reformulation
+  (Section~\ref{sec:explicit-dual}) reaches a charged \(66\)--\(67\) against the incumbent's
+  \(65.649\) on the operative validation panel at roughly half the churn and \(372\)
+  effective nodes, but it has not faced probe, hidden, or cross-family adjudication and
+  only its switching margin is tuned.
 \end{itemize}
 
 \section{Correctness Properties and Test Strategy}
@@ -2326,7 +2411,10 @@ Under the operative verifier and workload configuration:
   fourth, and prefix-anchor and vLLM APC following;
   \item on the operative 16-token default, the promoted production incumbent leads
   TinyLFU-LRU by \(2.101\) charged points (\(65.649\) versus \(63.548\)), while
-  retaining higher validation token hit and much lower churn.
+  retaining higher validation token hit and much lower churn; the paired uncharged
+  behavioral diagnostic favors it in 9 of 10 designed validation families, but the
+  three paired whole-panel charged differences and the leave-one-family-out range both
+  cross zero, subject to the seed-invariance limitation described above.
 \end{itemize}
 
 \section{Limitations and Recommended Next Steps}
@@ -2341,6 +2429,11 @@ Under the operative verifier and workload configuration:
   not include kernel scheduling, bandwidth, allocator overhead, or device contention.
   \item \textbf{Synthetic traffic.} Workloads encode plausible failure modes but are not
   calibrated from production trace distributions.
+  \item \textbf{Limited effective seed variation.} The evaluator executes every family
+  at three seeds, but many designed scenarios are behaviorally seed-invariant.  Nominal
+  trial counts therefore overstate effective seed replication, and family-clustered
+  diagnostics remain descriptive because the families are not sampled from a target
+  workload population.
   \item \textbf{Single-cache topology.} There is no routing, replication, cache
   partitioning, host offload, or distributed ownership.
   \item \textbf{Shared-KV mode is a demand stress test, not a scheduler.} It exposes
@@ -2356,6 +2449,15 @@ Under the operative verifier and workload configuration:
   verification, which is appropriate for regret measurement but should not be confused
   with an implementable signal.
 \end{itemize}
+
+The next benchmark revision should make each intended stochastic family's structural
+reuse pattern respond to an outer seed, then evaluate at least 20 paired whole-panel
+realizations.  The candidate and baseline must replay identical streams within each
+outer seed, and the confidence interval must resample only the resulting whole-panel
+charged-score differences.  Any generator revision changes benchmark code-as-data and
+therefore requires new panel fingerprints and rerunning every affected experiment.  A
+claim beyond the fixed family panel additionally requires a declared family-sampling
+distribution and hierarchical resampling of families and seeds.
 
 \subsection{Verifier limitations}
 

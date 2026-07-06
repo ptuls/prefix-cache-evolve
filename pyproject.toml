@@ -153,3 +153,4 @@ exclude = ["src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/**/polic
 "src/prefix_cache_evolve/problems/prefix_kv_cache/initial_program.py" = ["D"]
 "src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/**/policy.py" = ["D"]
 "src/prefix_cache_evolve/problems/prefix_kv_cache/seeds/*.py" = ["D"]
+"experiments/*.py" = ["D"]

@@ -1,0 +1,336 @@
+max_iterations: 300
+
+llm:
+  # Unprefixed model names use this LiteLLM provider. Provider-qualified
+  # identifiers such as anthropic/..., gemini/..., or ollama/... override it.
+  default_provider: "openai"
+  primary_model: "gpt-5.4-mini"
+  secondary_model: "gpt-5.5"
+  temperature: 0.3
+  max_tokens: 6000
+
+prompt:
+  system_message: >
+    You are designing compact stateful scoring policies for an LLM prefill
+    prefix KV-cache. The candidate must expose build_candidate(capacity_blocks,
+    block_size_tokens, seed=None) or candidate_factory(...) and return an object
+    with score_admission(block, now), score_eviction(block, now), and exactly
+    three lifecycle callbacks: on_request_start(request, now),
+    on_cache_hit(block, request, now), and on_cache_miss(block, request, now).
+    These callbacks must exist but may be no-ops. No other lifecycle callback
+    fires. Do not implement on_request_end, on_block_admitted, on_block_evicted,
+    or shadow bookkeeping that depends on those unsupported callbacks.
+
+    The simulator owns cache state. Admission happens iff score_admission > 0.
+    Eviction chooses the highest score among inactive resident leaves only.
+    Higher eviction score means "evict sooner." Active blocks, interior blocks,
+    and non-resident blocks cannot be evicted by candidate code.
+
+    PrefixBlockInfo is a frozen per-callback value object, not persistent cache
+    state. Use block.prefix_hash (or the equivalent block.block_id) as the
+    stable block key. Do not key on id(block), probe guessed attribute names,
+    or depend on object identity. Available block fields are: block_id,
+    prefix_hash, parent_hash, depth, start_token, end_token, token_count,
+    tenant_id, created_at, last_accessed_at, hit_count, descendant_count,
+    active_ref_count, estimated_recompute_cost, prev_last_accessed_at,
+    last_access_gap, access_gap_mean, access_gap_var, subtree_hit_rate,
+    subtree_active_ref_count, estimated_future_reuse, and
+    estimated_next_reuse_distance. Recurrence, gap-summary, and subtree fields
+    are online summaries of accesses observed at or before the current request.
+    The future-reuse fields are None for deployable candidates and only
+    populated for oracle/reporting baselines.
+
+    The operative verifier uses 16-token physical cache blocks and 24/48-block
+    capacity tiers, equivalent to 384/768 cached tokens. Synthetic traffic is
+    generated at a fixed 8-token granularity so cache block-size comparisons
+    replay identical token streams. Do not hard-code either size; use the
+    supplied block and request fields.
+
+    RequestInfo fields are request_id, tenant_id, session_id, prompt_length,
+    priority, request_type, prompt_tokens, predicted_output_length,
+    recent_admission_pressure, and recent_miss_rate. request_id is an opaque
+    per-trial identifier; request_type is normalized to "request"; and
+    prompt_tokens is always empty before callbacks. Do not use request_type or
+    prompt_tokens as policy signals. The recent context fields are bounded
+    online windows over prior requests; no workload family name is exposed.
+    session_id is request-only metadata; PrefixBlockInfo has tenant_id but no
+    session_id. The candidate factory receives a fixed policy seed independent
+    of workload generation. The now argument is a logical arrival step and may
+    repeat for requests in the same microburst. Do not probe guessed block
+    attributes.
+
+    Optional composable primitives are available from
+    prefix_cache_evolve.problems.prefix_kv_cache.primitives. In particular,
+    MultiTimescaleDecay maintains one to eight bounded decayed accumulators per
+    key and exposes observe, observe_vector, values, and combine; observe_vector
+    applies distinct updates to different channels, and decay_vector is the pure
+    stateless counterpart. threshold_excess(value, threshold) is a compact
+    stateless positive-hinge helper for thresholded pressure or evidence terms.
+    Preserve or simplify canonical primitive state before replacing it with
+    bespoke per-key decay dictionaries: canonical calls receive the configured
+    bounded form-aware complexity subsidy. Only introduce
+    multi-timescale state or regime-conditional control flow when a focused
+    mutation cannot express the improvement. Do not hard-code workload-family
+    names or use scrubbed request fields.
+
+    Optimize validation token hit rate and block hit rate under shifted,
+    bursty mixed workloads while keeping formulas small. Avoid prompt-token
+    content overfitting and do not rely on future information. Deliberate
+    admission bypass and pin-forced bypass are reported separately; reject
+    admissions selectively rather than treating low eviction churn alone as a
+    win. Admission waste is token-weighted, and a small concave reward for
+    realized admission utility measures saved tokens per admitted cache slot,
+    so a hit on a full block is worth more than a hit on a partial block.
+    Priority is a deployable request signal, not proof of reuse: recurring
+    high-priority prefixes should survive low-priority one-off bursts, while
+    high-priority one-off requests should not evict reusable normal traffic.
+    Long-horizon tenant workloads repeatedly shift the active tenant, inject
+    pollution bursts, and revisit old hot sets after delayed recovery gaps.
+    Agentic tool workflows interleave growing routes, fork from shared
+    checkpoints, resume paused branches, and replan after rollbacks. Preserve
+    reusable trunks and likely-to-resume route state without overprotecting
+    abandoned suffixes or one-off tool observations.
+    Mutation feedback always includes the non-quarantined
+    agentic_tool_workflows surrogate and stochastic_serving_mix target. Treat
+    low agentic hit with high underfill and low churn as evidence of
+    categorical deep rejection; prefer a narrow recurrence-evidence exception.
+    Treat stochastic-mix churn and waste as a pressure-persistence problem
+    rather than broadly increasing admission. The agent_trace_branching probe
+    remains reporting-only and must not be directly optimized.
+
+    This is a dedicated simplification pass. The supplied parent scores 65.649
+    on this 16-token verifier ahead of TinyLFU-LRU at 63.548, but carries
+    effective complexity 572, which costs 7.60 charged points at every cache
+    geometry. Its pre-complexity behavioral score is the asset to preserve; its
+    node count is the liability to cut. Your goal is the smallest policy that
+    retains the parent's behavioral score, not a new architecture. Preserve the
+    per-family surrogate-to-probe tripwire suite and the positive hidden-panel
+    margin. Preserve the parent's pressure-aware admission economics, bounded
+    canonical decay state, and low turnover, but express them with far fewer
+    nodes. Pure LRU leaves measurable hit rate unused; keep only the compact,
+    validated corrections whose measured behavioral benefit survives deletion.
+
+    Default to deletion and consolidation of the supplied parent. Make exactly
+    one semantic change per mutation and prefer removals: drop a score term,
+    fold a redundant depth or pressure sub-expression, or route hand-rolled
+    decay math through the canonical MultiTimescaleDecay/decay_vector primitives,
+    which receive the bounded form-aware complexity subsidy. The parent earns
+    only 17 of its 147-node subsidy cap, so moving arithmetic onto canonical
+    primitive call sites reduces charged complexity with no behavioral change;
+    exhaust that subsidy before deleting behavior. Effective complexity must
+    stay at or below 105 AST nodes; proposals above 105 are rejected. Keep a
+    score term or state channel only when removing it measurably lowers the
+    pre-complexity behavioral score. Do not add broad exception handlers, future-reuse references,
+    schema fallbacks, unused imports, dynamic execution, introspection, decorators,
+    or speculative state. Candidate imports are limited to math and the documented
+    primitives module. Keep executable policy code in normal top-level class or
+    function definitions; only uppercase literal constants, __all__, and the direct
+    candidate_factory alias are valid top-level assignments. Evaluator feedback
+    identifies targeted agentic and stochastic guidance plus the parent's weakest
+    validation workloads and exact score costs; address one diagnosed weakness
+    without regressing cache economics or complexity.
+  objectives:
+    - "Minimize effective AST complexity to 105 nodes or fewer while holding the parent's pre-complexity behavioral score."
+    - "Exhaust the form-aware primitive subsidy first: express decay and pressure math through MultiTimescaleDecay/decay_vector/threshold_excess call sites before deleting behavior."
+    - "Prefer deletion and consolidation: drop low-weight admission terms and merge the redundant depth and pressure sub-expressions the parent duplicates."
+    - "Maximize mean validation workload score while keeping the weakest workload competitive."
+    - "Keep p95 deterministic latency and churn low."
+    - "Avoid token-weighted admission waste and evictions shortly before reuse."
+    - "Protect request-tail and worst-quarter service instead of optimizing only the mean."
+    - "Use admission rejection selectively; broad policy bypass must pay for itself in retained hit rate."
+    - "Protect recurring high-priority traffic from low-priority scan pollution without hard-coding request types."
+    - "Handle irregular agentic forks, resumptions, and replans without overprotecting stale branch suffixes."
+    - "Decay observed frequency and priority evidence so stale historical traffic does not remain permanently protected."
+    - "Prefer one focused local change; add structure only after a compact mutation is insufficient."
+    - "Prefer canonical MultiTimescaleDecay observe_vector state over hand-rolled per-key decay channels."
+    - "Use threshold_excess for a thresholded positive hinge; do not build a helper framework around it."
+    - "Prefer deletion ablations: keep a score term or state table only when its validation gain justifies its complexity."
+    - "Implement only the three lifecycle callbacks that the simulator invokes."
+    - "Use simple formulas over the documented PrefixBlockInfo and RequestInfo fields."
+    - "Use prefix_hash/block_id for stable per-block state; never use object identity."
+    - "Never hard-code workload-family names or use scrubbed request_type/prompt_tokens fields."
+    - "Do not inspect hidden workloads; hidden is final reporting only."
+    - "Improve on the incumbent's 65.649 charged score without falling below TinyLFU-LRU's 63.548 score or exceeding 650 effective AST nodes."
+
+evaluator:
+  timeout: 90
+  cascade_evaluation: false
+  parallel_evaluations: 2
+
+init:
+  n_diverse_seeds: 4
+  n_variants_per_seed: 3
+  diversity_llm_kwargs:
+    reasoning_effort: medium
+
+cvt:
+  n_centroids: 12
+  data_driven_centroids: true
+
+behavior:
+  ast_features:
+    - cyclomatic_complexity
+    - subscript_count
+  score_keys:
+    - validation_token_hit_rate
+    - validation_admission_rate
+    - validation_policy_underfill_rate
+    - validation_cache_churn_per_1k
+    - validation_wasted_admission_token_rate
+    - validation_avoidable_eviction_rate
+    - validation_short_reuse_after_eviction_missed_token_rate
+    - validation_shadow_price_tracking_rmse
+    - train_workload_agentic_tool_workflows_token_hit_rate
+    - train_workload_agentic_tool_workflows_policy_underfill_rate
+    - validation_workload_stochastic_serving_mix_token_hit_rate
+
+meta_advice:
+  enabled: true
+  interval: 24
+  max_tokens: 500
+
+pipeline:
+  n_llm_workers: 4
+  n_parents: 1
+  n_inspirations: 0
+  output_mode: diff
+
+punctuated_equilibrium:
+  enabled: true
+  reasoning_effort: medium
+  max_tokens: 12000
+
+prompt_overrides:
+  paradigm_shift: >
+    Produce one compact, deployable paradigm shift from the strongest
+    representative. Change one core admission or eviction idea, but preserve
+    the representative's small overall architecture and delete or simplify
+    existing logic to pay for the change. Target at most 550 effective AST
+    nodes. Candidates above 650 nodes are exploration-only and must receive a
+    dedicated simplification mutation before promotion. Keep the complete file
+    under 120 nonblank lines, with at most one policy class, one bounded state
+    dictionary or canonical decay primitive, and a small build_candidate
+    factory. Implement exactly
+    score_admission, score_eviction, on_request_start, on_cache_hit, and
+    on_cache_miss. Use only documented fields and top-level imports. Do not add
+    helper frameworks, dataclasses, schema fallbacks, guessed getattr calls,
+    broad exception handlers, unsupported callbacks, future-knowledge fields,
+    unused imports, or explanatory code. Before output, remove every state
+    table, helper, branch, and score term that is not essential to the new
+    paradigm.
+
+problem:
+  description: >
+    Search for adaptive prefix KV-cache scoring heuristics for LLM serving.
+  settings:
+    verifier_version: "1.0.0"
+    capacity_blocks: 24
+    capacity_sweep_blocks:
+      - 24
+      - 48
+    block_size_tokens: 16
+    workload_token_granularity: 8
+    request_count: 96
+    seeds:
+      - 11
+      - 23
+      - 37
+    policy_seed: 0
+    family_request_multipliers:
+      tenant_phase_shift_cycles: 3
+      tenant_phase_shift_cycles_shifted: 4
+    prefill_cost_per_token: 1
+    lookup_cost_per_block: 0.035
+    eviction_cost_per_block: 0.2
+    active_tokens_per_step: 64
+    kv_capacity_mode: prefix_only
+    latency_norm: 0
+    max_memory_bytes: 67108864
+    form_aware_complexity: true
+    # Simplification pass: hard-cap effective complexity well below the parent's
+    # 572 nodes so the search can only explore compact policies, and rank the
+    # feasible set by pre-complexity behavioral score so it minimizes nodes
+    # without sacrificing the 16-token caching behavior. 105 nodes is the
+    # break-even where the 0.065 * complexity**0.75 charge (~2.10) drops below
+    # the parent's measured 32-token behavioral edge over LFU (+2.14).
+    max_candidate_complexity: 105
+    promotion_max_candidate_complexity: 105
+    search_score_mode: raw_before_complexity
+    surrogate_probe_tripwire_thresholds:
+      agentic_branching: 0.12
+      cyclic_working_set: 0.25
+    reject_unsupported_source_patterns: true
+    train_families:
+      - shared_system_prompt
+      - rag_template_reuse
+      - long_context_mixed
+      - session_continuation_growth
+      - agentic_tool_workflows
+    validation_families:
+      - phase_shift_prompts
+      - multi_tenant_skew
+      - hotset_cold_scan
+      - concurrent_long_generation
+      - stochastic_serving_mix
+      - rolling_template_versions
+      - heavy_tailed_prefix_lengths
+      - priority_burst_recovery
+      - priority_one_off_noise
+      - tenant_phase_shift_cycles
+    probe_families:
+      - agent_trace_branching
+      - cyclic_working_set_pressure
+    hidden_families:
+      - adversarial_unique_prompts
+      - cross_family_mixture
+      - tenant_session_reentry
+      - stochastic_serving_mix_shifted
+      - rolling_template_versions_shifted
+      - heavy_tailed_prefix_lengths_shifted
+      - priority_burst_recovery_shifted
+      - cyclic_working_set_pressure_shifted
+      - priority_one_off_noise_shifted
+      - tenant_phase_shift_cycles_shifted
+    scoring:
+      w_avg_tok: 80
+      w_avg_blk: 60
+      min_workload_weight: 0.5
+      min_seed_weight: 0.15
+      request_tail_weight: 12
+      worst_window_weight: 12
+      priority_hit_weight: 8
+      wasted_admission_weight: 6
+      admission_utility_weight: 1
+      avoidable_eviction_weight: 8
+      latency_weight: 35
+      latency_cap: 40
+      churn_weight: 0.015
+      churn_cap: 25
+      underfill_weight: 12
+      underfill_cap: 15
+      fairness_weight: 80
+      fairness_cap: 30
+      k_complex: 0.065
+      complexity_exponent: 0.75
+      v_min: -1000
+      invalid_surcharge: 1000
+
+search:
+  seed: 20260609
+  notes: >
+    Candidates should keep the build_candidate(capacity_blocks,
+    block_size_tokens, seed=None) entry point and the documented score methods.
+    Only on_request_start, on_cache_hit, and on_cache_miss fire as lifecycle
+    callbacks. Avoid defensive schema guessing; unknown getattr chains,
+    unsupported lifecycle machinery, and id(block) fallbacks are complexity
+    with no benchmark value. Treat every score term and state table as
+    provisional: try removing terms, and retain them only when their validation
+    benefit pays for their complexity. Default to one local semantic change and
+    preserve the supplied parent's state representation. If the parent uses
+    bounded canonical vector-decay state, mutate or ablate that representation
+    before introducing a custom state dictionary. Candidates above 650
+    effective nodes are exploratory parents only: use their evaluator feedback
+    for a dedicated behavior-preserving simplification mutation. Promotion
+    requires a charged combined score above the 65.649 incumbent, no invalid
+    groups, effective complexity at or below 650, and subsequent probe and
+    hidden non-regression review.

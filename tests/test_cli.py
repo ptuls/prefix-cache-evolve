@@ -142,7 +142,7 @@ def test_incumbent_validation_command_passes() -> None:
     result = CliRunner().invoke(tools_main, ["incumbents", "validate"])
 
     assert result.exit_code == 0
-    assert result.output == "validated_incumbents=4\n"
+    assert result.output == "validated_incumbents=5\n"
 
 
 def test_incumbent_list_distinguishes_history_from_current_assignments() -> None:
@@ -152,7 +152,9 @@ def test_incumbent_list_distinguishes_history_from_current_assignments() -> None
     records = {record["id"]: record for record in json.loads(result.output)}
     assert records["historical_compact_20260607"]["current_roles"] == []
     assert records["production_16tok_20260609"]["status"] == "promoted"
-    assert records["production_16tok_20260609"]["current_roles"] == ["production"]
+    assert records["production_16tok_20260609"]["current_roles"] == []
+    assert records["production_dual_16tok_20260706"]["status"] == "promoted"
+    assert records["production_dual_16tok_20260706"]["current_roles"] == ["production"]
 
 
 @pytest.mark.parametrize("mode", ("--shadow-price", "--causal-components"))

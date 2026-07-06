@@ -34,7 +34,7 @@ _ANALYZE_COMMANDS = {
 _VERIFY_COMMANDS = {
     "significance": LazyCommand(
         "prefix_cache_evolve.tools.verify_significance:main",
-        "Test whether the headline score gap exceeds seed noise.",
+        "Report paired robustness diagnostics for the headline score gap.",
     ),
 }
 _ABLATE_COMMANDS = {

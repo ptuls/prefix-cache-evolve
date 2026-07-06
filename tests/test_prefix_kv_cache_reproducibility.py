@@ -233,7 +233,7 @@ def test_incumbent_registry_preserves_exact_sources_and_metadata() -> None:
 
     assert {record.role for record in records} == {"discovery", "historical", "production"}
     assert file_sha256(_PRODUCTION_INCUMBENT_PATH) == _PRODUCTION_INCUMBENT.source_sha256
-    assert scoring_fn_complexity(source, form_aware=True) == 572
+    assert scoring_fn_complexity(source, form_aware=True) == 372
     assert _PRODUCTION_INCUMBENT.provenance["source_artifact_sha256"] == (
         _PRODUCTION_INCUMBENT.source_sha256
     )

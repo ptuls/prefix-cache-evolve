@@ -1,0 +1,40 @@
+{
+  "schema": "prefix-kv-cache-incumbent-manifest-v1",
+  "id": "production_dual_16tok_20260706",
+  "role": "production",
+  "status": "promoted",
+  "promoted_at": "2026-07-06T18:00:00Z",
+  "source": {
+    "path": "policy.py",
+    "module": "prefix_cache_evolve.problems.prefix_kv_cache.incumbents.production_dual_16tok_20260706.policy",
+    "factory": "build_candidate",
+    "sha256": "bed43d9cac35b4809c694be5c1de9d02f4abc6c8bc6f0308571535bb8accaa0b",
+    "complexity_mode": "form_aware",
+    "effective_complexity": 372
+  },
+  "benchmark": {
+    "verifier_version": "1.0.0",
+    "config_path": "configs/prefix_kv_cache.yaml",
+    "splits": [
+      "train",
+      "validation",
+      "probe"
+    ],
+    "panel_sha256": "9431a5bd792de803d68e99d6c98d273f30d5d3e757ea83939760d0cfec60c354",
+    "evaluation_context_sha256": "e0948efc40c7f0a5c93c6b3022a3c3cdf8066672fac192bc08ee26611bc00416",
+    "selection_combined_score": 66.14516302036998,
+    "validation_token_hit_rate": 0.6105238148706127,
+    "probe_token_hit_rate": 0.6776511064317371
+  },
+  "provenance": {
+    "stage": "shadow_price_reformulation",
+    "run_id": "20260706T180000Z",
+    "run_artifact_root": "experiments",
+    "source_artifact": "switching_cost_dual_policy.py",
+    "source_artifact_sha256": "bed43d9cac35b4809c694be5c1de9d02f4abc6c8bc6f0308571535bb8accaa0b",
+    "lineage_parent_ids": [
+      "production_16tok_20260609"
+    ],
+    "note": "Hand-built explicit-dual reformulation of the pressure-aware incumbent. Calibrates the admission shadow price toward the marginal evicted victim and adds a switching-cost margin (0.9) to control churn. Only the switching margin is tuned (validation sweep); other coefficients are first-guess. Beats the prior incumbent on validation (66.145 vs 65.649), the held-out probe panel (77.177 vs 74.899), and the held-out hidden panel (4.042 vs 3.064) at lower complexity (372 vs 572) and lower churn. Known sensitivity: TinyLFU-LRU overtakes it if the fairness weight is raised to at least 1.5x nominal."
+  }
+}

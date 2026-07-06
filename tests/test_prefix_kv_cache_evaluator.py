@@ -3026,7 +3026,7 @@ def test_block_size_robustness_normalizes_capacity_and_replays_canonical_traffic
     ]
     report = output_path.read_text(encoding="utf-8")
     assert "identical synthetic token streams" in report
-    assert "| 16 | 12.000 | 12.000 | 0.000 | 1 / 4 | `candidate` | 0.000 |" in report
+    assert "| 16 | 12.000 | 12.000 | 0.000 | 1 / 5 | `candidate` | 0.000 |" in report
     assert "| 16 | 24 / 48 | 384 / 768 | `candidate` |" in report
 
 

@@ -57,33 +57,54 @@ Scores from different verifier geometries are not directly comparable:
 |---|---:|---:|---:|---:|
 | Discovery policy on the historical 8-token verifier | `77.113` | `70.362` | `92.7` | `161.1` |
 | Discovery policy transferred to the 16-token verifier | `62.757` | `63.548` | `168.1` | `499.0` |
-| Production policy on the operative 16-token verifier | `65.649` | `63.548` | `163.9` | `499.0` |
+| Evolved production policy on the 16-token verifier (superseded) | `65.649` | `63.548` | `163.9` | `499.0` |
+| Switching-cost dual incumbent on the operative 16-token verifier | `66.145` | `63.548` | `136.7` | `499.0` |
 
 The original discovery result was reported as `77.230`; hardened complexity
 accounting changes it to `77.113` without changing policy behavior. A later
 production-oriented search and simplification stage produced the separate
-16-token incumbent that clears TinyLFU-LRU.
+evolved 16-token incumbent that clears TinyLFU-LRU.
 
-On the operative 16-token verifier, the production policy's charged-score lead
-over TinyLFU-LRU is `+2.101` (`65.649` versus `63.548`). A paired diagnostic over
-the validation panel's `(workload, capacity, seed)` cells finds a mean uncharged
-behavioral-score difference of `+3.50`; the incumbent leads in `9 of 10` workload
-families, with `rolling_template_versions` as the single family-level regression.
-This is evidence of consistency across the designed benchmark panel, not a
-general estimate of seed uncertainty: 12 of 20 family-by-capacity cells produce
-identical per-seed differences, only three seeds are evaluated, and the workload
-families are fixed, hand-designed scenarios rather than a random population
-sample. Family-clustered bootstrap, sign-test, and permutation results are
-therefore reported as descriptive robustness diagnostics. Naive per-cell tests
-overstate the effective sample size because they count seed-invariant cells as
-replicates. Reproduce the diagnostics with
+The current production incumbent is a hand-built reformulation of that evolved
+policy: an explicit shadow-price dual with a switching cost (a restless-bandit
+index that prices admission against the marginal evicted victim). It scores
+`66.145` at `372` effective nodes versus the evolved policy's `65.649` at `572`,
+and beats it on both held-out panels---probe `77.177` versus `74.899` and hidden
+`4.042` versus `3.064`---at lower churn. Its one known weakness is fairness:
+TinyLFU-LRU overtakes it if the fairness weight is raised to at least `1.5x`
+nominal. It is bundled at
+`src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/production_dual_16tok_20260706/`;
+see the [technical report](docs/technical_report.tex) and
+[research log](docs/research_log.tex) for the derivation.
+
+On the operative 16-token verifier, the current incumbent's charged-score lead
+over TinyLFU-LRU is `+2.597` (`66.145` versus `63.548`). A paired diagnostic over
+the validation panel's `(workload, capacity, seed)` cells shows the incumbent
+leading in `8 of 10` workload families; `rolling_template_versions` (`-4.9`) and
+`tenant_phase_shift_cycles` (`-1.6`) are the two family-level regressions. Unlike
+the superseded evolved policy, all three paired whole-panel seed realizations stay
+positive, ranging from `+0.877` to `+6.798`, so the aggregate lead does not depend
+on the seed. It remains sensitive to panel composition: leave-one-family-out
+charged differences range from `-1.135` to `+8.123`, and omitting
+`stochastic_serving_mix` reverses the aggregate lead.
+No confidence interval is reported from the current three seeds: 11 of 20
+family-by-capacity cells produce identical per-seed differences, and resampling
+three whole-panel observations would add little information. The family bootstrap
+is retained only as a descriptive stability interval because the workload families
+are fixed, hand-designed scenarios rather than a random population sample. A future
+conditional seed interval requires at least 20 independent outer-seed panel
+realizations; generalization beyond the fixed families additionally requires a
+declared family-sampling distribution. Reproduce the diagnostics with
 `uv run prefix-cache-tools verify significance`; the artifact is at
 [`docs/results/prefix_kv_cache_score_gap_significance.json`](docs/results/prefix_kv_cache_score_gap_significance.json).
 
-The broader geometry sweep remains mixed. The production incumbent beats
+The broader geometry sweep remains mixed. The evolved incumbent beats
 TinyLFU-LRU at 16- and 24-token blocks, trails it at 32-, 48-, and 64-token
-blocks, and has substantially lower churn at every tested block size. A single
-policy that dominates across geometries remains an open problem.
+blocks, and has substantially lower churn at every tested block size. That
+regression is specific to the block-normalized sweep (fixed block count, so
+larger blocks receive more total tokens); under fixed-token capacity the
+incumbents stay ahead at coarser blocks. A single policy that dominates across
+every geometry and normalization remains an open problem.
 
 ### Cost
 

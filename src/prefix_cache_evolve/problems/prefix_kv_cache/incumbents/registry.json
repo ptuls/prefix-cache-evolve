@@ -2,7 +2,7 @@
   "schema": "prefix-kv-cache-incumbent-registry-v1",
   "current": {
     "discovery": "discovery_8tok_20260608",
-    "production": "production_16tok_20260609"
+    "production": "production_dual_16tok_20260706"
   },
   "incumbents": [
     {
@@ -20,6 +20,10 @@
     {
       "id": "production_16tok_20260609",
       "manifest": "production_16tok_20260609/manifest.json"
+    },
+    {
+      "id": "production_dual_16tok_20260706",
+      "manifest": "production_dual_16tok_20260706/manifest.json"
     }
   ]
 }

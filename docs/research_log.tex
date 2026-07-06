@@ -964,6 +964,244 @@ minority regimes where its value survives the admission intervention.  Secondary
 outcomes in the JSON artifact---token hit, block hit, saved tokens, p95 latency, and
 churn---support the same directional conclusion.
 
+\subsection{Constructive shadow-price test: switching-cost dual policies}
+\label{sec:switching-cost-dual}
+
+\blocktag{16} The bandwidth diagnostic above is observational.  A constructive
+follow-up asks whether a policy built to track the oracle water level directly beats
+the incumbent's slow congestion signal.  Three prototype policies under
+\filepath{experiments/} keep the incumbent's value features but replace its pressure
+state with an explicit scalar dual \(\lambda\).  A single retention index
+\(V_b=\log(1{+}f_b)+0.2\log(1{+}r_b)+0.28\,p_b+0.35\log(1{+}d_b)+1.2\log(1{+}c_b/96)\)
+scores both actions from decayed observed frequency \(f_b\), recency \(r_b\), and
+priority evidence \(p_b\) with structural descendant count \(d_b\) and recompute cost
+\(c_b\).  Eviction removes \(\arg\min_b V_b\); each eviction round contributes its
+cheapest candidate \(\hat\mu=\min_b V_b\) as a sample of the marginal displacement
+price, and the dual tracks it as \(\lambda \leftarrow \lambda+0.5(\hat\mu-\lambda)\)
+with a between-request relaxation \(\lambda\leftarrow 0.97\lambda\) floored at
+\(0.6\,\text{pressure}_t\).  Admission accepts when \(V_b-\lambda-m>0\) for a
+switching margin \(m\).
+
+The undamped variant (\(m=0\)) confirms both the mechanism and its cost.  It tracks
+the oracle price far better than the incumbent---fast/slow regret-density lift rises
+from \(0.35\times\) to \(12.13\times\) and shadow-movement/regret correlation from
+\(+0.008\) to \(+0.313\)---yet its charged operative score is only \(58.776\) because
+it churns roughly five times as much at an unchanged token hit rate.  A dead-band on
+the dual update plus a recent-eviction guard leaves churn essentially unchanged: the
+churn is not admit/evict/re-admit thrash of individual blocks.  It follows instead
+from marginal-swap admission---with \(\lambda\) pinned to the cheapest resident, any
+block worth marginally more is admitted---so restoring a switching margin \(m\), the
+same barrier the incumbent's constant \(-0.7\) offset provides, is the correct
+control.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lrrrrrr}
+\toprule
+Policy & Charged & Churn/1k & Token hit & Nodes & Lift & Corr. \\
+\midrule
+Pressure-aware incumbent & 65.649 & 163.9 & 0.596 & 572 & \(0.35\times\) & \(+0.008\) \\
+Explicit dual (\(m{=}0\)) & 58.776 & 858.3 & 0.599 & 364 & \(12.13\times\) & \(+0.313\) \\
+Dead-band \(+\) guard & 57.618 & 859.4 & 0.598 & 470 & \(12.92\times\) & \(+0.301\) \\
+Switching cost (\(m{=}0.7\)) & 63.219 & 281.0 & 0.607 & 372 & \(1.40\times\) & \(+0.088\) \\
+\bottomrule
+\end{tabular}
+\caption{Explicit-dual mechanism variants on the operative 16-token validation panel.
+Lift is the fast/slow admission-regret-density ratio and Corr.\ is the
+shadow-movement/regret correlation from the same audit.}
+\label{tab:switching-cost-variants}
+\end{table}
+
+\good{A one-parameter sweep of the switching margin clears the incumbent.}  Evaluated
+in process on the operative validation panel, the production incumbent reproduces its
+raw \(73.252\) and charged \(65.649\) scores exactly as a control, and the
+\(m=0.7\) point reproduces the full-run charged \(63.219\).  The variant peaks above
+the incumbent: charged \(66.145\) at \(m=0.9\) with a \emph{higher} token hit rate,
+and \(67.333\) at \(m=1.1\) at roughly half the incumbent's churn, using \(372\)
+charged nodes against \(572\).
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{rrrrr}
+\toprule
+Margin \(m\) & Raw & Charged & Churn/1k & Token hit \\
+\midrule
+0.40 & 67.858 & 62.352 & 638.4 & 0.599 \\
+0.60 & 70.047 & 64.542 & 361.0 & 0.606 \\
+0.80 & 69.790 & 64.284 & 187.2 & 0.609 \\
+0.90 & 71.651 & 66.145 & 136.7 & 0.611 \\
+1.00 & 71.366 & 65.860 & 121.8 & 0.609 \\
+1.10 & 72.838 & 67.333 & 92.7 & 0.589 \\
+1.20 & 67.778 & 62.272 & 61.6 & 0.583 \\
+\bottomrule
+\end{tabular}
+\caption{Switching-margin sweep for the explicit-dual policy.  Charged score is the
+raw combined score minus the fixed \(5.506\)-point source-complexity charge.}
+\label{tab:switching-cost-sweep}
+\end{table}
+
+The result reframes the bandwidth hypothesis.  Tracking fidelity and churn trade off
+directly, and the charged score follows churn, not tracking: the incumbent occupies
+the low-tracking, low-churn corner the verifier rewards, and the switching cost is the
+principled churn lever.  The operative object is therefore a restless-bandit index
+\emph{with} a switching penalty rather than a plain Whittle or Gittins index.
+\risk{These are operative-validation combined scores only.}  The variant has not
+cleared probe tripwires, the hidden panel, or cross-family adjudication; the
+\(m=1.1\) peak is narrow (\(m=1.0\) scores \(65.860\), \(m=1.2\) scores \(62.272\));
+and every coefficient other than \(m\) is a first guess.  It is nonetheless a simpler,
+lower-churn, higher-scoring policy than the prior incumbent.
+
+\good{The \(m=0.9\) variant was promoted to the current production incumbent}
+(\identifier{production_dual_16tok_20260706}).  It cleared the full gate battery
+against the prior incumbent: validation \(66.145\) versus \(65.649\), held-out probe
+\(77.177\) versus \(74.899\), and held-out hidden \(4.042\) versus \(3.064\) (best
+deployable policy on the hidden panel), at \(372\) effective nodes versus \(572\) and
+lower churn.  Because the margin was selected on validation while probe and hidden
+were not, the held-out gains are generalization rather than selection overfit.  The
+score-weight sensitivity sweep is robust to increasing churn, underfill,
+wasted-admission, and avoidable-eviction weights, but \risk{TinyLFU-LRU overtakes it
+once the fairness weight reaches \(1.5\times\) nominal}.  The margins are modest and
+only the switching margin is tuned, so the honest reading is ``at least as good as the
+prior incumbent, and plausibly better, while simpler and lower-churn.''
+
+\subsection{The tracking--churn frontier}
+\label{sec:tracking-churn-frontier}
+
+Sweeping the switching margin \(m\) of \S\ref{sec:switching-cost-dual} while auditing
+shadow-price tracking at each setting exposes the tradeoff structure the verifier is
+actually navigating.  As \(m\) rises, both the fast/slow admission-regret-density lift
+and churn fall monotonically: high-fidelity tracking and low churn cannot be held at
+once.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lrrrrr}
+\toprule
+Policy & Lift & Corr. & Churn/1k & Token hit & Charged \\
+\midrule
+Explicit dual (\(m{=}0\)) & \(12.13\times\) & \(+0.313\) & 858.3 & 0.599 & 58.776 \\
+Switching cost (\(m{=}0.4\)) & \(6.96\times\) & \(+0.185\) & 638.4 & 0.599 & 62.352 \\
+Switching cost (\(m{=}0.7\)) & \(1.40\times\) & \(+0.088\) & 281.0 & 0.607 & 63.219 \\
+Switching cost (\(m{=}0.9\)) & \(0.87\times\) & \(+0.085\) & 136.7 & 0.611 & 66.145 \\
+Switching cost (\(m{=}1.2\)) & \(0.52\times\) & \(+0.006\) & 61.6 & 0.583 & 62.272 \\
+Evolved incumbent & \(0.35\times\) & \(+0.008\) & 163.9 & 0.596 & 65.649 \\
+\bottomrule
+\end{tabular}
+\caption{Tracking fidelity, churn, hit rate, and charged score across the switching
+margin.  Lift is the fast/slow admission-regret-density ratio; higher means better
+oracle-price tracking.  The evolved incumbent is a different policy, shown for
+comparison, not a point on the margin curve.}
+\label{tab:tracking-churn-frontier}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  every node/.style={font=\footnotesize},
+  lab/.style={font=\scriptsize},
+  frontierpt/.style={circle,fill=navy,inner sep=1.7pt},
+  dompt/.style={circle,draw=gray,fill=white,line width=0.7pt,inner sep=1.7pt},
+  promo/.style={star,star points=5,star point ratio=2.2,fill=navy,draw=navy,inner sep=1.6pt},
+]
+% x = (log10(churn)-1.7)*8 (log churn axis); y = (hit-0.58)/0.005 (token hit rate)
+\draw[->,thick] (0,0) -- (10.9,0) node[below right] {churn / 1{,}000 requests (log)};
+\draw[->,thick] (0,0) -- (0,7.3) node[above left] {validation token hit rate};
+\foreach \x/\lab in {0.63/60,2.4/100,4.81/200,7.22/400,9.62/800} {\draw (\x,0) -- (\x,-0.09) node[below] {\lab};}
+\foreach \y/\lab in {0/0.580,2/0.590,4/0.600,6/0.610} {\draw (0,\y) -- (-0.09,\y) node[left] {\lab};}
+% efficient frontier (minimize churn, maximize hit): m=1.2 -> 1.1 -> 1.0 -> 0.9
+\draw[navy,very thick] (0.74,0.6) -- (2.15,1.8) -- (3.09,5.8) -- (3.49,6.2);
+% frontier points
+\node[frontierpt,label={[lab]below right:$m{=}1.2$ ($0.5\times$)}] at (0.74,0.6) {};
+\node[frontierpt,label={[lab]right:$m{=}1.1$}] at (2.15,1.8) {};
+\node[frontierpt,label={[lab]left:$m{=}1.0$}] at (3.09,5.8) {};
+\node[promo,label={[lab,navy]above:$m{=}0.9$ promoted ($0.9\times$)}] at (3.49,6.2) {};
+% dominated points (higher tracking, to the lower-right of the frontier)
+\node[dompt,label={[lab]above right:$m{=}0.7$ ($1.4\times$)}] at (5.99,5.4) {};
+\node[dompt,label={[lab]below:evolved ($0.35\times$)}] at (4.12,3.2) {};
+\node[dompt,label={[lab]above:$m{=}0.4$ ($7.0\times$)}] at (8.84,3.8) {};
+\node[dompt,label={[lab]below:$m{=}0$ ($12.1\times$)}] at (9.87,3.8) {};
+% annotations
+\node[navy,lab,anchor=west,align=left] at (4.3,0.9) {efficient frontier (low tracking)};
+\draw[navy,-{Stealth[length=5pt]}] (4.2,1.05) -- (2.75,3.4);
+\node[gray,lab,anchor=west,align=left] at (5.9,6.7) {dominated points:\\higher tracking, higher churn};
+\draw[gray,-{Stealth[length=5pt]}] (7.9,6.5) -- (8.75,4.25);
+\draw[gray,-{Stealth[length=5pt]}] (6.15,6.4) -- (6.1,5.7);
+\end{tikzpicture}
+\caption{The churn--hit-rate Pareto plot across the switching margin.  Upper-left is
+better (lower churn, higher hit rate).  The efficient frontier (navy) is the
+low-churn, low-tracking arm; the promoted \(m=0.9\) policy is its peak.  The
+high-tracking policies (larger lift) sit to the lower-right and are Pareto-dominated.
+Marker lift is the fast/slow admission-regret-density ratio.}
+\label{fig:tracking-churn-frontier}
+\end{figure}
+
+Two conclusions follow.  First, the verifier's churn weight selects the operating
+point: the score-weight sensitivity sweep gives the \(m=0.9\) policy rank 1 at nominal
+and \(2\times\) churn weight but rank 3 (behind LFU) when the churn weight is zeroed, so
+raising the churn price slides the optimum toward higher \(m\), lower churn, and lower
+tracking.  Second, and more sharply, \important{faithful tracking is not on the
+efficient frontier---it is Pareto-dominated.}  In hit-rate/churn space the \(m=0.9\)
+policy has both a higher token hit rate and lower churn than every higher-tracking point
+below it, so those points are strictly worse on both axes.  The efficient frontier is
+the \(m\gtrsim0.9\) arm, which trades hit rate for churn while tracking fidelity is
+already below \(1\times\).  The charged-score optimum therefore sits in the low-tracking
+region regardless of the churn weight.
+
+The mechanism is the slack constraint documented in
+\S\ref{sec:switching-cost-dual}: on this panel most scored decisions have a
+zero-value legal victim, so the oracle price rarely moves and tracking it earns
+nothing while adding reactive churn.  \risk{Tracking would only become valuable---bending
+the frontier so high-fidelity policies stop being dominated---under a workload and
+verifier where the shadow price moves fast and mistracking measurably costs hit rate.}
+That is a benchmark-design lever, not a policy one.  The frontier here is also traced by
+a single value-function family varying one parameter, so it is an achievable frontier,
+not a proven-optimal one; a better value function could dominate it.
+
+\subsection{Chronology: from the evolved incumbent to the switching-cost dual}
+\label{sec:derivation-chronology}
+
+The switching-cost dual was not discovered by search.  It was derived by a sequence
+of diagnostic steps that each answered one question and set up the next.  This
+subsection records that path so the reasoning, not only the result, is reproducible.
+
+\begin{enumerate}
+  \item \important{Harden the headline statistics.}  The evolved incumbent's lead over
+  TinyLFU-LRU was first stated per \((\text{workload},\text{capacity},\text{seed})\)
+  cell.  That comparison is pseudo-replicated: 11--12 of 20 family--capacity cells are
+  seed-invariant, so nominal trial rows are not independent.  Collapsing to the ten
+  designed workload families gives an honest cluster-robust statement---the evolved
+  incumbent led in 9 of 10 families---and a descriptive-only interval, because three
+  fixed hand-designed families are not a random population sample.
+  \item \important{Locate the edge across the field and geometries.}  The incumbent is
+  the strongest deployable policy at its geometry but only narrowly ahead of LFU and
+  TinyLFU-LRU, and its apparent large-block collapse is an artifact of block-count
+  normalization: holding capacity fixed in tokens, it stays ahead at coarser blocks.
+  The advantage is concentrated in churn and in capacity-constrained regimes, which
+  pointed at admission economics rather than eviction ranking.
+  \item \important{Read the policy as a shadow-price index.}  Admission compares a
+  per-block value density against a price; eviction removes the minimum-index leaf.
+  The admission shadow-price audit (Table~\ref{tab:shadow-price-by-workload}) showed the
+  incumbent tracks the oracle water level only as a slow congestion aggregate, not its
+  fast per-decision movement---a low-bandwidth controller.
+  \item \important{Test the bandwidth hypothesis constructively.}  Building an explicit
+  dual calibrated to the marginal evicted victim (\S\ref{sec:switching-cost-dual})
+  raised tracking fidelity by an order of magnitude but churned about five times as
+  much and scored worse.  Dead-band and re-admission guards did not reduce churn, which
+  falsified the thrash explanation and isolated marginal-swap admission as the cause.
+  \item \good{Add the switching cost and tune one parameter.}  Restoring an admission
+  margin---the barrier the compact policy's constant offset had always supplied---cut
+  churn back to the incumbent's range.  A single-parameter margin sweep peaked above the
+  incumbent, and the \(m=0.9\) variant cleared the full gate battery on validation and
+  both held-out panels.  It was promoted to \identifier{production_dual_16tok_20260706}.
+\end{enumerate}
+
+The general lesson is that faithful shadow-price tracking and low churn are in tension,
+and this verifier rewards the low-churn corner; the switching cost is the parameter that
+selects the operating point along that tradeoff.
+
 \section{Engineering Journey: From Prototype to Productive Evolution}
 \label{app:engineering-journey}
 

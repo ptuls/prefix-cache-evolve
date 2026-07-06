@@ -79,6 +79,34 @@ Intentional cross-context reports, such as geometry sweeps, record and validate
 one identity per geometry. Historical unstamped runs remain legacy records and
 cannot be tabulated with current versioned results.
 
+## Score-Gap Robustness
+
+Reproduce the canonical three-seed descriptive diagnostics with:
+
+```bash
+uv run prefix-cache-tools verify significance
+```
+
+The command reports the complexity-charged score difference, family wins and
+losses, the range across paired whole-panel seed realizations, leave-one-family-out
+sensitivity, and seed-invariant family-capacity cells. It intentionally omits a
+confidence interval when fewer than 20 outer seeds are configured.
+
+After revising workload generators so structural variation responds to the outer
+seed, run a conditional fixed-family seed interval with at least 20 realizations:
+
+```bash
+uv run prefix-cache-tools verify significance \
+  --outer-seed-count 20 \
+  --outer-seed-start 101
+```
+
+Changing workload generators changes benchmark code-as-data. Regenerate panel
+fingerprints and rerun every affected comparison. The resulting paired bootstrap
+interval is conditional on the fixed workload families; population-level workload
+generalization additionally requires a declared family-sampling distribution and
+hierarchical resampling.
+
 ## Incumbent Registry
 
 Promoted policies are committed as immutable bundles under

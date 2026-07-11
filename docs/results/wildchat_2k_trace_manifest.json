@@ -1,0 +1,43 @@
+{
+  "block_size_tokens": 16,
+  "conversation_limit": 2000,
+  "conversations_converted": 2000,
+  "hash": {
+    "algorithm": "HMAC-SHA256",
+    "key_fingerprint_sha256": "b8d6f34eb7191f68f74bc929babfcbeb97e9b4d7a284d5fb6beb0fcb21026186"
+  },
+  "limitations": [
+    "WildChat provides one timestamp per conversation, so intra-conversation request spacing is synthetic.",
+    "The canonical prompt serialization is deterministic but does not reproduce the original provider's private system prompt or exact chat template.",
+    "This is conversation-derived replay, not a production serving trace."
+  ],
+  "minimum_requests_per_conversation": 2,
+  "output_path": "artifacts/traces/wildchat_2k.jsonl",
+  "output_sha256": "ba7b637d3f3c48305f7a4908dc87ff6008e277ed4f9940e6d03e874f7f10bb6c",
+  "privacy": {
+    "raw_content_written": false,
+    "raw_identifiers_written": false
+  },
+  "requests_written": 9362,
+  "rows_scanned": 3748,
+  "schema": "prefix-kv-cache-wildchat-conversion-v1",
+  "skip_invalid": false,
+  "skipped_conversations": 1748,
+  "skipped_reasons": {
+    "too few assistant requests": 1748
+  },
+  "source": {
+    "dataset_id": "allenai/WildChat-1M",
+    "kind": "huggingface",
+    "license": "odc-by",
+    "requested_revision": "main",
+    "resolved_revision": "7d6490e462285cf85d91eabea0f9a954fbddcd1f",
+    "split": "train",
+    "url": "https://huggingface.co/datasets/allenai/WildChat-1M"
+  },
+  "tokenizer": {
+    "name": "cl100k_base",
+    "prompt_serialization": "prefix-cache-wildchat-chat-v1"
+  },
+  "turn_spacing_ms": 1000
+}

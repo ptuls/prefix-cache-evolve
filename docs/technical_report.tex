@@ -2338,8 +2338,14 @@ The following items are deliberately not promoted to retained principles:
   but cannot establish how byte, layer, transfer, or residency costs should alter the
   policy.
   \item \risk{Trace-calibrated and live metadata may reorder the synthetic findings.}
-  The metadata-only calibration and replay path exists, but retained principles still
-  require confirmation on held-out production-derived traces.
+  The first conversation-derived replay confirms this risk is real: on a
+  2{,}000-conversation WildChat-derived trace at the operative geometry, admit-all
+  baselines lead and both admission-selective incumbents finish last among caching
+  policies (token hit 0.240 versus 0.096), because conversation turns extend a
+  superset prefix and first-seen blocks have near-certain immediate reuse.  The
+  synthetic panel's pessimistic admission prior anti-transfers; a session-aware
+  optimistic prior and a conversation-growth workload family are the corresponding
+  policy and verifier levers.  Production serving traces remain untested.
   \item \risk{An explicit shadow-price dual with a switching cost may beat the
   pressure-aware incumbent at lower complexity.}  The explicit-dual reformulation
   (Section~\ref{sec:explicit-dual}) reaches a charged \(66\)--\(67\) against the incumbent's

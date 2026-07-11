@@ -125,11 +125,18 @@ prompt:
     versions retain decayed-frequency value after rollover; last_access_gap
     and access-gap statistics are available staleness signals; (3)
     tenant_phase_shift_cycles, trailing by about 1.6, likely the same
-    per-tenant gap; and (4) the fixed margin sits on a plateau next to a
+    per-tenant gap; (4) the fixed margin sits on a plateau next to a
     higher, narrow peak, so a margin adapted to observed admission pressure or
-    displacement-price movement may capture the peak robustly. Charged score
-    peaks near 90-140 evictions per 1,000 requests; treat that churn band as
-    the operating region.
+    displacement-price movement may capture the peak robustly; and (5) on
+    conversation-derived replay, where each turn's prompt extends the previous
+    one, the parent's pessimistic cold-start prior anti-transfers badly: a
+    first-seen block of an active session has near-certain immediate reuse, so
+    a bounded session-aware admission boost (session_id is request-visible) is
+    a measured external-transfer fix, though it must not regress the synthetic
+    panel that selection actually scores. Charged score on this panel peaks
+    near 90-140 evictions per 1,000 requests; treat that churn band as the
+    operating region for panel scoring, and treat it as panel-specific rather
+    than a universal constant.
 
     Default to local improvement of the supplied parent. Make exactly one
     semantic change per mutation. Preserve the existing class, imports, and
@@ -174,6 +181,7 @@ prompt:
     - "Do not chase shadow-price tracking fidelity; keep churn near the 90-140 per-1k operating band."
     - "Reduce the rolling_template_versions and tenant_phase_shift_cycles deficits without regressing the eight winning families."
     - "Improve fairness robustness, for example via bounded per-tenant prices or a tenant-conditioned margin."
+    - "Consider a bounded session-aware admission prior for active-session blocks; it must pay for itself on the panel."
 
 evaluator:
   timeout: 90

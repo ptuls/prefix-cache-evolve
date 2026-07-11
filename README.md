@@ -121,9 +121,25 @@ does not yet include a comparable cost study for open-source models.
 
 ### Evidence Boundary
 
-All reported comparisons use deterministic synthetic traffic. No public or
-external production trace contributes to the headline, so transfer to real
-serving traffic remains unanswered.
+All headline comparisons use deterministic synthetic traffic. No external trace
+contributes to the headline scores.
+
+A first conversation-derived transfer test now exists and is negative for the
+headline policies. Replaying a 2,000-conversation WildChat-derived trace (9,362
+requests) at the operative 16-token, 24/48-block geometry, admit-all baselines
+lead (token hit `0.240`), TinyLFU-LRU trails (`0.186`), and the admission-selective
+incumbents finish last among caching policies (current incumbent `0.096`; prior
+evolved incumbent `0.004`). The trace regime differs sharply from the synthetic
+panel: the median prompt (`736` tokens) exceeds the entire small cache tier, 65%
+of requests exceed it, each turn's prompt extends the previous one so first-seen
+blocks have near-certain immediate reuse, and the verifier's churn penalty
+saturates at its cap. Under those conditions admission selectivity is a
+liability, so the synthetic-panel headline does not transfer to this
+conversation-derived regime. WildChat is conversation-derived with synthetic
+intra-conversation spacing, not a production serving trace; transfer to real
+serving traffic remains unanswered. The replay artifact is at
+[`docs/results/wildchat_2k_replay.json`](docs/results/wildchat_2k_replay.json)
+with its conversion manifest beside it.
 
 The `vllm_apc` baseline emulates the core APC cache-policy behavior relevant to
 this benchmark: exact-prefix reuse of full KV blocks, protection of blocks used

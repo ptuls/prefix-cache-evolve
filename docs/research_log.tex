@@ -1246,6 +1246,65 @@ The general lesson is that faithful shadow-price tracking and low churn are in t
 and this verifier rewards the low-churn corner; the switching cost is the parameter that
 selects the operating point along that tradeoff.
 
+\subsection{Conversation-derived transfer test: admission selectivity anti-transfers}
+\label{sec:wildchat-transfer}
+
+\blocktag{16} The first external-trace experiment replays a WildChat-derived
+trace---2{,}000 conversations converted to 9{,}362 anonymized requests with HMAC
+identifiers and no prompt text---through every deployable policy at the operative
+16-token, 24/48-block geometry.  The result is a clean negative: the ranking is
+ordered \emph{inversely} by admission selectivity.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lrrr}
+\toprule
+Policy & Combined & Token hit & Churn/1k \\
+\midrule
+vllm\_apc (admit-all, pinned LRU) & 13.055 & 0.240 & 6{,}146.6 \\
+lfu / lru / other admit-all & 12.5--12.7 & 0.240 & \(\sim\)6{,}525 \\
+tinylfu\_lru (evidence hurdle) & 1.457 & 0.186 & 4{,}818.4 \\
+Switching-cost dual incumbent & \(-22.398\) & 0.096 & 2{,}603.7 \\
+Prior evolved incumbent (smoke slice) & \(-22.689\) & 0.004 & 73.7 \\
+no\_cache & \(-23.414\) & 0.000 & 0.0 \\
+\bottomrule
+\end{tabular}
+\caption{WildChat-derived replay at the operative geometry.  The prior incumbent row is
+from the 380-request smoke slice; all others are the full 9{,}362-request replay.}
+\label{tab:wildchat-transfer}
+\end{table}
+
+The mechanism is a regime mismatch, and the shadow-price frame explains it exactly.
+The median prompt is 736 tokens---46 blocks, larger than the entire 24-block
+tier---and 65\% of requests exceed that tier.  Each conversation turn's prompt
+extends the previous one, so a first-seen block has near-certain immediate reuse if
+the conversation continues: the optimal cold-start prior on a new arm is
+\emph{optimistic}, where the synthetic panel taught a pessimistic one.  The
+perpetually overflowing cache saturates \metric{recent_admission_pressure}, so the
+dual's price floor holds the admission hurdle permanently high, and the prior
+incumbent's pressure state shuts admission entirely (hit rate 0.004; the promoted
+dual transfers strictly better at 0.096).  A supplementary smoke replay at 96/192
+blocks does not rescue selectivity: admit-all reaches hit rate 0.58 while the dual
+reaches 0.17, so the failure is the admission prior, not capacity alone.  Finally,
+the churn penalty saturates at its cap (\metric{churn_cap} 25) at 6{,}500 evictions
+per 1{,}000 requests, so scoring in this regime is effectively hit-rate-only; whether
+admit-all ``really'' wins depends on whether eviction churn at that volume carries
+real cost, which the synthetic weighting was never calibrated to answer.
+
+Three consequences.  First, the headline is now explicitly bounded: the promoted
+policy's lead is a synthetic-panel result, and its admission economics anti-transfer
+to conversation-shaped traffic at the operative geometry.  Second, the deployable fix
+is a \important{session-aware admission prior}---\metric{session_id} is
+candidate-visible, and boosting admission for blocks of a currently active session is
+precisely the optimistic prior this traffic rewards; it joins the search objectives.
+Third, this is the strongest argument yet for a next verifier revision: either a
+conversation-growth workload family joins the panel, or trace replay becomes a
+reported non-selection gate, because otherwise evolution will keep sharpening an
+admission prior that points the wrong way on real conversations.  The replay artifact
+and conversion manifest are pinned under \filepath{docs/results/}; the trace itself is
+reproducible from the retained HMAC key.
+
 \section{Engineering Journey: From Prototype to Productive Evolution}
 \label{app:engineering-journey}
 

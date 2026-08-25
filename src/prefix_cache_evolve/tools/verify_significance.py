@@ -47,7 +47,6 @@ from typing import Callable
 import click
 
 from prefix_cache_evolve.artifacts import write_json
-from prefix_cache_evolve.evaluator_entry import load_candidate_factory
 from prefix_cache_evolve.evaluators.baselines import BASELINE_REGISTRY
 from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
 from prefix_cache_evolve.evaluators.contracts import PrefixKVPolicy
@@ -55,12 +54,24 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import PrefixKVCacheEvaluato
 from prefix_cache_evolve.evaluators.results import TrialMetrics
 from prefix_cache_evolve.evaluators.scoring import workload_base_score
 from prefix_cache_evolve.evaluators.verifier import require_single_score_identity
+from prefix_cache_evolve.problems.prefix_kv_cache.candidate_panels import (
+    load_validated_candidate_factory,
+)
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import (
     DEFAULT_CONFIG_PATH,
     load_evaluator_config,
 )
 from prefix_cache_evolve.problems.prefix_kv_cache.incumbents import (
     build_current_incumbent as build_production_incumbent,
+)
+from prefix_cache_evolve.tools.artifact_types import (
+    BootstrapConfidenceInterval,
+    ClusteredSignificanceResult,
+    PermutationTestResult,
+    ScoreIdentityRecord,
+    SeedDegeneracyResult,
+    SignificanceReport,
+    SignTestResult,
 )
 
 _DEFAULT_SPLITS = ("validation",)
@@ -130,7 +141,7 @@ def bootstrap_mean_ci(
     confidence: float = 0.95,
     resamples: int = 10000,
     seed: int = 0,
-) -> dict[str, float | int]:
+) -> BootstrapConfidenceInterval:
     """Return a deterministic percentile bootstrap CI for the mean.
 
     The paired differences are resampled with replacement using a seeded
@@ -161,7 +172,7 @@ def bootstrap_mean_ci(
     }
 
 
-def sign_test_p_value(values: list[float], *, tolerance: float = 1e-12) -> dict[str, float | int]:
+def sign_test_p_value(values: list[float], *, tolerance: float = 1e-12) -> SignTestResult:
     """Return an exact two-sided sign-test p-value for paired differences.
 
     Zero differences (within ``tolerance``) are dropped as ties. The p-value is
@@ -202,7 +213,7 @@ def permutation_p_value(
     *,
     resamples: int = 10000,
     seed: int = 0,
-) -> dict[str, float | int]:
+) -> PermutationTestResult:
     """Return a seeded two-sided paired sign-flip permutation p-value.
 
     Under the paired null, each difference's sign is exchangeable. Random sign
@@ -258,7 +269,7 @@ def clustered_significance(
     permutation_resamples: int,
     bootstrap_seed: int,
     permutation_seed: int,
-) -> dict[str, object]:
+) -> ClusteredSignificanceResult:
     """Return significance statistics on cluster-mean paired differences."""
     cluster_diffs = list(cluster_mean_differences(units, key).values())
     wins = sum(1 for value in cluster_diffs if value > 1e-12)
@@ -292,7 +303,7 @@ def clustered_significance(
     }
 
 
-def seed_degeneracy_report(units: list[PairedUnit]) -> dict[str, object]:
+def seed_degeneracy_report(units: list[PairedUnit]) -> SeedDegeneracyResult:
     """Report how many ``(family, capacity)`` cells ignore the seed.
 
     A cell whose per-seed differences are all identical contributes no
@@ -324,14 +335,14 @@ def _score_map(
     factory: Callable[..., PrefixKVPolicy],
     config: EvaluatorConfig,
     splits: tuple[str, ...],
-) -> tuple[dict[tuple[str, str, int, int], float], dict[str, object], float]:
+) -> tuple[dict[tuple[str, str, int, int], float], ScoreIdentityRecord, float]:
     """Return per-group behavioral scores plus panel identity and combined score."""
     result = PrefixKVCacheEvaluator(config, splits=splits)(factory)
     scores = {
         (trial.split, trial.workload, trial.capacity_blocks, trial.seed): group_score(trial, config)
         for trial in result.trials
     }
-    identity = {
+    identity: ScoreIdentityRecord = {
         "verifier_version": result.verifier_version,
         "evaluation_context_sha256": result.evaluation_context_sha256,
         "panel_sha256": result.panel_sha256,
@@ -354,7 +365,7 @@ def run_significance_analysis(
     permutation_resamples: int = 10000,
     bootstrap_seed: int = 0,
     permutation_seed: int = 0,
-) -> dict[str, object]:
+) -> SignificanceReport:
     """Run the paired per-group significance analysis on the validation panel."""
     baseline_factory = BASELINE_REGISTRY.factories(include_reporting=True).get(baseline_name)
     if baseline_factory is None:
@@ -521,7 +532,7 @@ def _verdict(mean_difference: float, ci_excludes_zero: bool, permutation_p: floa
     return "candidate_favored" if mean_difference > 0.0 else "baseline_favored"
 
 
-def _format_clustered(block: dict[str, object]) -> list[str]:
+def _format_clustered(block: ClusteredSignificanceResult) -> list[str]:
     """Return report lines for one clustered significance block."""
     bootstrap = block["bootstrap_confidence_interval"]
     permutation = block["permutation_test"]
@@ -540,7 +551,7 @@ def _format_clustered(block: dict[str, object]) -> list[str]:
     ]
 
 
-def format_report(payload: dict[str, object]) -> str:
+def format_report(payload: SignificanceReport) -> str:
     """Return a human-readable summary of the significance payload."""
     context = payload["combined_score_context"]
     clustered = payload["clustered"]
@@ -631,7 +642,10 @@ def main(
     candidate_factory: Callable[..., PrefixKVPolicy] = build_production_incumbent
     candidate_name = "production_incumbent"
     if candidate_program is not None:
-        candidate_factory = load_candidate_factory(str(candidate_program))
+        candidate_factory = load_validated_candidate_factory(
+            load_evaluator_config(config),
+            candidate_program,
+        )
         candidate_name = str(candidate_program)
     payload = run_significance_analysis(
         config,

@@ -96,10 +96,11 @@ def test_workflow_config_resolves_provider_and_search_seed() -> None:
     assert config.api_key_env == "LOCAL_MODEL_API_KEY"
 
 
-def test_levi_score_function_exposes_combined_score() -> None:
+def test_levi_score_function_preserves_identity_and_filters_nonfinite_metrics() -> None:
     def evaluate_factory(factory):
         return EvaluatorResult(
             metrics={
+                **score_identity(),
                 "combined_score": factory(),
                 "ignored_inf": float("inf"),
                 "ignored_text": "n/a",
@@ -109,22 +110,7 @@ def test_levi_score_function_exposes_combined_score() -> None:
 
     score_fn = LeviScoreFunction(evaluate_factory)
 
-    assert score_fn(lambda: 2.5) == {"score": 2.5, "combined_score": 2.5}
-
-
-def test_levi_score_function_preserves_score_identity() -> None:
-    def evaluate_factory(_factory):
-        return EvaluatorResult(
-            metrics={
-                **score_identity(),
-                "combined_score": 2.5,
-            },
-            artifacts={},
-        )
-
-    score_fn = LeviScoreFunction(evaluate_factory)
-
-    assert score_fn(lambda: None) == {
+    assert score_fn(lambda: 2.5) == {
         "score": 2.5,
         **score_identity(),
         "combined_score": 2.5,
@@ -377,68 +363,60 @@ def test_configured_paradigm_models_mirror_levi_empty_heavy_model_fallback() -> 
     assert _configured_paradigm_model_names(config) == frozenset({"openai/default-paradigm"})
 
 
+@pytest.mark.parametrize(
+    ("model", "requested_tokens", "reasoning_effort", "expected_tokens"),
+    (
+        pytest.param(
+            "openai/gpt-5.5",
+            4_096,
+            "medium",
+            12_000,
+            id="reasoning-paradigm",
+        ),
+        pytest.param(
+            "openai/gpt-5.5",
+            4_096,
+            None,
+            12_000,
+            id="paradigm-without-reasoning",
+        ),
+        pytest.param(
+            "openai/gpt-5.4-mini",
+            4_096,
+            "medium",
+            4_096,
+            id="mutation-budget-preserved",
+        ),
+        pytest.param(
+            "openai/gpt-5.5",
+            16_000,
+            None,
+            16_000,
+            id="larger-native-budget-preserved",
+        ),
+        pytest.param(
+            "openai/gpt-5.5",
+            4_096,
+            "disabled",
+            12_000,
+            id="disabled-reasoning",
+        ),
+    ),
+)
 @requires_levi
-def test_levi_reasoning_calls_use_configured_token_budget(monkeypatch) -> None:
-    from levi.pipeline.state import PipelineState
-
-    calls = []
-
-    async def fake_acompletion(
-        _self,
-        client_spec,
-        *,
-        prompt,
-        temperature=None,
-        max_tokens=None,
-        timeout=None,
-        **extras,
-    ):
-        calls.append(
-            {
-                "client_spec": client_spec,
-                "prompt": prompt,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-                "timeout": timeout,
-                **extras,
-            }
-        )
-        return "response"
-
-    monkeypatch.setattr(PipelineState, "acompletion", fake_acompletion)
-    state = object.__new__(PipelineState)
-
-    with activate_levi_runtime(
-        LeviRuntimeSettings(
-            search_seed=0,
-            paradigm_max_tokens=12_000,
-            paradigm_model_names=frozenset({"openai/gpt-5.5"}),
-        )
-    ):
-        result = asyncio.run(
-            state.acompletion(
-                "openai/gpt-5.5",
-                prompt=[{"role": "user", "content": "write code"}],
-                max_tokens=4_096,
-                reasoning_effort="medium",
-            )
-        )
-
-    assert result == "response"
-    assert calls[0]["max_tokens"] == 12_000
-    assert calls[0]["reasoning_effort"] == "medium"
-
-
-@requires_levi
-def test_levi_paradigm_model_without_reasoning_effort_uses_configured_budget(
-    monkeypatch,
+def test_levi_runtime_applies_model_specific_token_budgets(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    requested_tokens: int,
+    reasoning_effort: str | None,
+    expected_tokens: int,
 ) -> None:
     from levi.pipeline.state import PipelineState
 
     calls = []
 
-    async def fake_acompletion(_self, _client_spec, *, max_tokens=None, **_kwargs):
-        calls.append(max_tokens)
+    async def fake_acompletion(_self, client_spec, *, max_tokens=None, **extras):
+        calls.append({"client_spec": client_spec, "max_tokens": max_tokens, **extras})
         return "response"
 
     monkeypatch.setattr(PipelineState, "acompletion", fake_acompletion)
@@ -451,98 +429,16 @@ def test_levi_paradigm_model_without_reasoning_effort_uses_configured_budget(
             paradigm_model_names=frozenset({"openai/gpt-5.5"}),
         )
     ):
-        asyncio.run(state.acompletion("openai/gpt-5.5", prompt="shift", max_tokens=4_096))
+        arguments = {"prompt": "write code", "max_tokens": requested_tokens}
+        if reasoning_effort is not None:
+            arguments["reasoning_effort"] = reasoning_effort
+        result = asyncio.run(state.acompletion(model, **arguments))
 
-    assert calls == [12_000]
-
-
-@requires_levi
-def test_levi_mutation_calls_keep_requested_token_budget(monkeypatch) -> None:
-    from levi.pipeline.state import PipelineState
-
-    calls = []
-
-    async def fake_acompletion(_self, _client_spec, *, max_tokens=None, **_kwargs):
-        calls.append(max_tokens)
-        return "response"
-
-    monkeypatch.setattr(PipelineState, "acompletion", fake_acompletion)
-    state = object.__new__(PipelineState)
-
-    with activate_levi_runtime(
-        LeviRuntimeSettings(
-            search_seed=0,
-            paradigm_max_tokens=12_000,
-            paradigm_model_names=frozenset({"openai/gpt-5.5"}),
-        )
-    ):
-        asyncio.run(
-            state.acompletion(
-                "openai/gpt-5.4-mini",
-                prompt="mutate",
-                max_tokens=4_096,
-                reasoning_effort="medium",
-            )
-        )
-
-    assert calls == [4_096]
-
-
-@requires_levi
-def test_levi_native_or_nonlegacy_paradigm_budget_is_preserved(monkeypatch) -> None:
-    from levi.pipeline.state import PipelineState
-
-    calls = []
-
-    async def fake_acompletion(_self, _client_spec, *, max_tokens=None, **_kwargs):
-        calls.append(max_tokens)
-        return "response"
-
-    monkeypatch.setattr(PipelineState, "acompletion", fake_acompletion)
-    state = object.__new__(PipelineState)
-
-    with activate_levi_runtime(
-        LeviRuntimeSettings(
-            search_seed=0,
-            paradigm_max_tokens=12_000,
-            paradigm_model_names=frozenset({"openai/gpt-5.5"}),
-        )
-    ):
-        asyncio.run(state.acompletion("openai/gpt-5.5", prompt="shift", max_tokens=16_000))
-
-    assert calls == [16_000]
-
-
-@requires_levi
-def test_levi_disabled_reasoning_still_uses_configured_output_budget(monkeypatch) -> None:
-    from levi.pipeline.state import PipelineState
-
-    calls = []
-
-    async def fake_acompletion(_self, _client_spec, *, max_tokens=None, **_kwargs):
-        calls.append(max_tokens)
-        return "response"
-
-    monkeypatch.setattr(PipelineState, "acompletion", fake_acompletion)
-    state = object.__new__(PipelineState)
-
-    with activate_levi_runtime(
-        LeviRuntimeSettings(
-            search_seed=0,
-            paradigm_max_tokens=12_000,
-            paradigm_model_names=frozenset({"openai/gpt-5.5"}),
-        )
-    ):
-        asyncio.run(
-            state.acompletion(
-                "openai/gpt-5.5",
-                prompt="shift",
-                max_tokens=4_096,
-                reasoning_effort="disabled",
-            )
-        )
-
-    assert calls == [12_000]
+    assert result == "response"
+    assert calls[0]["client_spec"] == model
+    assert calls[0]["max_tokens"] == expected_tokens
+    if reasoning_effort is not None:
+        assert calls[0]["reasoning_effort"] == reasoning_effort
 
 
 @requires_levi

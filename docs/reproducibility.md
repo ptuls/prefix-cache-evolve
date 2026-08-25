@@ -117,6 +117,11 @@ guidance score. Final rediscovery adjudication always re-evaluates generated
 source with the unchanged canonical `configs/prefix_kv_cache.yaml`; probe and
 hidden panels remain unavailable during search.
 
+Ordinary run artifacts include selection and probe results but never evaluate
+or disclose the hidden panel. Hidden results are opened only by an explicit
+final-adjudication command, a requested hidden report, or specialist promotion
+adjudication. Keep those results separate from subsequent search decisions.
+
 Run at least three independent search seeds at the normal 300-evaluation budget:
 
 ```bash

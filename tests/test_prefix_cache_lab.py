@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import io
+import json
+from http import HTTPStatus
+from types import SimpleNamespace
+
 import pytest
 
 from prefix_cache_evolve.evaluators.prefix_kv_cache import (
@@ -11,7 +16,7 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import (
     build_workload,
 )
 from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.registry import current_incumbent
-from prefix_cache_evolve.problems.prefix_kv_cache.lab import SimulationLab
+from prefix_cache_evolve.problems.prefix_kv_cache.lab import LabRequestHandler, SimulationLab
 
 
 def _payload(**overrides):
@@ -234,3 +239,113 @@ def test_eviction_telemetry_exposes_legal_victims_without_changing_metrics() -> 
 def test_lab_rejects_invalid_simulation_inputs(overrides, message) -> None:
     with pytest.raises(ValueError, match=message):
         SimulationLab().simulate(_payload(**overrides))
+
+
+@pytest.mark.parametrize(
+    ("path", "expected_key"),
+    (("/api/catalog", "policies"), ("/api/health", "status")),
+)
+def test_lab_handler_serves_json_endpoints(
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    expected_key: str,
+) -> None:
+    handler = object.__new__(LabRequestHandler)
+    handler.path = path
+    responses = []
+    monkeypatch.setattr(handler, "_send_json", lambda payload: responses.append(payload))
+
+    handler.do_GET()
+
+    assert expected_key in responses[0]
+
+
+@pytest.mark.parametrize(
+    ("path", "content_type"),
+    (
+        ("/", "text/html; charset=utf-8"),
+        ("/styles.css", "text/css; charset=utf-8"),
+        ("/app.js", "text/javascript; charset=utf-8"),
+    ),
+)
+def test_lab_handler_serves_packaged_assets(
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    content_type: str,
+) -> None:
+    handler = object.__new__(LabRequestHandler)
+    handler.path = path
+    responses = []
+    monkeypatch.setattr(
+        handler,
+        "_send_bytes",
+        lambda body, response_type: responses.append((body, response_type)),
+    )
+
+    handler.do_GET()
+
+    assert responses[0][0]
+    assert responses[0][1] == content_type
+
+
+@pytest.mark.parametrize("method", ("do_GET", "do_POST"))
+def test_lab_handler_rejects_unknown_routes(
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+) -> None:
+    handler = object.__new__(LabRequestHandler)
+    handler.path = "/not-an-endpoint"
+    errors = []
+    monkeypatch.setattr(handler, "send_error", lambda status: errors.append(status))
+
+    getattr(handler, method)()
+
+    assert errors == [HTTPStatus.NOT_FOUND]
+
+
+def test_lab_handler_runs_valid_simulations(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = {"policies": ["lru"]}
+    body = json.dumps(payload).encode()
+    handler = object.__new__(LabRequestHandler)
+    handler.path = "/api/simulate"
+    handler.headers = {"Content-Length": str(len(body))}
+    handler.rfile = io.BytesIO(body)
+    handler.lab = SimpleNamespace(simulate=lambda received: {"received": received})
+    responses = []
+    monkeypatch.setattr(handler, "_send_json", lambda value: responses.append(value))
+
+    handler.do_POST()
+
+    assert responses == [{"received": payload}]
+
+
+@pytest.mark.parametrize(
+    ("body", "content_length", "message"),
+    (
+        (b"{", "1", "Expecting property name"),
+        (b"[]", "2", "JSON object"),
+        (b"", "-1", "nonnegative"),
+        (b"", "1000001", "too large"),
+    ),
+)
+def test_lab_handler_rejects_invalid_request_bodies(
+    monkeypatch: pytest.MonkeyPatch,
+    body: bytes,
+    content_length: str,
+    message: str,
+) -> None:
+    handler = object.__new__(LabRequestHandler)
+    handler.path = "/api/simulate"
+    handler.headers = {"Content-Length": content_length}
+    handler.rfile = io.BytesIO(body)
+    responses = []
+    monkeypatch.setattr(
+        handler,
+        "_send_json",
+        lambda payload, *, status: responses.append((payload, status)),
+    )
+
+    handler.do_POST()
+
+    assert message in responses[0][0]["error"]
+    assert responses[0][1] == HTTPStatus.BAD_REQUEST

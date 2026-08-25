@@ -31,6 +31,9 @@ check:
 	$(UV) run ruff check .
 	$(UV) run mypy
 	$(UV) run pytest -q --cov=prefix_cache_evolve --cov-report=term-missing --cov-fail-under=75
+	$(UV) run coverage report \
+		--include='*/evaluator_entry.py,*/candidate_panels.py,*/candidate_validation.py' \
+		--fail-under=80
 
 sandbox-image:
 	docker build --tag prefix-cache-evolve-sandbox --file docker/sandbox/Dockerfile .

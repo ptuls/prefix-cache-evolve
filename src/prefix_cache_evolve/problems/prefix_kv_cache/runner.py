@@ -37,6 +37,7 @@ from .candidate_panels import (
     SELECTION_PANEL,
     VALIDATION_PANEL,
     CandidatePanelBuilder,
+    CandidatePolicyValidationError,
 )
 from .candidate_panels import (
     evaluate_candidate_program as _evaluate_candidate_program,
@@ -308,15 +309,17 @@ def compare_baselines(
     )
     if quick:
         print(_QUICK_REPORT_WARNING)
-    results = _evaluate_baselines(config, include_reporting=True)
-    if candidate_program is not None:
+    if candidate_program is None:
+        results = _evaluate_baselines(config, include_reporting=True)
+    else:
         candidate_path = _resolve_candidate_program(candidate_program)
-        results = _candidate_panel_builder().add_candidate(
+        results = _candidate_panel_builder().build_comparison(
             config,
             candidate_path,
-            results,
+            lambda: _evaluate_baselines(config, include_reporting=True),
         )
-        report_path = candidate_path.parent / "baseline_comparison.md"
+        report_path = _baseline_comparison_output_path(candidate_path)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
         write_baseline_comparison_report(
             report_path,
             results,
@@ -354,6 +357,19 @@ def compare_baselines(
                 f"block_hit_rate={metrics['block_hit_rate']:.3f}, "
                 f"churn_per_1k={metrics['cache_churn_per_1k']:.1f}"
             )
+
+
+def _baseline_comparison_output_path(candidate_path: Path) -> Path:
+    """Keep generated reports outside immutable promoted-incumbent bundles."""
+    incumbent_root = _DEFAULT_SEED_PATH.parent.parent.resolve()
+    if candidate_path.resolve().is_relative_to(incumbent_root):
+        return (
+            Path("artifacts")
+            / "prefix_kv_cache_reports"
+            / candidate_path.parent.name
+            / "baseline_comparison.md"
+        )
+    return candidate_path.parent / "baseline_comparison.md"
 
 
 def write_baseline_plots(
@@ -680,10 +696,12 @@ def _persist_specialist_promotion_adjudication(
         candidate = _candidate_panel_decomposition(
             promotion_config,
             candidate_path,
+            include_hidden=True,
         )
         incumbent = _candidate_panel_decomposition(
             promotion_config,
             _DEFAULT_SEED_PATH,
+            include_hidden=True,
         )
         checks = {
             "complexity_within_promotion_limit": _promotion_check(
@@ -801,9 +819,15 @@ def _persist_specialist_promotion_adjudication(
 def _candidate_panel_decomposition(
     config: EvaluatorConfig,
     candidate_path: Path,
+    *,
+    include_hidden: bool = False,
 ) -> dict[str, Any]:
-    """Evaluate one candidate on selection, probe, and hidden panels."""
-    return _candidate_panel_builder().build_decomposition(config, candidate_path)
+    """Evaluate public panels and optionally include explicit hidden adjudication."""
+    return _candidate_panel_builder().build_decomposition(
+        config,
+        candidate_path,
+        include_hidden=include_hidden,
+    )
 
 
 def hidden_report(
@@ -1499,7 +1523,10 @@ def main(**kwargs: Any) -> None:
     """Run reports, trace tools, or the Levi evolution workflow."""
     from .runner_commands import RunnerOptions, dispatch
 
-    dispatch(RunnerOptions.from_mapping(kwargs))
+    try:
+        dispatch(RunnerOptions.from_mapping(kwargs))
+    except CandidatePolicyValidationError as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 def _show_resolved_config(

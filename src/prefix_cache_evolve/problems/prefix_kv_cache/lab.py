@@ -356,6 +356,8 @@ class LabRequestHandler(BaseHTTPRequestHandler):
             return
         try:
             content_length = int(self.headers.get("Content-Length", "0"))
+            if content_length < 0:
+                raise ValueError("request body length must be nonnegative")
             if content_length > 1_000_000:
                 raise ValueError("request body is too large")
             payload = json.loads(self.rfile.read(content_length))

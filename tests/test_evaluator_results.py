@@ -9,12 +9,6 @@ from prefix_cache_evolve.evaluators.results import (
 from prefix_cache_evolve.evaluators.scoring import aggregate_trials
 
 
-def test_prefix_kv_cache_facade_preserves_result_exports() -> None:
-    from prefix_cache_evolve.evaluators import prefix_kv_cache
-
-    assert prefix_kv_cache.TrialMetrics is TrialMetrics
-
-
 def test_trial_metric_schema_drives_serialization_and_aggregation() -> None:
     first = TrialMetrics(
         split="validation",

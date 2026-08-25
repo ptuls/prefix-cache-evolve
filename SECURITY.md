@@ -7,6 +7,12 @@ The evaluator's static checks, subprocess boundary, timeouts, and resource
 limits protect benchmark integrity and availability. They are not a security
 sandbox.
 
+Linux workers additionally receive an address-space resource limit. On macOS,
+where the equivalent resource limit is unsupported, the parent process samples
+worker resident memory and terminates workers that exceed their configured
+growth budget. Candidate execution fails closed when isolation or memory
+monitoring cannot be established.
+
 Do not evaluate untrusted candidates directly on a workstation containing
 credentials or sensitive files. Use the container profile under
 `docker/sandbox`, which runs as a non-root user with:

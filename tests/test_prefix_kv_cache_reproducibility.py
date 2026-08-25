@@ -20,8 +20,8 @@ from prefix_cache_evolve.problems.prefix_kv_cache.incumbents import (
 )
 from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.registry import (
     current_incumbent,
+    current_incumbents,
     incumbent_record,
-    incumbent_records,
     validate_incumbent_registry,
 )
 from prefix_cache_evolve.problems.prefix_kv_cache.reproducibility import (
@@ -35,7 +35,7 @@ _DISCOVERY_INCUMBENT = current_incumbent("discovery")
 _DISCOVERY_INCUMBENT_PATH = _DISCOVERY_INCUMBENT.source_path
 _PRODUCTION_INCUMBENT = current_incumbent("production")
 _PRODUCTION_INCUMBENT_PATH = _PRODUCTION_INCUMBENT.source_path
-_INCUMBENT_IDS = tuple(record.incumbent_id for record in incumbent_records())
+_CURRENT_INCUMBENT_IDS = tuple(record.incumbent_id for record in current_incumbents().values())
 _ONE_SEED_DISCOVERY_TOKEN_HIT_RATES = {
     "train/shared_system_prompt": 0.834446919079436,
     "train/rag_template_reuse": 0.820967146548542,
@@ -230,17 +230,26 @@ def test_pressure_aware_incumbent_matches_one_seed_discovery_scores() -> None:
 def test_incumbent_registry_preserves_exact_sources_and_metadata() -> None:
     records = validate_incumbent_registry()
     source = _PRODUCTION_INCUMBENT_PATH.read_text(encoding="utf-8")
-
-    assert {record.role for record in records} == {"discovery", "historical", "production"}
-    assert file_sha256(_PRODUCTION_INCUMBENT_PATH) == _PRODUCTION_INCUMBENT.source_sha256
-    assert scoring_fn_complexity(source, form_aware=True) == 572
-    assert _PRODUCTION_INCUMBENT.provenance["source_artifact_sha256"] == (
-        _PRODUCTION_INCUMBENT.source_sha256
+    historical_evaluator = PrefixKVCacheEvaluator(
+        _single_workload_config(),
+        splits=("train",),
     )
 
+    assert {record.role for record in records} == {"discovery", "historical", "production"}
+    assert all(file_sha256(record.source_path) == record.source_sha256 for record in records)
+    assert all(
+        record.provenance["source_artifact_sha256"] == record.source_sha256 for record in records
+    )
+    assert all(
+        historical_evaluator(record.load_factory()).success
+        for record in records
+        if record.role == "historical"
+    )
+    assert scoring_fn_complexity(source, form_aware=True) == 572
 
-@pytest.mark.parametrize("incumbent_id", _INCUMBENT_IDS)
-def test_registered_incumbent_matches_pinned_benchmark_identity(incumbent_id: str) -> None:
+
+@pytest.mark.parametrize("incumbent_id", _CURRENT_INCUMBENT_IDS)
+def test_current_incumbent_matches_pinned_benchmark_identity(incumbent_id: str) -> None:
     incumbent = incumbent_record(incumbent_id)
     benchmark = incumbent.benchmark
     config = load_evaluator_config(Path(str(benchmark["config_path"])))

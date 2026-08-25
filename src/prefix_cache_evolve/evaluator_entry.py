@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import ctypes
 import importlib.util
 import math
 import multiprocessing
 import os
 import sys
+import time
 import traceback
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Callable, Generic, Sequence, TypeVar, cast
@@ -21,6 +24,9 @@ except ImportError:  # pragma: no cover - Windows does not provide resource
 ResultT = TypeVar("ResultT")
 _PROCESS_MEMORY_HEADROOM_BYTES = 256 * 1024 * 1024
 _PROCESS_TERMINATE_GRACE_SECONDS = 0.05
+_PROCESS_MONITOR_INTERVAL_SECONDS = 0.02
+_DARWIN_PROCESS_TASK_INFO = 4
+_DARWIN_PROCESS_TASK_INFO_WORDS = 12
 
 
 def score_to_reward(score: float) -> float:
@@ -38,9 +44,10 @@ def run_with_timeout(
 ) -> ResultT:
     """Execute ``func`` in a forked worker with wall-clock and OS resource limits."""
     if multiprocessing.current_process().daemon:
-        # Pool workers cannot create child processes. Their parent pool is
-        # responsible for enforcing its evaluation timeout.
-        return func(*args, **kwargs)
+        raise RuntimeError(
+            "evaluation isolation cannot run inside a daemon process; "
+            "use a supervised non-daemon worker"
+        )
 
     try:
         context = multiprocessing.get_context("fork")
@@ -62,13 +69,12 @@ def run_with_timeout(
     process.start()
     send_conn.close()
     try:
-        if not receive_conn.poll(timeout_seconds):
-            _stop_process(process, force=True)
-            raise TimeoutError(f"evaluation exceeded {timeout_seconds}s wall-clock limit")
-        try:
-            payload = receive_conn.recv()
-        except EOFError as exc:
-            raise RuntimeError("evaluation worker exited without returning a result") from exc
+        payload = _receive_worker_payload(
+            receive_conn,
+            process,
+            timeout_seconds=timeout_seconds,
+            memory_limit_bytes=memory_limit_bytes,
+        )
     finally:
         receive_conn.close()
         _stop_process(process)
@@ -80,6 +86,53 @@ def run_with_timeout(
         raise values[0]
     error_type, error_message, full_traceback = values
     raise RuntimeError(f"evaluation worker raised {error_type}: {error_message}\n{full_traceback}")
+
+
+def _receive_worker_payload(
+    receive_conn: Any,
+    process: Any,
+    *,
+    timeout_seconds: float,
+    memory_limit_bytes: int | None,
+) -> tuple[Any, ...]:
+    """Receive a worker result while enforcing wall-clock and resident-memory limits."""
+    deadline = time.monotonic() + timeout_seconds
+    initial_resident_bytes: int | None = None
+    while True:
+        remaining_seconds = deadline - time.monotonic()
+        if remaining_seconds <= 0:
+            _stop_process(process, force=True)
+            raise TimeoutError(f"evaluation exceeded {timeout_seconds}s wall-clock limit")
+
+        wait_seconds = (
+            min(remaining_seconds, _PROCESS_MONITOR_INTERVAL_SECONDS)
+            if memory_limit_bytes is not None
+            else remaining_seconds
+        )
+        if receive_conn.poll(wait_seconds):
+            try:
+                payload = receive_conn.recv()
+            except EOFError as exc:
+                raise RuntimeError("evaluation worker exited without returning a result") from exc
+            if payload[0] != "ready":
+                return cast(tuple[Any, ...], payload)
+            initial_resident_bytes = payload[1]
+            if memory_limit_bytes is not None and initial_resident_bytes is None:
+                raise RuntimeError("candidate resident-memory monitoring is unavailable")
+            continue
+
+        if memory_limit_bytes is not None and initial_resident_bytes is not None:
+            resident_bytes = _process_resident_memory_bytes(process.pid)
+            if resident_bytes is None:
+                _stop_process(process, force=True)
+                raise RuntimeError("candidate resident-memory monitoring became unavailable")
+            if resident_bytes - initial_resident_bytes > memory_limit_bytes:
+                _stop_process(process, force=True)
+                growth_bytes = resident_bytes - initial_resident_bytes
+                raise MemoryError(
+                    f"evaluation worker resident memory grew by {growth_bytes} bytes "
+                    f"(> {memory_limit_bytes})"
+                )
 
 
 def _run_in_subprocess(
@@ -96,6 +149,7 @@ def _run_in_subprocess(
             memory_limit_bytes=memory_limit_bytes,
             cpu_limit_seconds=cpu_limit_seconds,
         )
+        send_conn.send(("ready", _process_resident_memory_bytes(os.getpid())))
         send_conn.send(("result", func(*args, **kwargs)))
     except BaseException as exc:  # pragma: no cover - exercised through parent process
         try:
@@ -144,6 +198,44 @@ def _current_virtual_memory_bytes() -> int | None:
         return int(statm[0]) * os.sysconf("SC_PAGE_SIZE")
     except (FileNotFoundError, OSError, ValueError, IndexError):
         return None
+
+
+def _process_resident_memory_bytes(process_id: int) -> int | None:
+    """Return resident memory for one worker on supported POSIX platforms."""
+    if sys.platform == "darwin":
+        try:
+            process_info = _darwin_process_info()
+            buffer = (ctypes.c_uint64 * _DARWIN_PROCESS_TASK_INFO_WORDS)()
+            bytes_written = process_info(
+                process_id,
+                _DARWIN_PROCESS_TASK_INFO,
+                0,
+                ctypes.byref(buffer),
+                ctypes.sizeof(buffer),
+            )
+            return int(buffer[1]) if bytes_written >= 2 * ctypes.sizeof(ctypes.c_uint64) else None
+        except (AttributeError, OSError, ValueError):
+            return None
+    try:
+        statm = Path(f"/proc/{process_id}/statm").read_text(encoding="ascii").split()
+        return int(statm[1]) * os.sysconf("SC_PAGE_SIZE")
+    except (FileNotFoundError, OSError, ValueError, IndexError):
+        return None
+
+
+@lru_cache(maxsize=1)
+def _darwin_process_info() -> Callable[..., int]:
+    """Return Darwin's process-information function without an external dependency."""
+    process_info = ctypes.CDLL(None).proc_pidinfo
+    process_info.argtypes = [
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_uint64,
+        ctypes.c_void_p,
+        ctypes.c_int,
+    ]
+    process_info.restype = ctypes.c_int
+    return cast(Callable[..., int], process_info)
 
 
 def _set_resource_limit(resource_id: int, soft_limit: int, hard_limit: int) -> None:

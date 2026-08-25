@@ -44,10 +44,6 @@ from prefix_cache_evolve.evaluators.verifier import (
 )
 from prefix_cache_evolve.problems.prefix_kv_cache import evaluator as levi_evaluator
 from prefix_cache_evolve.problems.prefix_kv_cache import runner as prefix_runner
-from prefix_cache_evolve.problems.prefix_kv_cache.candidate_panels import (
-    PROBE_PANEL,
-    CandidatePanelBuilder,
-)
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import (
     DEFAULT_CONFIG_PATH,
     PREFIX_KV_CONFIG_ENV,
@@ -166,151 +162,6 @@ def _report_result(
             "complexity_cost": 0.0,
         },
     )
-
-
-def test_candidate_panel_builder_preserves_candidate_first_order(tmp_path) -> None:
-    candidate_path = tmp_path / "candidate.py"
-    candidate_path.write_text("candidate source\n", encoding="utf-8")
-    calls = []
-
-    def evaluate_candidate(config, path, *, splits):
-        del config
-        calls.append(("candidate", path, splits))
-        return _report_result(12.0)
-
-    def build_baselines():
-        calls.append(("baselines",))
-        return {"lru": _report_result(10.0)}
-
-    builder = CandidatePanelBuilder(
-        evaluate_program=evaluate_candidate,
-        summarize_result=lambda result: {"combined_score": result.combined_score},
-    )
-
-    results = builder.build_comparison(
-        EvaluatorConfig(),
-        candidate_path,
-        build_baselines,
-        panel=PROBE_PANEL,
-    )
-
-    assert list(results) == ["candidate", "lru"]
-    assert calls == [
-        ("candidate", candidate_path, ("probe",)),
-        ("baselines",),
-    ]
-
-
-def test_candidate_panel_builder_preserves_decomposition_schema(tmp_path) -> None:
-    candidate_path = tmp_path / "candidate.py"
-    candidate_path.write_text("candidate source\n", encoding="utf-8")
-    evaluated_splits = []
-    complexity_calls = []
-    scores = {
-        ("train", "validation", "probe"): 12.0,
-        ("probe",): 8.0,
-        ("hidden",): 6.0,
-    }
-
-    def evaluate_candidate(config, path, *, splits):
-        del config
-        assert path == candidate_path
-        evaluated_splits.append(splits)
-        return _report_result(scores[splits])
-
-    def evaluate_complexity(source, *, form_aware=False):
-        complexity_calls.append((source, form_aware))
-        return 7 if form_aware else 10
-
-    builder = CandidatePanelBuilder(
-        evaluate_program=evaluate_candidate,
-        summarize_result=lambda result: {"combined_score": result.combined_score},
-        evaluate_complexity=evaluate_complexity,
-    )
-
-    payload = builder.build_decomposition(
-        EvaluatorConfig(form_aware_complexity=True),
-        candidate_path,
-    )
-
-    assert payload == {
-        "candidate": str(candidate_path),
-        "raw_complexity": 10,
-        "effective_complexity": 7,
-        "primitive_subsidy_nodes": 3,
-        "primitive_subsidy_exercised": True,
-        "selection": {"combined_score": 12.0},
-        "probe": {"combined_score": 8.0},
-        "hidden": {"combined_score": 6.0},
-    }
-    assert evaluated_splits == [
-        ("train", "validation", "probe"),
-        ("probe",),
-        ("hidden",),
-    ]
-    assert complexity_calls == [
-        ("candidate source\n", False),
-        ("candidate source\n", True),
-    ]
-
-
-def test_runner_candidate_panel_decomposition_preserves_artifact_schema(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    candidate_path = tmp_path / "candidate.py"
-    candidate_path.write_text(
-        "def build_candidate(capacity_blocks, block_size_tokens, seed=None):\n    return None\n",
-        encoding="utf-8",
-    )
-    scores = {
-        ("train", "validation", "probe"): 12.0,
-        ("probe",): 8.0,
-        ("hidden",): 6.0,
-    }
-
-    def evaluate_candidate(config, path, *, splits):
-        del config
-        assert path == candidate_path
-        return _report_result(scores[splits])
-
-    monkeypatch.setattr(
-        prefix_runner,
-        "_evaluate_candidate_program",
-        evaluate_candidate,
-    )
-
-    payload = prefix_runner._candidate_panel_decomposition(
-        EvaluatorConfig(),
-        candidate_path,
-    )
-
-    assert list(payload) == [
-        "candidate",
-        "raw_complexity",
-        "effective_complexity",
-        "primitive_subsidy_nodes",
-        "primitive_subsidy_exercised",
-        "selection",
-        "probe",
-        "hidden",
-    ]
-    assert list(payload["selection"]) == [
-        "verifier_version",
-        "evaluation_context_sha256",
-        "panel_sha256",
-        "combined_score",
-        "success",
-        "invalid_fraction",
-        "split_metrics",
-        "workload_metrics",
-        "capacity_metrics",
-        "candidate_metadata",
-        "score_breakdown",
-    ]
-    assert payload["selection"]["combined_score"] == 12.0
-    assert payload["probe"]["combined_score"] == 8.0
-    assert payload["hidden"]["combined_score"] == 6.0
 
 
 def _agentic_gate_metrics(
@@ -1386,137 +1237,6 @@ def test_evaluate_source_reports_runtime_contract_repairs(monkeypatch) -> None:
     assert "Implement on_request_start()" in result.artifacts["suggestion"]
 
 
-def test_static_policy_checks_validate_multi_timescale_decay_constructor() -> None:
-    config = EvaluatorConfig(reject_unsupported_source_patterns=True)
-    invalid_source = textwrap.dedent(
-        """
-        from prefix_cache_evolve.problems.prefix_kv_cache.primitives import MultiTimescaleDecay
-
-        class Policy:
-            def __init__(self):
-                self._state = MultiTimescaleDecay(4, 10)
-        """
-    )
-    valid_source = textwrap.dedent(
-        """
-        from prefix_cache_evolve.problems.prefix_kv_cache.primitives import MultiTimescaleDecay
-
-        class Policy:
-            def __init__(self):
-                self._state = MultiTimescaleDecay(half_lives=(4.0, 20.0), max_keys=64)
-        """
-    )
-
-    invalid = levi_evaluator._candidate_source_violations(
-        invalid_source,
-        complexity=1,
-        config=config,
-    )
-    valid = levi_evaluator._candidate_source_violations(
-        valid_source,
-        complexity=1,
-        config=config,
-    )
-
-    assert "MultiTimescaleDecay accepts only one positional argument" in invalid
-    assert "MultiTimescaleDecay half-lives must be a sequence" in invalid
-    assert valid == ()
-
-
-def test_static_policy_checks_validate_threshold_excess_signature() -> None:
-    config = EvaluatorConfig(reject_unsupported_source_patterns=True)
-    invalid_source = textwrap.dedent(
-        """
-        from prefix_cache_evolve.problems.prefix_kv_cache.primitives import threshold_excess
-
-        class Policy:
-            def score_admission(self, block, now):
-                return threshold_excess(block.depth)
-        """
-    )
-    valid_source = textwrap.dedent(
-        """
-        from prefix_cache_evolve.problems.prefix_kv_cache.primitives import threshold_excess
-
-        class Policy:
-            def score_admission(self, block, now):
-                return threshold_excess(block.depth, 2.0)
-        """
-    )
-
-    invalid = levi_evaluator._candidate_source_violations(
-        invalid_source,
-        complexity=1,
-        config=config,
-    )
-    valid = levi_evaluator._candidate_source_violations(
-        valid_source,
-        complexity=1,
-        config=config,
-    )
-
-    assert "threshold_excess requires value and threshold" in invalid
-    assert valid == ()
-
-
-def test_static_policy_checks_reject_scrubbed_request_fields() -> None:
-    config = EvaluatorConfig(reject_unsupported_source_patterns=True)
-    source = textwrap.dedent(
-        """
-        class Policy:
-            def on_request_start(self, request, now):
-                self.kind = request.request_type
-                self.tokens = request.prompt_tokens
-        """
-    )
-
-    violations = levi_evaluator._candidate_source_violations(
-        source,
-        complexity=1,
-        config=config,
-    )
-
-    assert "sanitized request field request_type is not a policy signal" in violations
-    assert "sanitized request field prompt_tokens is not a policy signal" in violations
-
-
-@pytest.mark.parametrize("builtin_name", ["exec", "eval", "compile", "vars"])
-def test_static_policy_checks_reject_dynamic_builtins(builtin_name: str) -> None:
-    config = EvaluatorConfig(reject_unsupported_source_patterns=True)
-    source = f"""
-class Policy:
-    def score_admission(self, block, now):
-        return {builtin_name}("0")
-"""
-
-    violations = levi_evaluator._candidate_source_violations(
-        source,
-        complexity=scoring_fn_complexity(source),
-        config=config,
-    )
-
-    assert f"{builtin_name}() is not allowed in candidate code" in violations
-
-
-def test_static_policy_checks_reject_aliased_dynamic_builtin() -> None:
-    config = EvaluatorConfig(reject_unsupported_source_patterns=True)
-    source = """
-class Policy:
-    def score_admission(self, block, now):
-        runner = exec
-        runner("pass")
-        return 0.0
-"""
-
-    violations = levi_evaluator._candidate_source_violations(
-        source,
-        complexity=scoring_fn_complexity(source),
-        config=config,
-    )
-
-    assert "exec() is not allowed in candidate code" in violations
-
-
 def test_evaluate_source_rejects_exec_laundering_end_to_end(monkeypatch) -> None:
     monkeypatch.setattr(
         levi_evaluator,
@@ -1533,123 +1253,6 @@ def test_evaluate_source_rejects_exec_laundering_end_to_end(monkeypatch) -> None
     assert result.metrics["success"] is False
     assert "exec() is not allowed in candidate code" in result.metrics["error"]
     assert "unsupported top-level statement Expr" in result.metrics["error"]
-
-
-def test_static_policy_checks_reject_dunder_attribute_access() -> None:
-    config = EvaluatorConfig(reject_unsupported_source_patterns=True)
-    source = """
-class Policy:
-    def score_admission(self, block, now):
-        return block.__class__
-"""
-
-    violations = levi_evaluator._candidate_source_violations(
-        source,
-        complexity=scoring_fn_complexity(source),
-        config=config,
-    )
-
-    assert "dunder attribute __class__ is not allowed" in violations
-
-
-def test_static_policy_checks_reject_decorators() -> None:
-    config = EvaluatorConfig(reject_unsupported_source_patterns=True)
-    source = """
-def decorate(policy):
-    return policy
-
-@decorate
-class Policy:
-    pass
-"""
-
-    violations = levi_evaluator._candidate_source_violations(
-        source,
-        complexity=scoring_fn_complexity(source),
-        config=config,
-    )
-
-    assert "decorators are not allowed in candidate code" in violations
-
-
-def test_static_policy_checks_reject_unsupported_top_level_statements() -> None:
-    config = EvaluatorConfig(reject_unsupported_source_patterns=True)
-    source = """
-if True:
-    class Policy:
-        pass
-"""
-
-    violations = levi_evaluator._candidate_source_violations(
-        source,
-        complexity=scoring_fn_complexity(source),
-        config=config,
-    )
-
-    assert "unsupported top-level statement If" in violations
-
-
-def test_static_policy_checks_reject_nonliteral_module_lambda() -> None:
-    config = EvaluatorConfig(reject_unsupported_source_patterns=True)
-    source = "score = lambda block, now: block.depth"
-
-    violations = levi_evaluator._candidate_source_violations(
-        source,
-        complexity=scoring_fn_complexity(source),
-        config=config,
-    )
-
-    assert "top-level assignments must define uppercase literal constants" in violations
-
-
-def test_static_policy_checks_restrict_candidate_imports() -> None:
-    config = EvaluatorConfig(reject_unsupported_source_patterns=True)
-    source = """
-from prefix_cache_evolve.evaluators.baselines import baseline_tinylfu_lru
-
-def build_candidate(capacity_blocks, block_size_tokens, seed=None):
-    return baseline_tinylfu_lru(capacity_blocks, block_size_tokens, seed)
-"""
-
-    violations = levi_evaluator._candidate_source_violations(
-        source,
-        complexity=scoring_fn_complexity(source),
-        config=config,
-    )
-
-    assert "import from unsupported module prefix_cache_evolve.evaluators.baselines" in violations
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        current_incumbent("discovery").source_path,
-        current_incumbent("production").source_path,
-    ],
-)
-def test_committed_incumbents_pass_static_source_contract(path: Path) -> None:
-    source = Path(path).read_text(encoding="utf-8")
-    complexity = scoring_fn_complexity(source, form_aware=True)
-    config = EvaluatorConfig(
-        max_candidate_complexity=650,
-        reject_unsupported_source_patterns=True,
-    )
-
-    assert levi_evaluator._candidate_source_violations(source, complexity, config) == ()
-
-
-def test_eviction_specialist_seed_passes_static_source_contract() -> None:
-    source = Path(
-        "src/prefix_cache_evolve/problems/prefix_kv_cache/seeds/eviction_specialist.py"
-    ).read_text(encoding="utf-8")
-    complexity = scoring_fn_complexity(source, form_aware=True)
-    config = EvaluatorConfig(
-        max_candidate_complexity=1000,
-        reject_unsupported_source_patterns=True,
-        candidate_policy_surface="eviction_only",
-    )
-
-    assert levi_evaluator._candidate_source_violations(source, complexity, config) == ()
 
 
 def test_evaluate_factory_uses_configured_timeout(monkeypatch) -> None:
@@ -4554,7 +4157,8 @@ def test_persist_best_generated_mutation_decomposes_strongest_non_seed(
         encoding="utf-8",
     )
 
-    def fake_decomposition(_config, candidate_path):
+    def fake_decomposition(_config, candidate_path, *, include_hidden=False):
+        assert include_hidden is False
         is_seed = candidate_path.name == "seed_program.py"
         return {
             "candidate": str(candidate_path),
@@ -4580,10 +4184,6 @@ def test_persist_best_generated_mutation_decomposes_strongest_non_seed(
                     "probe/cyclic_working_set_pressure": {"token_hit_rate": 0.7},
                 },
             },
-            "hidden": {
-                **score_identity(),
-                "combined_score": -1.0,
-            },
         }
 
     monkeypatch.setattr(
@@ -4605,9 +4205,12 @@ def test_persist_best_generated_mutation_decomposes_strongest_non_seed(
     )
     assert decomposition["generated_program_id"] == "strongest"
     assert decomposition["best_generated_mutation"]["primitive_subsidy_exercised"]
+    assert "hidden" not in decomposition["seed"]
+    assert "hidden" not in decomposition["best_generated_mutation"]
     report = (tmp_path / "best_generated_mutation_decomposition.md").read_text(encoding="utf-8")
     assert "Best generated mutation" in report
     assert "Agent hit" in report
+    assert "hidden panel remains quarantined" in report
 
 
 def test_specialist_promotion_adjudication_fails_over_complexity_limit(
@@ -4616,7 +4219,8 @@ def test_specialist_promotion_adjudication_fails_over_complexity_limit(
 ) -> None:
     (tmp_path / "best_program.py").write_text("candidate\n", encoding="utf-8")
 
-    def fake_decomposition(config, candidate_path):
+    def fake_decomposition(config, candidate_path, *, include_hidden=False):
+        assert include_hidden is True
         assert config.fixed_admission_policy is None
         assert config.max_candidate_complexity is None
         assert config.promotion_max_candidate_complexity is None
@@ -4693,7 +4297,8 @@ def test_eviction_only_promotion_adjudication_composes_complete_candidate(
     )
     captured_paths = []
 
-    def fake_decomposition(config, candidate_path):
+    def fake_decomposition(config, candidate_path, *, include_hidden=False):
+        assert include_hidden is True
         assert config.fixed_admission_policy is None
         assert config.candidate_policy_surface == "full"
         captured_paths.append(candidate_path)

@@ -10,10 +10,16 @@ from typing import Any, Protocol, cast
 from prefix_cache_evolve.evaluator_entry import load_candidate_factory, run_with_timeout
 from prefix_cache_evolve.evaluators.complexity import scoring_fn_complexity
 from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
+from prefix_cache_evolve.evaluators.contracts import PolicyFactory
 from prefix_cache_evolve.evaluators.results import EvaluationResult
 from prefix_cache_evolve.evaluators.workloads import WorkloadRequest
 
+from .candidate_validation import validate_candidate_source
 from .specialist import candidate_evaluator, candidate_exported_names
+
+
+class CandidatePolicyValidationError(ValueError):
+    """The candidate violates the benchmark's static deployability contract."""
 
 
 @dataclass(frozen=True)
@@ -125,19 +131,19 @@ class CandidatePanelBuilder:
         self,
         config: EvaluatorConfig,
         candidate_path: Path,
+        *,
+        include_hidden: bool = False,
     ) -> dict[str, Any]:
-        """Build the selection, probe, and hidden artifact for one candidate."""
+        """Build candidate artifacts, reserving hidden results for explicit adjudication."""
         source = candidate_path.read_text(encoding="utf-8")
         raw_complexity = self.evaluate_complexity(source)
         effective_complexity = self.evaluate_complexity(
             source,
             form_aware=config.form_aware_complexity,
         )
-        panels = (
-            SELECTION_PANEL,
-            PROBE_PANEL,
-            HIDDEN_PANEL,
-        )
+        panels: tuple[CandidatePanel, ...] = (SELECTION_PANEL, PROBE_PANEL)
+        if include_hidden:
+            panels += (HIDDEN_PANEL,)
         return {
             "candidate": str(candidate_path),
             "raw_complexity": raw_complexity,
@@ -161,15 +167,13 @@ def evaluate_candidate_program(
 ) -> EvaluationResult:
     """Evaluate a candidate program in an isolated worker."""
     source = candidate_path.read_text(encoding="utf-8")
+    complexity = _validated_candidate_complexity(source, config)
     return run_with_timeout(
         _evaluate_candidate_program_in_worker,
         config,
         candidate_path,
         splits,
-        scoring_fn_complexity(
-            source,
-            form_aware=config.form_aware_complexity,
-        ),
+        complexity,
         timeout_seconds=config.timeout_s,
         memory_limit_bytes=config.max_memory_bytes,
         cpu_limit_seconds=config.timeout_s,
@@ -203,15 +207,13 @@ def evaluate_replay_candidate_program(
 ) -> EvaluationResult:
     """Evaluate a candidate against a fixed replay request panel."""
     source = candidate_path.read_text(encoding="utf-8")
+    complexity = _validated_candidate_complexity(source, config)
     return run_with_timeout(
         _evaluate_replay_candidate_program_in_worker,
         config,
         candidate_path,
         requests,
-        scoring_fn_complexity(
-            source,
-            form_aware=config.form_aware_complexity,
-        ),
+        complexity,
         timeout_seconds=config.timeout_s,
         memory_limit_bytes=config.max_memory_bytes,
         cpu_limit_seconds=config.timeout_s,
@@ -236,4 +238,32 @@ def _evaluate_replay_candidate_program_in_worker(
         candidate_factory,
         requests,
         scoring_fn_complexity=complexity,
+    )
+
+
+def _validated_candidate_complexity(source: str, config: EvaluatorConfig) -> int:
+    """Validate the same deployability contract used by source-aware evolution."""
+    complexity = scoring_fn_complexity(source, form_aware=config.form_aware_complexity)
+    validation = validate_candidate_source(source, complexity, config)
+    if not validation.is_valid:
+        raise CandidatePolicyValidationError(
+            "candidate violates the static policy contract: "
+            f"{validation.violation_summary}. {validation.repair_summary}"
+        )
+    return complexity
+
+
+def load_validated_candidate_factory(
+    config: EvaluatorConfig,
+    candidate_path: Path,
+) -> PolicyFactory:
+    """Validate candidate source before loading it for trusted analysis tooling."""
+    source = candidate_path.read_text(encoding="utf-8")
+    _validated_candidate_complexity(source, config)
+    return cast(
+        PolicyFactory,
+        load_candidate_factory(
+            str(candidate_path),
+            exported_names=candidate_exported_names(config),
+        ),
     )

@@ -13,12 +13,8 @@ from click.testing import CliRunner
 
 from prefix_cache_evolve.problems.prefix_kv_cache.lab import main as lab_main
 from prefix_cache_evolve.problems.prefix_kv_cache.runner import main as runner_main
-from prefix_cache_evolve.tools.ablate_structured import main as ablate_main
-from prefix_cache_evolve.tools.analyze_eviction import main as eviction_main
-from prefix_cache_evolve.tools.analyze_reasoning_kv import main as reasoning_main
 from prefix_cache_evolve.tools.analyze_regret import main as regret_main
 from prefix_cache_evolve.tools.cli import main as tools_main
-from prefix_cache_evolve.tools.tune_compact import main as tune_main
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 plot_main = cast(
@@ -33,12 +29,7 @@ sweep_main = cast(
 _COMMANDS: tuple[tuple[str, click.Command], ...] = (
     ("runner", runner_main),
     ("lab", lab_main),
-    ("ablate", ablate_main),
-    ("eviction", eviction_main),
-    ("reasoning", reasoning_main),
-    ("regret", regret_main),
     ("tools", tools_main),
-    ("tune", tune_main),
     ("plot", plot_main),
     ("sweep", sweep_main),
 )
@@ -87,7 +78,30 @@ def test_runner_reports_missing_input_path_without_traceback() -> None:
     assert "Traceback" not in result.output
 
 
+def test_runner_reports_invalid_candidate_without_traceback(tmp_path: Path) -> None:
+    candidate = tmp_path / "invalid_candidate.py"
+    candidate.write_text("import os\n", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        runner_main,
+        ["--baseline-report", "--quick", "--candidate-program", str(candidate)],
+    )
+
+    assert result.exit_code != 0
+    assert "Error: candidate violates the static policy contract" in result.output
+    assert "import from unsupported module os" in result.output
+    assert "Traceback" not in result.output
+
+
 def test_tools_help_does_not_import_analysis_implementations() -> None:
+    help_result = CliRunner().invoke(tools_main, ["analyze", "--help"])
+
+    assert help_result.exit_code == 0
+    assert all(
+        command in help_result.output
+        for command in ("eviction", "rediscovery", "regret", "reasoning-kv")
+    )
+
     script = """
 import sys
 from click.testing import CliRunner
@@ -117,16 +131,11 @@ assert all(module not in sys.modules for module in modules)
 @pytest.mark.parametrize(
     "arguments",
     (
-        ["analyze", "--help"],
         ["analyze", "eviction", "--help"],
         ["analyze", "rediscovery", "--help"],
         ["analyze", "regret", "--help"],
         ["analyze", "reasoning-kv", "--help"],
         ["ablate", "structured", "--help"],
-        ["incumbents", "--help"],
-        ["incumbents", "list", "--help"],
-        ["incumbents", "validate", "--help"],
-        ["datasets", "--help"],
         ["datasets", "wildchat", "--help"],
         ["tune", "compact", "--help"],
     ),

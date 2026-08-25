@@ -137,6 +137,9 @@ uv run prefix-cache-evolve \
   src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/production_16tok_20260609/policy.py
 ```
 
+Reports for registered incumbents are written under
+`artifacts/prefix_kv_cache_reports/`, preserving immutable incumbent bundles.
+
 For development:
 
 ```bash

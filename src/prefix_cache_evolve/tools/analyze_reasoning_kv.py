@@ -25,6 +25,7 @@ from prefix_cache_evolve.problems.prefix_kv_cache.incumbents import (
 from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.registry import (
     current_incumbent,
 )
+from prefix_cache_evolve.tools.artifact_types import ArtifactRecord
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 _INCUMBENT_PATH = current_incumbent("discovery").source_path
@@ -53,9 +54,9 @@ def _raw_score(result: EvaluationResult) -> float:
     return result.combined_score + result.score_breakdown.get("complexity_cost", 0.0)
 
 
-def _summarize_result(result: EvaluationResult) -> dict[str, object]:
+def _summarize_result(result: EvaluationResult) -> ArtifactRecord:
     metrics = result.split_metrics["validation"]
-    summary: dict[str, object] = {
+    summary: ArtifactRecord = {
         "verifier_version": result.verifier_version,
         "evaluation_context_sha256": result.evaluation_context_sha256,
         "panel_sha256": result.panel_sha256,
@@ -86,7 +87,7 @@ def run_analysis(
     *,
     request_count: int | None = None,
     seeds: tuple[int, ...] | None = None,
-) -> dict[str, object]:
+) -> ArtifactRecord:
     """Run the policy panel under prefix-only and shared-KV capacity models."""
     base = load_evaluator_config(config_path)
     if request_count is not None:
@@ -102,7 +103,7 @@ def run_analysis(
         form_aware=base.form_aware_complexity,
     )
     policies = {"incumbent": build_incumbent, **REPORTING_BASELINES}
-    modes: dict[str, dict[str, object]] = {}
+    modes: dict[str, dict[str, ArtifactRecord]] = {}
     for mode in ("prefix_only", "shared"):
         mode_config = base.with_updates(kv_capacity_mode=mode)
         policy_results = {}
@@ -151,7 +152,7 @@ def run_analysis(
     }
 
 
-def _write_markdown(path: Path, payload: dict[str, object]) -> None:
+def _write_markdown(path: Path, payload: ArtifactRecord) -> None:
     modes = payload["modes"]
     verifier_version = require_single_verifier_version(
         (row for mode in modes.values() for row in mode.values()),

@@ -149,7 +149,7 @@ def _evaluate_path(
     """Evaluate one source path once per analysis."""
     key = normalized_source(path.read_text(encoding="utf-8"))
     if key not in cache:
-        cache[key] = _candidate_panel_decomposition(config, path)
+        cache[key] = _candidate_panel_decomposition(config, path, include_hidden=True)
     return cache[key]
 
 
@@ -283,7 +283,7 @@ def _rediscovery_targets(
 ) -> dict[str, dict[str, dict[str, float]]]:
     """Return charged and raw pass thresholds for each starting policy."""
     incumbent = references["incumbent"]["evaluation"]
-    targets = {}
+    targets: dict[str, dict[str, dict[str, float]]] = {}
     for label in ("weak_initial", "intermediate_compact"):
         seed = references[label]["evaluation"]
         targets[label] = {}

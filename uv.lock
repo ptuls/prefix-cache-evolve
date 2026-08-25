@@ -1353,6 +1353,7 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "hypothesis" },
     { name = "mypy" },
     { name = "numpy" },
     { name = "pytest" },
@@ -1384,6 +1385,7 @@ dev = [
 requires-dist = [
     { name = "click", specifier = ">=8.1,<9" },
     { name = "datasets", marker = "extra == 'wildchat'", specifier = ">=5.0,<6" },
+    { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.0,<7" },
     { name = "levi", marker = "extra == 'evolution'", git = "https://github.com/ttanv/levi.git?rev=ba14b302433a0f74687d4c98d3ea36c1bc8d0072" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.15,<2" },

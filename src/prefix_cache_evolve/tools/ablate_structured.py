@@ -22,6 +22,7 @@ from prefix_cache_evolve.problems.prefix_kv_cache.configuration import (
 from prefix_cache_evolve.problems.prefix_kv_cache.seeds.structured_recurrence import (
     StructuredRecurrencePolicy,
 )
+from prefix_cache_evolve.tools.artifact_types import ArtifactRecord
 
 
 @dataclass(frozen=True)
@@ -152,7 +153,7 @@ def _summary(result: EvaluationResult, split: str) -> dict[str, float | str]:
     }
 
 
-def run_ablation(config_path: Path) -> dict[str, object]:
+def run_ablation(config_path: Path) -> ArtifactRecord:
     """Evaluate every structured feature deletion on validation and probe."""
     config = load_evaluator_config(config_path)
     rows = []
@@ -202,7 +203,7 @@ def run_ablation(config_path: Path) -> dict[str, object]:
     }
 
 
-def _write_markdown(path: Path, payload: dict[str, object]) -> None:
+def _write_markdown(path: Path, payload: ArtifactRecord) -> None:
     variants = payload["variants"]
     verifier_version = require_single_verifier_version(
         (row[panel] for row in variants for panel in ("selection", "probe")),
@@ -237,7 +238,7 @@ def _write_markdown(path: Path, payload: dict[str, object]) -> None:
         "Probe raw | Agent hit | Cyclic hit | Probe churn/1k |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
-    for row in variants:  # type: ignore[assignment]
+    for row in variants:
         selection = row["selection"]
         probe = row["probe"]
         families = row["probe_families"]

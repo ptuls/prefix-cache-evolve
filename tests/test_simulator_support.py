@@ -58,9 +58,8 @@ def _block(**overrides: object) -> _BlockState:
     return _BlockState(**values)
 
 
-@pytest.mark.parametrize(
-    "name",
-    (
+def test_prefix_kv_cache_preserves_simulator_support_exports() -> None:
+    names = (
         "_ActiveDecode",
         "_AdmissionAccounting",
         "_AdmissionAudit",
@@ -71,10 +70,11 @@ def _block(**overrides: object) -> _BlockState:
         "_correlation",
         "_request_arrival_steps",
         "_window_mean",
-    ),
-)
-def test_prefix_kv_cache_preserves_simulator_support_exports(name: str) -> None:
-    assert getattr(prefix_kv_cache, name) is getattr(simulator_support, name)
+    )
+
+    assert {name: getattr(prefix_kv_cache, name) for name in names} == {
+        name: getattr(simulator_support, name) for name in names
+    }
 
 
 def test_request_arrival_steps_preserve_defaults_and_validate_order() -> None:

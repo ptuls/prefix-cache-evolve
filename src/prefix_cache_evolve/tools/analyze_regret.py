@@ -10,7 +10,6 @@ from typing import Callable, Iterable
 import click
 
 from prefix_cache_evolve.artifacts import write_json
-from prefix_cache_evolve.evaluator_entry import load_candidate_factory
 from prefix_cache_evolve.evaluators.baselines import (
     baseline_cost_aware_lru,
     baseline_lfu_blocks,
@@ -32,6 +31,9 @@ from prefix_cache_evolve.evaluators.utilities import percentile
 from prefix_cache_evolve.evaluators.verifier import (
     require_single_score_identity,
 )
+from prefix_cache_evolve.problems.prefix_kv_cache.candidate_panels import (
+    load_validated_candidate_factory,
+)
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import (
     DEFAULT_CONFIG_PATH,
     load_evaluator_config,
@@ -51,6 +53,7 @@ from prefix_cache_evolve.problems.prefix_kv_cache.seeds.structured_recurrence im
 from prefix_cache_evolve.problems.prefix_kv_cache.seeds.structured_seed import (
     build_candidate as build_structured_seed,
 )
+from prefix_cache_evolve.tools.artifact_types import ArtifactRecord
 
 _DEFAULT_SPLITS = ("train", "validation", "probe", "hidden")
 build_compact_seed = incumbent_record("historical_compact_20260607").load_factory()
@@ -120,7 +123,7 @@ EVICTION_POLICY_SPECS = (
 )
 
 
-def _trial_row(trial: TrialMetrics) -> dict[str, object]:
+def _trial_row(trial: TrialMetrics) -> ArtifactRecord:
     """Return the regret decomposition for one workload-capacity-seed group."""
     admission_regret = (
         trial.avoidable_admission_regret_tokens + trial.avoidable_rejection_regret_tokens
@@ -167,7 +170,7 @@ def _trial_row(trial: TrialMetrics) -> dict[str, object]:
     }
 
 
-def _summarize_groups(groups: Iterable[dict[str, object]]) -> dict[str, object]:
+def _summarize_groups(groups: Iterable[ArtifactRecord]) -> ArtifactRecord:
     """Summarize strict admission dominance over valid regretful groups."""
     groups = list(groups)
     valid = [group for group in groups if not group["invalid"]]
@@ -259,11 +262,11 @@ def _summarize_groups(groups: Iterable[dict[str, object]]) -> dict[str, object]:
 
 
 def _group_summaries(
-    groups: list[dict[str, object]],
-    key_fn: Callable[[dict[str, object]], str],
-) -> dict[str, dict[str, object]]:
+    groups: list[ArtifactRecord],
+    key_fn: Callable[[ArtifactRecord], str],
+) -> dict[str, ArtifactRecord]:
     """Summarize groups under stable labels."""
-    grouped: dict[str, list[dict[str, object]]] = {}
+    grouped: dict[str, list[ArtifactRecord]] = {}
     for group in groups:
         grouped.setdefault(key_fn(group), []).append(group)
     return {key: _summarize_groups(values) for key, values in sorted(grouped.items())}
@@ -280,7 +283,7 @@ def run_analysis(
     policy_name: str = "pressure_aware_incumbent",
     fixed_admission_factory: Callable[..., PrefixKVPolicy] | None = None,
     expose_future_reuse: bool = False,
-) -> dict[str, object]:
+) -> ArtifactRecord:
     """Run the local-oracle regret audit over workload-capacity-seed groups."""
     config = load_evaluator_config(config_path)
     updates: dict[str, object] = {}
@@ -340,7 +343,7 @@ def run_analysis(
     }
 
 
-def _shadow_trial_row(trial: TrialMetrics) -> dict[str, object]:
+def _shadow_trial_row(trial: TrialMetrics) -> ArtifactRecord:
     """Return calibrated water-level tracking diagnostics for one replay."""
     decisions = [decision for decision in trial.admission_decisions if decision.feasible]
     scale = trial.shadow_price_score_scale
@@ -405,7 +408,7 @@ def _shadow_decision_row(
     scale: float,
     oracle_change: float,
     fast_change: bool,
-) -> dict[str, object]:
+) -> ArtifactRecord:
     """Calibrate one policy score into the oracle value-density units."""
     implied_shadow_price = decision.incoming_value_density - scale * decision.score
     return {
@@ -429,7 +432,7 @@ def _shadow_decision_row(
     }
 
 
-def _summarize_shadow_groups(groups: list[dict[str, object]]) -> dict[str, object]:
+def _summarize_shadow_groups(groups: list[ArtifactRecord]) -> ArtifactRecord:
     """Summarize tracking quality and the fast-change regret prediction."""
     analyzable = [
         group
@@ -502,7 +505,7 @@ def run_shadow_price_analysis(
     capacity_blocks: tuple[int, ...] | None = None,
     factory: Callable[..., PrefixKVPolicy] = build_incumbent,
     policy_name: str = "pressure_aware_incumbent",
-) -> dict[str, object]:
+) -> ArtifactRecord:
     """Measure oracle and policy-implied admission shadow-price trajectories."""
     config = load_evaluator_config(config_path)
     updates: dict[str, object] = {}
@@ -671,7 +674,7 @@ def _causal_effects(
     }
 
 
-def _summarize_causal_groups(groups: list[dict[str, object]]) -> dict[str, object]:
+def _summarize_causal_groups(groups: list[ArtifactRecord]) -> ArtifactRecord:
     """Summarize paired causal effects over a stable group collection."""
     effect_tolerance = 1e-9
     effects = {
@@ -748,7 +751,7 @@ def run_causal_component_factorial(
     capacity_blocks: tuple[int, ...] | None = None,
     factory: Callable[..., PrefixKVPolicy] = build_production_incumbent,
     policy_name: str = "production_incumbent",
-) -> dict[str, object]:
+) -> ArtifactRecord:
     """Run incumbent/oracle admission-by-eviction crossed replays."""
     config = load_evaluator_config(config_path)
     updates: dict[str, object] = {}
@@ -789,12 +792,12 @@ def run_causal_component_factorial(
     common_keys = set.intersection(*(set(trials) for trials in cell_trials.values()))
     groups = []
     for key in sorted(common_keys):
-        cells = {
-            cell: {
-                **cell_identities[cell],
-                **_causal_trial_outcomes(trials[key], config),
-            }
+        outcomes = {
+            cell: _causal_trial_outcomes(trials[key], config)
             for cell, trials in cell_trials.items()
+        }
+        cells: dict[str, ArtifactRecord] = {
+            cell: {**cell_identities[cell], **outcome} for cell, outcome in outcomes.items()
         }
         incumbent_trial = cell_trials["II"][key]
         admission_regret = (
@@ -816,7 +819,7 @@ def run_causal_component_factorial(
                 "audit_eviction_regret_tokens": eviction_regret,
                 "audit_eviction_dominant": eviction_regret > admission_regret,
                 "cells": cells,
-                "effects": _causal_effects(cells),
+                "effects": _causal_effects(outcomes),
             }
         )
 
@@ -869,9 +872,9 @@ def run_admission_policy_sweep(
     splits: tuple[str, ...] = _DEFAULT_SPLITS,
     workloads: tuple[str, ...] | None = None,
     policy_specs: tuple[AdmissionPolicySpec, ...] = ADMISSION_POLICY_SPECS,
-) -> dict[str, object]:
+) -> ArtifactRecord:
     """Evaluate every distinct admission rule with fixed LRU eviction."""
-    policies: dict[str, dict[str, object]] = {}
+    policies: dict[str, ArtifactRecord] = {}
     for specification in policy_specs:
         analysis = run_analysis(
             config_path,
@@ -921,9 +924,9 @@ def run_admission_eviction_matrix(
     workloads: tuple[str, ...] | None = None,
     admission_specs: tuple[AdmissionPolicySpec, ...] = ADMISSION_POLICY_SPECS,
     eviction_specs: tuple[EvictionPolicySpec, ...] = EVICTION_POLICY_SPECS,
-) -> dict[str, object]:
+) -> ArtifactRecord:
     """Cross every distinct admission rule with representative eviction rules."""
-    combinations: dict[str, dict[str, object]] = {}
+    combinations: dict[str, ArtifactRecord] = {}
     for admission in admission_specs:
         for eviction in eviction_specs:
             key = f"{admission.name}+{eviction.name}"
@@ -979,7 +982,7 @@ def run_admission_eviction_matrix(
     }
 
 
-def _summary_row(label: str, summary: dict[str, object]) -> str:
+def _summary_row(label: str, summary: ArtifactRecord) -> str:
     """Render one aggregate Markdown row."""
     return (
         f"| `{label}` | {summary['regretful_group_count']} | "
@@ -991,7 +994,7 @@ def _summary_row(label: str, summary: dict[str, object]) -> str:
     )
 
 
-def _write_markdown(path: Path, payload: dict[str, object]) -> None:
+def _write_markdown(path: Path, payload: ArtifactRecord) -> None:
     """Write a human-readable falsification report."""
     summary = payload["summary"]
     groups = payload["groups"]
@@ -1155,7 +1158,7 @@ def _write_markdown(path: Path, payload: dict[str, object]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _write_admission_policy_markdown(path: Path, payload: dict[str, object]) -> None:
+def _write_admission_policy_markdown(path: Path, payload: ArtifactRecord) -> None:
     """Write the controlled fixed-LRU admission-policy comparison."""
     verifier_version = require_single_score_identity(
         payload["policies"].values(),
@@ -1243,7 +1246,7 @@ def _write_admission_policy_markdown(path: Path, payload: dict[str, object]) -> 
 
 def _write_admission_eviction_matrix_markdown(
     path: Path,
-    payload: dict[str, object],
+    payload: ArtifactRecord,
 ) -> None:
     """Write realized and local-regret results for the policy matrix."""
     combinations = payload["combinations"]
@@ -1383,12 +1386,12 @@ def _write_admission_eviction_matrix_markdown(
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _format_shadow_lift(value: object) -> str:
+def _format_shadow_lift(value: float | int | None) -> str:
     """Render a finite regret lift or an explicit infinite result."""
     return "infinite" if value is None else f"{float(value):.2f}x"
 
 
-def _write_shadow_price_markdown(path: Path, payload: dict[str, object]) -> None:
+def _write_shadow_price_markdown(path: Path, payload: ArtifactRecord) -> None:
     """Write the theory-grounded shadow-price tracking report."""
     verifier_version = require_single_score_identity(
         payload["groups"],
@@ -1513,7 +1516,7 @@ def _write_shadow_price_markdown(path: Path, payload: dict[str, object]) -> None
 
 def _write_causal_component_markdown(
     path: Path,
-    payload: dict[str, object],
+    payload: ArtifactRecord,
 ) -> None:
     """Write the incumbent/oracle component-factorial report."""
     verifier_version = require_single_score_identity(
@@ -1756,10 +1759,13 @@ def main(
 
     if causal_components:
         output_path = output or Path("artifacts/prefix_kv_cache_causal_component_factorial.json")
-        factory = build_production_incumbent
+        factory: Callable[..., PrefixKVPolicy] = build_production_incumbent
         policy_name = "production_incumbent"
         if candidate_program is not None:
-            factory = load_candidate_factory(str(candidate_program))
+            factory = load_validated_candidate_factory(
+                load_evaluator_config(config),
+                candidate_program,
+            )
             policy_name = str(candidate_program)
         payload = run_causal_component_factorial(
             config,
@@ -1784,7 +1790,10 @@ def main(
         factory = build_production_incumbent
         policy_name = "production_incumbent"
         if candidate_program is not None:
-            factory = load_candidate_factory(str(candidate_program))
+            factory = load_validated_candidate_factory(
+                load_evaluator_config(config),
+                candidate_program,
+            )
             policy_name = str(candidate_program)
         payload = run_shadow_price_analysis(
             config,
@@ -1809,7 +1818,10 @@ def main(
     factory = build_incumbent
     policy_name = "pressure_aware_incumbent"
     if candidate_program is not None:
-        factory = load_candidate_factory(str(candidate_program))
+        factory = load_validated_candidate_factory(
+            load_evaluator_config(config),
+            candidate_program,
+        )
         policy_name = str(candidate_program)
     payload = run_analysis(
         config,

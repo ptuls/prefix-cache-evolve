@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import click
 
+from prefix_cache_evolve.artifacts import write_json
 from prefix_cache_evolve.evaluators.baselines import BASELINE_REGISTRY, REPORTING_BASELINES
 from prefix_cache_evolve.evaluators.complexity import scoring_fn_complexity
-from prefix_cache_evolve.evaluators.prefix_kv_cache import (
-    EvaluationResult,
-    PrefixKVCacheEvaluator,
-)
+from prefix_cache_evolve.evaluators.prefix_kv_cache import PrefixKVCacheEvaluator
+from prefix_cache_evolve.evaluators.results import EvaluationResult
 from prefix_cache_evolve.evaluators.verifier import (
     require_single_score_identity,
     require_single_verifier_version,
@@ -27,6 +25,7 @@ from prefix_cache_evolve.problems.prefix_kv_cache.incumbents import (
 from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.registry import (
     current_incumbent,
 )
+from prefix_cache_evolve.tools.artifact_types import ArtifactRecord
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 _INCUMBENT_PATH = current_incumbent("discovery").source_path
@@ -55,9 +54,9 @@ def _raw_score(result: EvaluationResult) -> float:
     return result.combined_score + result.score_breakdown.get("complexity_cost", 0.0)
 
 
-def _summarize_result(result: EvaluationResult) -> dict[str, object]:
+def _summarize_result(result: EvaluationResult) -> ArtifactRecord:
     metrics = result.split_metrics["validation"]
-    summary: dict[str, object] = {
+    summary: ArtifactRecord = {
         "verifier_version": result.verifier_version,
         "evaluation_context_sha256": result.evaluation_context_sha256,
         "panel_sha256": result.panel_sha256,
@@ -88,7 +87,7 @@ def run_analysis(
     *,
     request_count: int | None = None,
     seeds: tuple[int, ...] | None = None,
-) -> dict[str, object]:
+) -> ArtifactRecord:
     """Run the policy panel under prefix-only and shared-KV capacity models."""
     base = load_evaluator_config(config_path)
     if request_count is not None:
@@ -104,7 +103,7 @@ def run_analysis(
         form_aware=base.form_aware_complexity,
     )
     policies = {"incumbent": build_incumbent, **REPORTING_BASELINES}
-    modes: dict[str, dict[str, object]] = {}
+    modes: dict[str, dict[str, ArtifactRecord]] = {}
     for mode in ("prefix_only", "shared"):
         mode_config = base.with_updates(kv_capacity_mode=mode)
         policy_results = {}
@@ -153,7 +152,7 @@ def run_analysis(
     }
 
 
-def _write_markdown(path: Path, payload: dict[str, object]) -> None:
+def _write_markdown(path: Path, payload: ArtifactRecord) -> None:
     modes = payload["modes"]
     verifier_version = require_single_verifier_version(
         (row for mode in modes.values() for row in mode.values()),
@@ -276,7 +275,7 @@ def _write_markdown(path: Path, payload: dict[str, object]) -> None:
 @click.command()
 @click.option(
     "--config",
-    type=click.Path(path_type=Path),
+    type=click.Path(path_type=Path, exists=True, dir_okay=False, readable=True),
     default=DEFAULT_CONFIG_PATH,
     show_default=True,
 )
@@ -307,8 +306,7 @@ def main(
         request_count=request_count,
         seeds=seeds or None,
     )
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json(output, payload)
     markdown.parent.mkdir(parents=True, exist_ok=True)
     _write_markdown(markdown, payload)
     click.echo(output)

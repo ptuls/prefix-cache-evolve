@@ -149,7 +149,7 @@ def _evaluate_path(
     """Evaluate one source path once per analysis."""
     key = normalized_source(path.read_text(encoding="utf-8"))
     if key not in cache:
-        cache[key] = _candidate_panel_decomposition(config, path)
+        cache[key] = _candidate_panel_decomposition(config, path, include_hidden=True)
     return cache[key]
 
 
@@ -283,7 +283,7 @@ def _rediscovery_targets(
 ) -> dict[str, dict[str, dict[str, float]]]:
     """Return charged and raw pass thresholds for each starting policy."""
     incumbent = references["incumbent"]["evaluation"]
-    targets = {}
+    targets: dict[str, dict[str, dict[str, float]]] = {}
     for label in ("weak_initial", "intermediate_compact"):
         seed = references[label]["evaluation"]
         targets[label] = {}
@@ -374,13 +374,13 @@ def run_analysis(
 @click.command()
 @click.option(
     "--config",
-    type=click.Path(path_type=Path),
+    type=click.Path(path_type=Path, exists=True, dir_okay=False, readable=True),
     default=_DEFAULT_CONFIG_PATH,
     show_default=True,
 )
 @click.option(
     "--adjudication-config",
-    type=click.Path(path_type=Path),
+    type=click.Path(path_type=Path, exists=True, dir_okay=False, readable=True),
     default=_DEFAULT_ADJUDICATION_CONFIG_PATH,
     show_default=True,
     help="Canonical config used for final selection, probe, and hidden scoring.",
@@ -388,7 +388,7 @@ def run_analysis(
 @click.option(
     "--run",
     "run_dirs",
-    type=click.Path(path_type=Path, file_okay=False),
+    type=click.Path(path_type=Path, exists=True, file_okay=False, readable=True),
     multiple=True,
     help="Saved weak-seed evolution run directory. May be repeated.",
 )

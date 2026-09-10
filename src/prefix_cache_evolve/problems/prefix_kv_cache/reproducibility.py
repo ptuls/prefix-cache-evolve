@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
 import inspect
 import platform
 from pathlib import Path
 from typing import Any, Mapping
 
+from prefix_cache_evolve.artifacts import file_sha256 as file_sha256
+from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
 from prefix_cache_evolve.evaluators.fingerprints import (
     evaluation_context_sha256,
     panel_sha256,
@@ -19,11 +20,8 @@ from prefix_cache_evolve.evaluators.panels import (
     prepare_workloads,
     trace_geometry_overrides,
 )
-from prefix_cache_evolve.evaluators.prefix_kv_cache import (
-    EvaluatorConfig,
-    build_workload,
-)
 from prefix_cache_evolve.evaluators.verifier import require_single_score_identity
+from prefix_cache_evolve.evaluators.workloads import build_workload
 
 
 def build_workload_manifest(
@@ -95,15 +93,6 @@ def stable_workload_manifest_payload(manifest: Mapping[str, Any]) -> dict[str, A
         "evaluation": evaluation,
         "streams": manifest.get("streams"),
     }
-
-
-def file_sha256(path: Path) -> str:
-    """Return the SHA-256 hash of one input file."""
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _generator_metadata() -> dict[str, str]:

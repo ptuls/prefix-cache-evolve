@@ -33,7 +33,7 @@ jobs:
       - name: Lint
         run: uv run ruff check .
 
-      - name: Type check package core
+      - name: Type check the complete package and research tools
         run: uv run mypy
 
       - name: Verify discovery workload manifest
@@ -54,12 +54,24 @@ jobs:
           --cov-report=term-missing
           --cov-fail-under=75
 
+      - name: Enforce coverage for candidate isolation and validation
+        run: >-
+          uv run coverage report
+          --include='*/evaluator_entry.py,*/candidate_panels.py,*/candidate_validation.py'
+          --fail-under=80
+
   compatibility:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.12", "3.13"]
+        include:
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: ubuntu-latest
+            python-version: "3.13"
+          - os: macos-latest
+            python-version: "3.11"
     steps:
       - name: Check out repository
         uses: actions/checkout@v6

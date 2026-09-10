@@ -2,27 +2,27 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
 
 import click
 
+from prefix_cache_evolve.artifacts import write_json
 from prefix_cache_evolve.evaluators.complexity import scoring_fn_complexity
+from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
 from prefix_cache_evolve.evaluators.contracts import PrefixBlockInfo, RequestInfo
 from prefix_cache_evolve.evaluators.prefix_kv_cache import (
-    EvaluationResult,
-    EvaluatorConfig,
     PrefixKVCacheEvaluator,
     PrefixKVCacheSimulator,
-    build_workload,
 )
+from prefix_cache_evolve.evaluators.results import EvaluationResult
 from prefix_cache_evolve.evaluators.telemetry import EvictionDecisionSnapshot
 from prefix_cache_evolve.evaluators.verifier import (
     require_single_score_identity,
     require_single_verifier_version,
 )
+from prefix_cache_evolve.evaluators.workloads import build_workload
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import (
     EVICTION_SPECIALIST_CONFIG_PATH,
     load_evaluator_config,
@@ -37,6 +37,7 @@ from prefix_cache_evolve.problems.prefix_kv_cache.specialist import (
     EvictionOnlyEvaluator,
     compose_eviction_specialist_source,
 )
+from prefix_cache_evolve.tools.artifact_types import ArtifactRecord
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 _INCUMBENT_PATH = current_incumbent("discovery").source_path
@@ -409,7 +410,7 @@ def _score_from_source(name: str) -> Callable[[PrefixBlockInfo, int, float, floa
     return _SCORE_CACHE[name]
 
 
-def _run_counterfactual_analysis(config: EvaluatorConfig) -> dict[str, object]:
+def _run_counterfactual_analysis(config: EvaluatorConfig) -> ArtifactRecord:
     totals = {name: CounterfactualTotals() for name in VARIANT_SOURCES if name != "incumbent"}
     split_totals = {
         split: {name: CounterfactualTotals() for name in VARIANT_SOURCES if name != "incumbent"}
@@ -482,7 +483,7 @@ def _rescore_panel(
     return PrefixKVCacheEvaluator(config, splits=splits).rescore_trials(trials)
 
 
-def _panel_summary(result: EvaluationResult, split: str) -> dict[str, float]:
+def _panel_summary(result: EvaluationResult, split: str) -> ArtifactRecord:
     metrics = result.split_metrics[split]
     return {
         "verifier_version": result.verifier_version,
@@ -498,9 +499,9 @@ def _panel_summary(result: EvaluationResult, split: str) -> dict[str, float]:
     }
 
 
-def _run_variant_panels(config: EvaluatorConfig) -> dict[str, object]:
+def _run_variant_panels(config: EvaluatorConfig) -> dict[str, ArtifactRecord]:
     base_source = _INCUMBENT_PATH.read_text(encoding="utf-8")
-    variants = {}
+    variants: dict[str, ArtifactRecord] = {}
     evaluator = EvictionOnlyEvaluator(
         config,
         splits=("train", "validation", "probe", "hidden"),
@@ -530,7 +531,7 @@ def _run_variant_panels(config: EvaluatorConfig) -> dict[str, object]:
     return variants
 
 
-def run_analysis(config_path: Path) -> dict[str, object]:
+def run_analysis(config_path: Path) -> ArtifactRecord:
     """Run same-state eviction analysis and full-panel variant adjudication."""
     config = load_evaluator_config(config_path)
     variants = _run_variant_panels(config)
@@ -556,7 +557,7 @@ def run_analysis(config_path: Path) -> dict[str, object]:
     }
 
 
-def _write_markdown(path: Path, payload: dict[str, object]) -> None:
+def _write_markdown(path: Path, payload: ArtifactRecord) -> None:
     counterfactual = payload["counterfactual"]["overall"]
     by_split = payload["counterfactual"]["by_split"]
     variants = payload["variants"]
@@ -705,7 +706,7 @@ def _write_markdown(path: Path, payload: dict[str, object]) -> None:
 @click.command()
 @click.option(
     "--config",
-    type=click.Path(path_type=Path),
+    type=click.Path(path_type=Path, exists=True, dir_okay=False, readable=True),
     default=EVICTION_SPECIALIST_CONFIG_PATH,
     show_default=True,
 )
@@ -724,8 +725,7 @@ def _write_markdown(path: Path, payload: dict[str, object]) -> None:
 def main(config: Path, output: Path, markdown: Path) -> None:
     """Analyze eviction choice, regret, and specialist distillations."""
     payload = run_analysis(config)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json(output, payload)
     markdown.parent.mkdir(parents=True, exist_ok=True)
     _write_markdown(markdown, payload)
     click.echo(output)

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
-from prefix_cache_evolve.evaluators.prefix_kv_cache import EvaluationResult
+from prefix_cache_evolve.artifacts import write_json as write_json
+from prefix_cache_evolve.evaluators.results import EvaluationResult
 from prefix_cache_evolve.evaluators.verifier import (
     require_single_score_identity,
     require_single_verifier_version,
@@ -32,7 +32,18 @@ AGENTIC_SURROGATE_GATE_NORMALIZED_GAP_THRESHOLDS = {
 CYCLIC_SURROGATE_WORKLOAD = "validation/hotset_cold_scan"
 CYCLIC_PROBE_WORKLOAD = "probe/cyclic_working_set_pressure"
 CYCLIC_SURROGATE_PROBE_DIVERGENCE_THRESHOLD = 0.25
-SURROGATE_PROBE_TRIPWIRE_SPECS = (
+
+
+class _SurrogateProbeTripwireSpec(TypedDict):
+    """One typed public-surrogate versus held-out-probe comparison."""
+
+    name: str
+    surrogate_workload: str
+    probe_workload: str
+    threshold: float
+
+
+SURROGATE_PROBE_TRIPWIRE_SPECS: tuple[_SurrogateProbeTripwireSpec, ...] = (
     {
         "name": "cyclic_working_set",
         "surrogate_workload": CYCLIC_SURROGATE_WORKLOAD,
@@ -40,15 +51,6 @@ SURROGATE_PROBE_TRIPWIRE_SPECS = (
         "threshold": CYCLIC_SURROGATE_PROBE_DIVERGENCE_THRESHOLD,
     },
 )
-
-
-def write_json(path: Path, payload: Any) -> None:
-    """Write stable, human-reviewable JSON and create parent directories."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
-        encoding="utf-8",
-    )
 
 
 def evaluation_result_summary(result: EvaluationResult) -> dict[str, Any]:
@@ -677,9 +679,10 @@ def write_generated_mutation_report(
         ("Seed", decomposition["seed"]),
         ("Best generated mutation", decomposition["best_generated_mutation"]),
     ]
-    records = tuple(
-        candidate[panel] for _, candidate in rows for panel in ("selection", "probe", "hidden")
-    )
+    panels: tuple[str, ...] = ("selection", "probe")
+    if all("hidden" in candidate for _, candidate in rows):
+        panels += ("hidden",)
+    records = tuple(candidate[panel] for _, candidate in rows for panel in panels)
     verifier_version = require_single_verifier_version(
         records,
         context="generated mutation report",
@@ -689,7 +692,7 @@ def write_generated_mutation_report(
             (candidate[panel] for _, candidate in rows),
             context=f"generated mutation {panel} comparison",
         )
-        for panel in ("selection", "probe", "hidden")
+        for panel in panels
     }
     lines = [
         "# Best Generated Mutation Decomposition",
@@ -705,22 +708,24 @@ def write_generated_mutation_report(
         "Panels: "
         + ", ".join(f"`{panel}={identity.panel_sha256}`" for panel, identity in identities.items()),
         "",
+        "The recurrence-heavy probe is reporting-only and does not affect selection.",
         (
-            "The recurrence-heavy probe and hidden panel are reporting-only and "
-            "do not affect the selection combined score."
+            "The hidden panel was explicitly opened for final adjudication."
+            if "hidden" in panels
+            else "The hidden panel remains quarantined until explicit final adjudication."
         ),
         "",
         "| Candidate | Selection | Raw before cx | Mean | Min contrib. | "
         "Churn cost | Underfill cost | Cx | Cx subsidy | Probe | Agent hit | "
-        "Cyclic hit | Hidden |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "Cyclic hit |" + (" Hidden |" if "hidden" in panels else ""),
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+        + ("---:|" if "hidden" in panels else ""),
     ]
     for label, candidate in rows:
         selection = candidate["selection"]
         selection_breakdown = selection["score_breakdown"]
         probe = candidate["probe"]
         probe_workloads = probe["workload_metrics"]
-        hidden = candidate["hidden"]
         raw_before_complexity = selection["combined_score"] + selection_breakdown.get(
             "complexity_cost", 0.0
         )
@@ -735,8 +740,8 @@ def write_generated_mutation_report(
             f"{candidate['primitive_subsidy_nodes']} | "
             f"{probe['combined_score']:.3f} | "
             f"{probe_workloads['probe/agent_trace_branching']['token_hit_rate']:.4f} | "
-            f"{probe_workloads['probe/cyclic_working_set_pressure']['token_hit_rate']:.4f} | "
-            f"{hidden['combined_score']:.3f} |"
+            f"{probe_workloads['probe/cyclic_working_set_pressure']['token_hit_rate']:.4f} |"
+            + (f" {candidate['hidden']['combined_score']:.3f} |" if "hidden" in panels else "")
         )
     lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")

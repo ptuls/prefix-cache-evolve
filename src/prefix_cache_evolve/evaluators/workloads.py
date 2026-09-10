@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import math
 import random
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from prefix_cache_evolve.evaluators.contracts import RequestInfo
-from prefix_cache_evolve.evaluators.utilities import (
-    TOKEN_PREFIX_ROLES as _TOKEN_PREFIX_ROLES,
-)
 from prefix_cache_evolve.evaluators.utilities import (
     prefix_role_from_label as _prefix_role_from_label,
 )
@@ -25,7 +23,16 @@ class WorkloadRequest:
     info: RequestInfo
     true_output_length: int
     prompt_tokens: tuple[int, ...] = ()
+    prompt_token_roles: tuple[str, ...] = ()
     arrival_step: int | None = None
+
+
+@dataclass(frozen=True)
+class _PromptBlock:
+    """Generated prompt block with explicit role metadata."""
+
+    tokens: tuple[int, ...]
+    role: str
 
 
 def build_workload(
@@ -77,18 +84,14 @@ def _block(
     label: str,
     block_size_tokens: int,
     token_count: int | None = None,
-) -> tuple[int, ...]:
+) -> _PromptBlock:
     count = block_size_tokens if token_count is None else max(1, token_count)
     base = _stable_hash(label) % 1_000_000
     tokens = tuple(base + index for index in range(count))
-    role = _prefix_role_from_label(label)
-    if role != "unknown":
-        for token in tokens:
-            _TOKEN_PREFIX_ROLES[token] = role
-    return tokens
+    return _PromptBlock(tokens=tokens, role=_prefix_role_from_label(label))
 
 
-def _partial_tail(label: str, block_size_tokens: int) -> tuple[int, ...]:
+def _partial_tail(label: str, block_size_tokens: int) -> _PromptBlock:
     token_count = 1 + (_stable_hash(label) % max(block_size_tokens - 1, 1))
     return _block(label, block_size_tokens, token_count=token_count)
 
@@ -98,14 +101,15 @@ def _request(
     request_id: int,
     tenant_id: int,
     session_id: int,
-    blocks: list[tuple[int, ...]],
+    blocks: Sequence[_PromptBlock],
     request_type: str,
     priority: int = 0,
     true_output_length: int = 96,
     predicted_output_length: int | None = None,
     arrival_step: int | None = None,
 ) -> WorkloadRequest:
-    tokens = tuple(token for block in blocks for token in block)
+    tokens = tuple(token for block in blocks for token in block.tokens)
+    token_roles = tuple(block.role for block in blocks for _ in block.tokens)
     return WorkloadRequest(
         info=RequestInfo(
             request_id=request_id,
@@ -119,6 +123,7 @@ def _request(
         ),
         true_output_length=true_output_length,
         prompt_tokens=tokens,
+        prompt_token_roles=token_roles,
         arrival_step=arrival_step,
     )
 
@@ -145,6 +150,7 @@ def _reindex_request(
         ),
         true_output_length=request.true_output_length,
         prompt_tokens=request.prompt_tokens,
+        prompt_token_roles=request.prompt_token_roles,
         arrival_step=request.arrival_step if arrival_step is None else arrival_step,
     )
 
@@ -227,7 +233,7 @@ def _session_continuation_growth(
         session_id: _block(f"session/{session_id}/root", block_size)
         for session_id in range(session_count)
     }
-    histories: dict[int, list[tuple[int, ...]]] = {
+    histories: dict[int, list[_PromptBlock]] = {
         session_id: [] for session_id in range(session_count)
     }
     requests = []
@@ -275,7 +281,7 @@ def _agentic_tool_workflows(
         _block(f"agentic/tool/observation/shared/{observation_id}", block_size)
         for observation_id in range(12)
     ]
-    routes: dict[tuple[int, int], list[tuple[int, ...]]] = {
+    routes: dict[tuple[int, int], list[_PromptBlock]] = {
         (workflow_id, route_id): []
         for workflow_id in range(workflow_count)
         for route_id in range(2)
@@ -358,7 +364,7 @@ def _agent_trace_branching(
     branches = [_block(f"agent/branch/{idx}", block_size) for idx in range(4)]
     tool_calls = [_block(f"agent/tool-call/{idx}", block_size) for idx in range(6)]
     tool_results = [_block(f"agent/tool-result/shared/{idx}", block_size) for idx in range(8)]
-    histories: dict[int, list[tuple[int, ...]]] = {
+    histories: dict[int, list[_PromptBlock]] = {
         branch_index: [] for branch_index in range(len(branches))
     }
     requests = []
@@ -1279,6 +1285,7 @@ def _cross_family_mixture(count: int, block_size: int, rng: random.Random) -> li
                 ),
                 true_output_length=request.true_output_length,
                 prompt_tokens=request.prompt_tokens,
+                prompt_token_roles=request.prompt_token_roles,
                 arrival_step=request.arrival_step,
             )
         )

@@ -61,6 +61,7 @@ from prefix_cache_evolve.problems.prefix_kv_cache.runner import (
     write_baseline_plots,
 )
 from prefix_cache_evolve.problems.prefix_kv_cache.specialist import (
+    _EvictionOnlyPolicy,
     candidate_evaluator,
     compose_eviction_specialist_source,
     eviction_only_source_violations,
@@ -313,6 +314,29 @@ def test_eviction_only_specialist_freezes_admission_and_callbacks() -> None:
     assert "base_hit" in calls
     assert "base_miss" in calls
     assert ("eviction", 2.0, 3.0) in calls
+
+
+def test_eviction_only_policy_uses_explicit_feature_provider() -> None:
+    class FeatureProvider:
+        def eviction_features(self, block, now):
+            assert block.prefix_hash == 1
+            assert now == 7
+            return 4.0, 5.0
+
+    observed_features = []
+
+    def score_eviction(block, now, frequency, priority):
+        observed_features.append((frequency, priority))
+        return float(now - block.last_accessed_at)
+
+    policy = _EvictionOnlyPolicy(
+        base_policy=AdmitAllLRU(),
+        eviction_features=FeatureProvider(),
+        score_eviction=score_eviction,
+    )
+
+    assert policy.score_eviction(_block_info(last_accessed_at=3), now=7) == 4.0
+    assert observed_features == [(4.0, 5.0)]
 
 
 def test_fixed_admission_factory_rejects_unknown_policy() -> None:
@@ -1196,112 +1220,6 @@ def test_evaluate_source_reports_runtime_contract_repairs(monkeypatch) -> None:
     assert "Implement on_request_start()" in result.artifacts["suggestion"]
 
 
-def _source_violations(source: str) -> tuple[str, ...]:
-    return levi_evaluator._candidate_source_violations(
-        source,
-        complexity=scoring_fn_complexity(source),
-        config=EvaluatorConfig(reject_unsupported_source_patterns=True),
-    )
-
-
-def test_static_policy_checks_validate_multi_timescale_decay_constructor() -> None:
-    invalid_source = textwrap.dedent(
-        """
-        from prefix_cache_evolve.problems.prefix_kv_cache.primitives import MultiTimescaleDecay
-
-        class Policy:
-            def __init__(self):
-                self._state = MultiTimescaleDecay(4, 10)
-        """
-    )
-    valid_source = textwrap.dedent(
-        """
-        from prefix_cache_evolve.problems.prefix_kv_cache.primitives import MultiTimescaleDecay
-
-        class Policy:
-            def __init__(self):
-                self._state = MultiTimescaleDecay(half_lives=(4.0, 20.0), max_keys=64)
-        """
-    )
-
-    invalid = _source_violations(invalid_source)
-    valid = _source_violations(valid_source)
-
-    assert "MultiTimescaleDecay accepts only one positional argument" in invalid
-    assert "MultiTimescaleDecay half-lives must be a sequence" in invalid
-    assert valid == ()
-
-
-def test_static_policy_checks_validate_threshold_excess_signature() -> None:
-    invalid_source = textwrap.dedent(
-        """
-        from prefix_cache_evolve.problems.prefix_kv_cache.primitives import threshold_excess
-
-        class Policy:
-            def score_admission(self, block, now):
-                return threshold_excess(block.depth)
-        """
-    )
-    valid_source = textwrap.dedent(
-        """
-        from prefix_cache_evolve.problems.prefix_kv_cache.primitives import threshold_excess
-
-        class Policy:
-            def score_admission(self, block, now):
-                return threshold_excess(block.depth, 2.0)
-        """
-    )
-
-    invalid = _source_violations(invalid_source)
-    valid = _source_violations(valid_source)
-
-    assert "threshold_excess requires value and threshold" in invalid
-    assert valid == ()
-
-
-def test_static_policy_checks_reject_scrubbed_request_fields() -> None:
-    source = textwrap.dedent(
-        """
-        class Policy:
-            def on_request_start(self, request, now):
-                self.kind = request.request_type
-                self.tokens = request.prompt_tokens
-        """
-    )
-
-    violations = _source_violations(source)
-
-    assert "sanitized request field request_type is not a policy signal" in violations
-    assert "sanitized request field prompt_tokens is not a policy signal" in violations
-
-
-@pytest.mark.parametrize("builtin_name", ["exec", "eval", "compile", "vars"])
-def test_static_policy_checks_reject_dynamic_builtins(builtin_name: str) -> None:
-    source = f"""
-class Policy:
-    def score_admission(self, block, now):
-        return {builtin_name}("0")
-"""
-
-    violations = _source_violations(source)
-
-    assert f"{builtin_name}() is not allowed in candidate code" in violations
-
-
-def test_static_policy_checks_reject_aliased_dynamic_builtin() -> None:
-    source = """
-class Policy:
-    def score_admission(self, block, now):
-        runner = exec
-        runner("pass")
-        return 0.0
-"""
-
-    violations = _source_violations(source)
-
-    assert "exec() is not allowed in candidate code" in violations
-
-
 def test_evaluate_source_rejects_exec_laundering_end_to_end(monkeypatch) -> None:
     monkeypatch.setattr(
         levi_evaluator,
@@ -1318,176 +1236,6 @@ def test_evaluate_source_rejects_exec_laundering_end_to_end(monkeypatch) -> None
     assert result.metrics["success"] is False
     assert "exec() is not allowed in candidate code" in result.metrics["error"]
     assert "unsupported top-level statement Expr" in result.metrics["error"]
-
-
-def test_static_policy_checks_reject_dunder_attribute_access() -> None:
-    source = """
-class Policy:
-    def score_admission(self, block, now):
-        return block.__class__
-"""
-
-    violations = _source_violations(source)
-
-    assert "dunder attribute __class__ is not allowed" in violations
-
-
-def test_static_policy_checks_reject_decorators() -> None:
-    source = """
-def decorate(policy):
-    return policy
-
-@decorate
-class Policy:
-    pass
-"""
-
-    violations = _source_violations(source)
-
-    assert "decorators are not allowed in candidate code" in violations
-
-
-def test_static_policy_checks_reject_unsupported_top_level_statements() -> None:
-    source = """
-if True:
-    class Policy:
-        pass
-"""
-
-    violations = _source_violations(source)
-
-    assert "unsupported top-level statement If" in violations
-
-
-def test_static_policy_checks_reject_nonliteral_module_lambda() -> None:
-    source = "score = lambda block, now: block.depth"
-
-    violations = _source_violations(source)
-
-    assert "top-level assignments must define uppercase literal constants" in violations
-
-
-def test_static_policy_checks_restrict_candidate_imports() -> None:
-    source = """
-from prefix_cache_evolve.evaluators.baselines import baseline_tinylfu_lru
-
-def build_candidate(capacity_blocks, block_size_tokens, seed=None):
-    return baseline_tinylfu_lru(capacity_blocks, block_size_tokens, seed)
-"""
-
-    violations = _source_violations(source)
-
-    assert "import from unsupported module prefix_cache_evolve.evaluators.baselines" in violations
-
-
-@pytest.mark.parametrize(
-    "import_statement", ["import sys", "from pathlib import Path", "import math"]
-)
-def test_static_policy_checks_reject_imports_inside_definitions(import_statement) -> None:
-    source = (
-        "def build_candidate(capacity_blocks, block_size_tokens, seed=None):\n"
-        f"    {import_statement}\n"
-        "    return None\n"
-    )
-    violations = _source_violations(source)
-    assert "nested imports are not allowed in candidate code" in violations
-
-
-@pytest.mark.parametrize(
-    "statement",
-    [
-        "math.log1p = lambda value: 1e12",
-        "del math.log1p",
-        "MultiTimescaleDecay.observe = lambda self, key, now, weight=1.0: None",
-        "block.hit_count = 1000000000",
-    ],
-)
-def test_static_policy_checks_reject_shared_attribute_mutation(statement) -> None:
-    source = f"""
-import math
-from prefix_cache_evolve.problems.prefix_kv_cache.primitives import MultiTimescaleDecay
-
-class Policy:
-    def score_admission(self, block, now):
-        {statement}
-        return 1
-
-def build_candidate(capacity_blocks, block_size_tokens, seed=None):
-    return Policy()
-"""
-    violations = _source_violations(source)
-    assert "attribute writes must target candidate-owned self state" in violations
-
-
-def test_static_policy_checks_allow_candidate_owned_attribute_state() -> None:
-    source = """
-class Policy:
-    def __init__(self):
-        self.hits = 0
-
-    def score_admission(self, block, now):
-        self.hits += 1
-        return self.hits
-
-def build_candidate(capacity_blocks, block_size_tokens, seed=None):
-    return Policy()
-"""
-    assert _source_violations(source) == ()
-
-
-def test_static_policy_checks_reject_aliased_self_and_shared_runtime_types() -> None:
-    source = """
-def shared(self):
-    self.seen = 1
-
-class Policy:
-    def poison(self):
-        self.seen = 1
-
-    def score_admission(self, block, now):
-        shared(type(block))
-        Policy.poison(type(block))
-        return 1
-
-def build_candidate(capacity_blocks, block_size_tokens, seed=None):
-    return Policy()
-"""
-    violations = _source_violations(source)
-    assert "attribute writes must target candidate-owned self state" in violations
-    assert "type() is not allowed in candidate code" in violations
-    assert "candidate classes may only be referenced as direct constructors" in violations
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        current_incumbent("discovery").source_path,
-        current_incumbent("production").source_path,
-    ],
-)
-def test_committed_incumbents_pass_static_source_contract(path: Path) -> None:
-    source = Path(path).read_text(encoding="utf-8")
-    complexity = scoring_fn_complexity(source, form_aware=True)
-    config = EvaluatorConfig(
-        max_candidate_complexity=650,
-        reject_unsupported_source_patterns=True,
-    )
-
-    assert levi_evaluator._candidate_source_violations(source, complexity, config) == ()
-
-
-def test_eviction_specialist_seed_passes_static_source_contract() -> None:
-    source = Path(
-        "src/prefix_cache_evolve/problems/prefix_kv_cache/seeds/eviction_specialist.py"
-    ).read_text(encoding="utf-8")
-    complexity = scoring_fn_complexity(source, form_aware=True)
-    config = EvaluatorConfig(
-        max_candidate_complexity=1000,
-        reject_unsupported_source_patterns=True,
-        candidate_policy_surface="eviction_only",
-    )
-
-    assert levi_evaluator._candidate_source_violations(source, complexity, config) == ()
 
 
 def test_evaluate_factory_uses_configured_timeout(monkeypatch) -> None:
@@ -4113,7 +3861,8 @@ def test_persist_best_generated_mutation_decomposes_strongest_non_seed(
         encoding="utf-8",
     )
 
-    def fake_decomposition(_config, candidate_path):
+    def fake_decomposition(_config, candidate_path, *, include_hidden=False):
+        assert include_hidden is False
         is_seed = candidate_path.name == "seed_program.py"
         return {
             "candidate": str(candidate_path),
@@ -4139,10 +3888,6 @@ def test_persist_best_generated_mutation_decomposes_strongest_non_seed(
                     "probe/cyclic_working_set_pressure": {"token_hit_rate": 0.7},
                 },
             },
-            "hidden": {
-                **score_identity(),
-                "combined_score": -1.0,
-            },
         }
 
     monkeypatch.setattr(
@@ -4164,9 +3909,12 @@ def test_persist_best_generated_mutation_decomposes_strongest_non_seed(
     )
     assert decomposition["generated_program_id"] == "strongest"
     assert decomposition["best_generated_mutation"]["primitive_subsidy_exercised"]
+    assert "hidden" not in decomposition["seed"]
+    assert "hidden" not in decomposition["best_generated_mutation"]
     report = (tmp_path / "best_generated_mutation_decomposition.md").read_text(encoding="utf-8")
     assert "Best generated mutation" in report
     assert "Agent hit" in report
+    assert "hidden panel remains quarantined" in report
 
 
 def test_specialist_promotion_adjudication_fails_over_complexity_limit(
@@ -4175,7 +3923,8 @@ def test_specialist_promotion_adjudication_fails_over_complexity_limit(
 ) -> None:
     (tmp_path / "best_program.py").write_text("candidate\n", encoding="utf-8")
 
-    def fake_decomposition(config, candidate_path):
+    def fake_decomposition(config, candidate_path, *, include_hidden=False):
+        assert include_hidden is True
         assert config.fixed_admission_policy is None
         assert config.max_candidate_complexity is None
         assert config.promotion_max_candidate_complexity is None
@@ -4252,7 +4001,8 @@ def test_eviction_only_promotion_adjudication_composes_complete_candidate(
     )
     captured_paths = []
 
-    def fake_decomposition(config, candidate_path):
+    def fake_decomposition(config, candidate_path, *, include_hidden=False):
+        assert include_hidden is True
         assert config.fixed_admission_policy is None
         assert config.candidate_policy_surface == "full"
         captured_paths.append(candidate_path)

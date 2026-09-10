@@ -364,7 +364,8 @@ def test_run_analysis_prefers_generated_mutation_and_reports_preliminary(
         encoding="utf-8",
     )
 
-    def fake_decomposition(_config, candidate_path):
+    def fake_decomposition(_config, candidate_path, *, include_hidden=False):
+        assert include_hidden is True
         source = candidate_path.read_text(encoding="utf-8")
         score = 10.0 if source == incumbent_source else 0.0
         panel = {
@@ -422,7 +423,8 @@ def test_run_analysis_rejects_close_result_when_agentic_gate_fails(
         encoding="utf-8",
     )
 
-    def fake_decomposition(_config, candidate_path):
+    def fake_decomposition(_config, candidate_path, *, include_hidden=False):
+        assert include_hidden is True
         source = candidate_path.read_text(encoding="utf-8")
         score = 10.0 if source == incumbent_source else 0.0
         panel = {

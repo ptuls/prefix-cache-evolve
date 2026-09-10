@@ -6,6 +6,10 @@ import math
 from statistics import mean, pstdev
 from typing import Any, Iterable
 
+from prefix_cache_evolve.evaluators.results import (
+    MAX_AGGREGATION_FIELDS,
+    MEAN_AGGREGATION_FIELDS,
+)
 from prefix_cache_evolve.evaluators.utilities import percentile as _percentile
 
 
@@ -26,119 +30,16 @@ def aggregate_trials(
     """Aggregate trial metrics into one summary mapping."""
     if not trials:
         return {}
-    numeric_fields = [
-        "block_hit_rate",
-        "token_hit_rate",
-        "priority_weighted_token_hit_rate",
-        "high_priority_token_hit_rate",
-        "low_priority_token_hit_rate",
-        "priority_request_fraction",
-        "request_token_hit_rate_p10",
-        "request_token_hit_rate_p50",
-        "high_priority_request_token_hit_rate_p10",
-        "worst_quarter_token_hit_rate",
-        "final_quarter_token_hit_rate",
-        "quarter_token_hit_rate_stddev",
-        "prefill_tokens_saved",
-        "recompute_tokens",
-        "recompute_cost",
-        "lookup_block_count",
-        "lookup_blocks_per_request",
-        "eviction_count",
-        "admission_count",
-        "admission_score_count",
-        "admission_rejection_count",
-        "admission_rate",
-        "avoidable_admission_count",
-        "avoidable_admission_rate",
-        "avoidable_admission_regret_tokens",
-        "avoidable_admission_regret_token_rate",
-        "avoidable_rejection_count",
-        "avoidable_rejection_rate",
-        "avoidable_rejection_regret_tokens",
-        "avoidable_rejection_regret_token_rate",
-        "oracle_shadow_price_mean",
-        "oracle_shadow_price_stddev",
-        "oracle_shadow_price_change_mean",
-        "oracle_shadow_price_change_p95",
-        "shadow_price_score_scale",
-        "shadow_price_tracking_rmse",
-        "shadow_price_tracking_mae",
-        "shadow_price_tracking_bias",
-        "fast_shadow_price_decision_fraction",
-        "fast_shadow_price_regret_share",
-        "fast_shadow_price_regret_lift",
-        "shadow_price_change_regret_correlation",
-        "useful_admission_count",
-        "useful_admission_rate",
-        "wasted_admission_count",
-        "wasted_admission_rate",
-        "admitted_token_count",
-        "useful_admission_token_count",
-        "useful_admission_token_rate",
-        "wasted_admission_token_count",
-        "wasted_admission_token_rate",
-        "admission_saved_tokens",
-        "admission_saved_tokens_per_admission",
-        "admission_token_utility",
-        "evicted_without_hit_count",
-        "evicted_without_hit_rate",
-        "policy_bypass_tokens",
-        "policy_bypass_token_rate",
-        "policy_underfill_rate",
-        "cache_churn_per_1k",
-        "forced_bypass_count",
-        "forced_bypass_tokens",
-        "forced_bypass_token_rate",
-        "short_reuse_after_eviction_missed_tokens",
-        "short_reuse_after_eviction_missed_token_rate",
-        "eviction_reuse_distance_p50",
-        "eviction_reuse_distance_p95",
-        "avoidable_eviction_count",
-        "avoidable_eviction_rate",
-        "avoidable_short_reuse_eviction_count",
-        "avoidable_short_reuse_eviction_rate",
-        "value_weighted_avoidable_eviction_count",
-        "value_weighted_avoidable_eviction_rate",
-        "value_weighted_avoidable_eviction_regret_tokens",
-        "value_weighted_avoidable_eviction_regret_token_rate",
-        "tenant_count",
-        "tenant_fairness_penalty",
-        "tenant_token_hit_rate_p10",
-        "tenant_jain_fairness",
-        "p50_latency_proxy",
-        "p95_latency_proxy",
-        "p99_latency_proxy",
-        "high_priority_p95_latency_proxy",
-        "high_priority_p99_latency_proxy",
-        "p95_recompute_cost",
-        "recovery_request_count",
-        "recovery_token_hit_rate",
-        "recovery_p95_latency_proxy",
-        "recovery_phase_count",
-        "worst_recovery_phase_token_hit_rate",
-        "final_recovery_phase_token_hit_rate",
-        "worst_recovery_phase_p95_latency_proxy",
-        "memory_occupancy_mean",
-        "prefix_kv_occupancy_mean",
-        "decode_kv_occupancy_mean",
-        "decode_kv_blocks_requested",
-        "decode_kv_blocks_allocated",
-        "decode_kv_allocation_failure_blocks",
-        "decode_kv_allocation_failure_rate",
-        "decode_pressure_eviction_count",
-        "decode_pressure_eviction_rate",
-        "arrival_span_steps",
-        "max_prefill_cost",
-        "scoring_fn_complexity",
-    ]
     result: dict[str, float | int | bool | str] = {
-        field: mean(float(getattr(trial, field)) for trial in trials) for field in numeric_fields
+        field: mean(float(getattr(trial, field)) for trial in trials)
+        for field in MEAN_AGGREGATION_FIELDS
     }
-    result["memory_occupancy_peak"] = max(trial.memory_occupancy_peak for trial in trials)
-    result["prefix_kv_occupancy_peak"] = max(trial.prefix_kv_occupancy_peak for trial in trials)
-    result["decode_kv_occupancy_peak"] = max(trial.decode_kv_occupancy_peak for trial in trials)
-    result["active_request_count_peak"] = max(trial.active_request_count_peak for trial in trials)
+    result.update(
+        {
+            field: max(int(getattr(trial, field)) for trial in trials)
+            for field in MAX_AGGREGATION_FIELDS
+        }
+    )
     token_hit_rates = [trial.token_hit_rate for trial in trials]
     result["token_hit_rate_worst_trial"] = min(token_hit_rates)
     result["token_hit_rate_p10_across_trials"] = _percentile(token_hit_rates, 10)

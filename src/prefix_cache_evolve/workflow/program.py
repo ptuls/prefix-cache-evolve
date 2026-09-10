@@ -3,7 +3,6 @@
 import tempfile
 import textwrap
 from pathlib import Path
-from typing import Optional
 
 
 class ProgramSource:
@@ -22,7 +21,7 @@ class TemporaryProgramFile:
 
     def __init__(self, source: ProgramSource) -> None:
         self._source = source
-        self._path: Optional[Path] = None
+        self._path: Path | None = None
 
     def __enter__(self) -> Path:
         handle = tempfile.NamedTemporaryFile("w", suffix=".py", delete=False)

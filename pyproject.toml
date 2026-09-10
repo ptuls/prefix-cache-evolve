@@ -41,6 +41,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "hypothesis>=6.0,<7",
   "mypy>=1.15,<2",
   "numpy>=1.26,<3",
   "pytest>=8.0,<9",
@@ -59,6 +60,7 @@ wildchat = [
 
 [dependency-groups]
 dev = [
+  "hypothesis>=6.0,<7",
   "mypy>=1.15,<2",
   "numpy>=1.26,<3",
   "pytest>=8.0,<9",
@@ -114,31 +116,7 @@ testpaths = ["tests"]
 
 [tool.mypy]
 python_version = "3.11"
-files = [
-  "src/prefix_cache_evolve/evaluator_entry.py",
-  "src/prefix_cache_evolve/evaluators",
-  "src/prefix_cache_evolve/workflow",
-  "src/prefix_cache_evolve/problems/prefix_kv_cache/configuration.py",
-  "src/prefix_cache_evolve/problems/prefix_kv_cache/evaluator.py",
-  "src/prefix_cache_evolve/problems/prefix_kv_cache/lmcache_agentic.py",
-  "src/prefix_cache_evolve/problems/prefix_kv_cache/reproducibility.py",
-  "src/prefix_cache_evolve/problems/prefix_kv_cache/runner.py",
-  "src/prefix_cache_evolve/problems/prefix_kv_cache/runner_commands.py",
-  "src/prefix_cache_evolve/problems/prefix_kv_cache/specialist.py",
-  "src/prefix_cache_evolve/problems/prefix_kv_cache/sandbox.py",
-  "src/prefix_cache_evolve/problems/prefix_kv_cache/trace_replay.py",
-  "src/prefix_cache_evolve/problems/prefix_kv_cache/wildchat.py",
-  "src/prefix_cache_evolve/tools/prepare_wildchat.py",
-  "src/prefix_cache_evolve/tools/prepare_lmcache_agentic.py",
-  "src/prefix_cache_evolve/tools/prepare_mooncake.py",
-  "src/prefix_cache_evolve/tools/hashed_trace.py",
-  "src/prefix_cache_evolve/tools/prepare_qwen.py",
-  "src/prefix_cache_evolve/tools/prepare_agentx.py",
-  "src/prefix_cache_evolve/tools/attach_holdout.py",
-  "src/prefix_cache_evolve/tools/prepare_trace_panel.py",
-  "src/prefix_cache_evolve/tools/prepare_temporal_trace_panel.py",
-  "src/prefix_cache_evolve/tools/analyze_policy_costs.py",
-]
+files = ["src/prefix_cache_evolve"]
 ignore_missing_imports = true
 show_error_codes = true
 

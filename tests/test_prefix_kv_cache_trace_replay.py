@@ -11,6 +11,7 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import (
     PrefixKVCacheEvaluator,
     baseline_lru_blocks,
 )
+from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.registry import current_incumbent
 from prefix_cache_evolve.problems.prefix_kv_cache.runner import (
     calibrate_trace_report,
     replay_trace_report,
@@ -231,10 +232,7 @@ def test_replay_report_runs_deployable_baselines_on_fixed_trace(tmp_path) -> Non
     output_path = tmp_path / "replay.json"
     candidate_path = tmp_path / "candidate.py"
     candidate_path.write_text(
-        "from prefix_cache_evolve.evaluators.prefix_kv_cache import baseline_lru_blocks\n"
-        "\n"
-        "def build_candidate(capacity_blocks, block_size_tokens, seed=None):\n"
-        "    return baseline_lru_blocks(capacity_blocks, block_size_tokens, seed)\n",
+        current_incumbent("production").source_path.read_text(encoding="utf-8"),
         encoding="utf-8",
     )
     _write_trace(

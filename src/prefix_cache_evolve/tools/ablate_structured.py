@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import json
 import math
 from dataclasses import dataclass
 from pathlib import Path
 
 import click
 
-from prefix_cache_evolve.evaluators.prefix_kv_cache import (
-    EvaluationResult,
-    PrefixKVCacheEvaluator,
-)
+from prefix_cache_evolve.artifacts import write_json
+from prefix_cache_evolve.evaluators.prefix_kv_cache import PrefixKVCacheEvaluator
+from prefix_cache_evolve.evaluators.results import EvaluationResult
 from prefix_cache_evolve.evaluators.verifier import (
     require_single_score_identity,
     require_single_verifier_version,
@@ -24,6 +22,7 @@ from prefix_cache_evolve.problems.prefix_kv_cache.configuration import (
 from prefix_cache_evolve.problems.prefix_kv_cache.seeds.structured_recurrence import (
     StructuredRecurrencePolicy,
 )
+from prefix_cache_evolve.tools.artifact_types import ArtifactRecord
 
 
 @dataclass(frozen=True)
@@ -154,7 +153,7 @@ def _summary(result: EvaluationResult, split: str) -> dict[str, float | str]:
     }
 
 
-def run_ablation(config_path: Path) -> dict[str, object]:
+def run_ablation(config_path: Path) -> ArtifactRecord:
     """Evaluate every structured feature deletion on validation and probe."""
     config = load_evaluator_config(config_path)
     rows = []
@@ -204,7 +203,7 @@ def run_ablation(config_path: Path) -> dict[str, object]:
     }
 
 
-def _write_markdown(path: Path, payload: dict[str, object]) -> None:
+def _write_markdown(path: Path, payload: ArtifactRecord) -> None:
     variants = payload["variants"]
     verifier_version = require_single_verifier_version(
         (row[panel] for row in variants for panel in ("selection", "probe")),
@@ -239,7 +238,7 @@ def _write_markdown(path: Path, payload: dict[str, object]) -> None:
         "Probe raw | Agent hit | Cyclic hit | Probe churn/1k |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
-    for row in variants:  # type: ignore[assignment]
+    for row in variants:
         selection = row["selection"]
         probe = row["probe"]
         families = row["probe_families"]
@@ -260,7 +259,7 @@ def _write_markdown(path: Path, payload: dict[str, object]) -> None:
 @click.command()
 @click.option(
     "--config",
-    type=click.Path(path_type=Path),
+    type=click.Path(path_type=Path, exists=True, dir_okay=False, readable=True),
     default=DEFAULT_CONFIG_PATH,
     show_default=True,
 )
@@ -273,8 +272,7 @@ def _write_markdown(path: Path, payload: dict[str, object]) -> None:
 def main(config: Path, output: Path) -> None:
     """Ablate structured prefix KV-cache policy terms."""
     payload = run_ablation(config)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    write_json(output, payload)
     markdown_path = output.with_suffix(".md")
     _write_markdown(markdown_path, payload)
     click.echo(output)

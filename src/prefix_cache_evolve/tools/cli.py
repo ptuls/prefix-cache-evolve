@@ -11,23 +11,82 @@ from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.registry import (
     incumbent_records,
     validate_incumbent_registry,
 )
-from prefix_cache_evolve.tools.ablate_structured import main as structured_ablation
-from prefix_cache_evolve.tools.analyze_eviction import main as eviction_analysis
-from prefix_cache_evolve.tools.analyze_policy_costs import main as policy_cost_analysis
-from prefix_cache_evolve.tools.analyze_reasoning_kv import main as reasoning_kv_analysis
-from prefix_cache_evolve.tools.analyze_rediscovery import main as rediscovery_analysis
-from prefix_cache_evolve.tools.analyze_regret import main as regret_analysis
-from prefix_cache_evolve.tools.attach_holdout import main as attach_holdout
-from prefix_cache_evolve.tools.prepare_agentx import main as prepare_agentx
-from prefix_cache_evolve.tools.prepare_lmcache_agentic import main as prepare_lmcache_agentic
-from prefix_cache_evolve.tools.prepare_mooncake import main as prepare_mooncake
-from prefix_cache_evolve.tools.prepare_qwen import main as prepare_qwen
-from prefix_cache_evolve.tools.prepare_temporal_trace_panel import (
-    main as prepare_temporal_trace_panel,
-)
-from prefix_cache_evolve.tools.prepare_trace_panel import main as prepare_trace_panel
-from prefix_cache_evolve.tools.prepare_wildchat import main as prepare_wildchat
-from prefix_cache_evolve.tools.tune_compact import main as compact_tuning
+from prefix_cache_evolve.tools.lazy_group import LazyCommand, LazyGroup
+
+_ANALYZE_COMMANDS = {
+    "policy-costs": LazyCommand(
+        "prefix_cache_evolve.tools.analyze_policy_costs:main",
+        "Measure policy behavior, complexity, callback time, and state.",
+    ),
+    "eviction": LazyCommand(
+        "prefix_cache_evolve.tools.analyze_eviction:main",
+        "Analyze eviction choice, regret, and specialist distillations.",
+    ),
+    "reasoning-kv": LazyCommand(
+        "prefix_cache_evolve.tools.analyze_reasoning_kv:main",
+        "Compare policies under shared reasoning decode KV pressure.",
+    ),
+    "rediscovery": LazyCommand(
+        "prefix_cache_evolve.tools.analyze_rediscovery:main",
+        "Adjudicate weak-seed evolution runs against the incumbent.",
+    ),
+    "regret": LazyCommand(
+        "prefix_cache_evolve.tools.analyze_regret:main",
+        "Audit admission and eviction regret.",
+    ),
+}
+_VERIFY_COMMANDS = {
+    "significance": LazyCommand(
+        "prefix_cache_evolve.tools.verify_significance:main",
+        "Test whether the headline score gap exceeds seed noise.",
+    ),
+}
+_ABLATE_COMMANDS = {
+    "structured": LazyCommand(
+        "prefix_cache_evolve.tools.ablate_structured:main",
+        "Ablate structured policy terms.",
+    ),
+}
+_TUNE_COMMANDS = {
+    "compact": LazyCommand(
+        "prefix_cache_evolve.tools.tune_compact:main",
+        "Tune the compact deployable policy.",
+    ),
+}
+_DATASET_COMMANDS = {
+    "lmcache-agentic": LazyCommand(
+        "prefix_cache_evolve.tools.prepare_lmcache_agentic:main",
+        "Prepare deterministic LMCache agent-session replay data.",
+    ),
+    "mooncake": LazyCommand(
+        "prefix_cache_evolve.tools.prepare_mooncake:main",
+        "Convert native Mooncake prefix hashes to replay data.",
+    ),
+    "qwen": LazyCommand(
+        "prefix_cache_evolve.tools.prepare_qwen:main",
+        "Convert native Qwen-Bailian block traces to replay data.",
+    ),
+    "agentx": LazyCommand(
+        "prefix_cache_evolve.tools.prepare_agentx:main",
+        "Convert complete AgentX sessions to replay data.",
+    ),
+    "attach-holdout": LazyCommand(
+        "prefix_cache_evolve.tools.attach_holdout:main",
+        "Attach an independent hidden trace to a search panel.",
+    ),
+    "trace-panel": LazyCommand(
+        "prefix_cache_evolve.tools.prepare_trace_panel:main",
+        "Build reproducible grouped trace panels for evolution.",
+    ),
+    "temporal-trace-panel": LazyCommand(
+        "prefix_cache_evolve.tools.prepare_temporal_trace_panel:main",
+        "Build chronological trace panels for evolution.",
+    ),
+    "wildchat": LazyCommand(
+        "prefix_cache_evolve.tools.prepare_wildchat:main",
+        "Prepare deterministic WildChat trace-replay data.",
+    ),
+}
 
 
 @click.group()
@@ -35,17 +94,22 @@ def main() -> None:
     """Run prefix-cache analyses, ablations, and tuning tools."""
 
 
-@main.group()
+@main.group(cls=LazyGroup, lazy_subcommands=_ANALYZE_COMMANDS)
 def analyze() -> None:
     """Run diagnostic and causal analyses."""
 
 
-@main.group()
+@main.group(cls=LazyGroup, lazy_subcommands=_VERIFY_COMMANDS)
+def verify() -> None:
+    """Run statistical verification of headline claims."""
+
+
+@main.group(cls=LazyGroup, lazy_subcommands=_ABLATE_COMMANDS)
 def ablate() -> None:
     """Run controlled policy ablations."""
 
 
-@main.group()
+@main.group(cls=LazyGroup, lazy_subcommands=_TUNE_COMMANDS)
 def tune() -> None:
     """Run deterministic policy tuning."""
 
@@ -55,7 +119,7 @@ def incumbents() -> None:
     """Inspect and validate immutable incumbent bundles."""
 
 
-@main.group()
+@main.group(cls=LazyGroup, lazy_subcommands=_DATASET_COMMANDS)
 def datasets() -> None:
     """Prepare public datasets for replay-safe evaluation."""
 
@@ -89,23 +153,6 @@ def validate_incumbents() -> None:
     """Fail closed if any incumbent source or manifest has drifted."""
     records = validate_incumbent_registry()
     click.echo(f"validated_incumbents={len(records)}")
-
-
-analyze.add_command(eviction_analysis, name="eviction")
-analyze.add_command(rediscovery_analysis, name="rediscovery")
-analyze.add_command(regret_analysis, name="regret")
-analyze.add_command(reasoning_kv_analysis, name="reasoning-kv")
-analyze.add_command(policy_cost_analysis, name="policy-costs")
-ablate.add_command(structured_ablation, name="structured")
-datasets.add_command(prepare_wildchat, name="wildchat")
-datasets.add_command(prepare_lmcache_agentic, name="lmcache-agentic")
-datasets.add_command(prepare_mooncake, name="mooncake")
-datasets.add_command(prepare_qwen, name="qwen")
-datasets.add_command(prepare_agentx, name="agentx")
-datasets.add_command(attach_holdout, name="attach-holdout")
-datasets.add_command(prepare_trace_panel, name="trace-panel")
-datasets.add_command(prepare_temporal_trace_panel, name="temporal-trace-panel")
-tune.add_command(compact_tuning, name="compact")
 
 
 if __name__ == "__main__":

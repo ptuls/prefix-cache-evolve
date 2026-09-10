@@ -1,7 +1,11 @@
 """Functional tests for repository Click commands."""
 
 import json
+import runpy
+import subprocess
+import sys
 from pathlib import Path
+from typing import cast
 
 import click
 import pytest
@@ -13,9 +17,27 @@ from prefix_cache_evolve.tools.analyze_regret import main as regret_main
 from prefix_cache_evolve.tools.cli import main as tools_main
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+plot_main = cast(
+    click.Command,
+    runpy.run_path(str(_REPOSITORY_ROOT / "scripts/plot_prefix_kv_eval_trajectory.py"))["main"],
+)
+sweep_main = cast(
+    click.Command,
+    runpy.run_path(str(_REPOSITORY_ROOT / "scripts/sweep_prefix_kv_baselines.py"))["main"],
+)
+
+_COMMANDS: tuple[tuple[str, click.Command], ...] = (
+    ("runner", runner_main),
+    ("lab", lab_main),
+    ("tools", tools_main),
+    ("plot", plot_main),
+    ("sweep", sweep_main),
+)
 
 
-@pytest.mark.parametrize("command", (lab_main, tools_main))
+@pytest.mark.parametrize(
+    "command", [command for _, command in _COMMANDS], ids=[name for name, _ in _COMMANDS]
+)
 def test_click_commands_expose_help(command: click.Command) -> None:
     result = CliRunner().invoke(command, ["--help"])
 
@@ -32,10 +54,86 @@ def test_runner_show_config_does_not_start_evolution() -> None:
     assert '"search_seed"' in result.output
 
 
+def test_runner_rejects_multiple_actions() -> None:
+    result = CliRunner().invoke(
+        runner_main,
+        ["--show-config", "--baseline-report", "--quick"],
+    )
+
+    assert result.exit_code != 0
+    assert "runner actions are mutually exclusive" in result.output
+    assert "--show-config, --baseline-report" in result.output
+
+
+def test_runner_reports_missing_input_path_without_traceback() -> None:
+    result = CliRunner().invoke(
+        runner_main,
+        ["--calibrate-trace", "missing-trace.jsonl"],
+    )
+
+    assert result.exit_code != 0
+    assert "File 'missing-trace.jsonl' does not exist" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_runner_reports_invalid_candidate_without_traceback(tmp_path: Path) -> None:
+    candidate = tmp_path / "invalid_candidate.py"
+    candidate.write_text("import os\n", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        runner_main,
+        ["--baseline-report", "--quick", "--candidate-program", str(candidate)],
+    )
+
+    assert result.exit_code != 0
+    assert "Error: candidate violates the static policy contract" in result.output
+    assert "import from unsupported module os" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_tools_help_does_not_import_analysis_implementations() -> None:
+    help_result = CliRunner().invoke(tools_main, ["analyze", "--help"])
+
+    assert help_result.exit_code == 0
+    assert all(
+        command in help_result.output
+        for command in ("eviction", "rediscovery", "regret", "reasoning-kv")
+    )
+
+    script = """
+import sys
+from click.testing import CliRunner
+from prefix_cache_evolve.tools.cli import main
+
+result = CliRunner().invoke(main, ["analyze", "--help"])
+assert result.exit_code == 0, result.output
+modules = (
+    "prefix_cache_evolve.tools.analyze_eviction",
+    "prefix_cache_evolve.tools.analyze_reasoning_kv",
+    "prefix_cache_evolve.tools.analyze_rediscovery",
+    "prefix_cache_evolve.tools.analyze_regret",
+)
+assert all(module not in sys.modules for module in modules)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=_REPOSITORY_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize(
     "arguments",
     (
         ["analyze", "policy-costs", "--help"],
+        ["analyze", "eviction", "--help"],
+        ["analyze", "rediscovery", "--help"],
+        ["analyze", "regret", "--help"],
+        ["analyze", "reasoning-kv", "--help"],
         ["ablate", "structured", "--help"],
         ["datasets", "wildchat", "--help"],
         ["tune", "compact", "--help"],
@@ -115,3 +213,22 @@ def test_runner_rejects_invalid_option_combinations(
 
     assert result.exit_code != 0
     assert message in result.output
+
+
+def test_regret_matrix_rejects_ignored_candidate_program() -> None:
+    candidate = (
+        _REPOSITORY_ROOT / "src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/"
+        "production_16tok_20260609/policy.py"
+    )
+
+    result = CliRunner().invoke(
+        regret_main,
+        [
+            "--all-admission-policies",
+            "--candidate-program",
+            str(candidate),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--candidate-program cannot be combined" in result.output

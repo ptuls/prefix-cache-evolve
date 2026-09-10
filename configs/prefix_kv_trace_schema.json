@@ -66,10 +66,10 @@
       "$ref": "#/$defs/opaqueIdentifier"
     },
     "session_hash": {
-      "$ref": "#/$defs/opaqueIdentifier"
+      "$ref": "#/$defs/sessionIdentifier"
     },
     "session_id": {
-      "$ref": "#/$defs/opaqueIdentifier"
+      "$ref": "#/$defs/sessionIdentifier"
     },
     "request_type": {
       "type": "string",
@@ -90,7 +90,7 @@
       "minimum": 0
     },
     "predicted_output_length": {
-      "type": "integer",
+      "type": ["integer", "null"],
       "minimum": 0
     },
     "prefix_path": {
@@ -105,7 +105,13 @@
       "type": [
         "string",
         "integer"
-      ]
+      ],
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "sessionIdentifier": {
+      "description": "Null when session identity is unavailable; never invent one shared session.",
+      "anyOf": [{"$ref": "#/$defs/opaqueIdentifier"}, {"type": "null"}]
     },
     "prefixPath": {
       "type": "array",

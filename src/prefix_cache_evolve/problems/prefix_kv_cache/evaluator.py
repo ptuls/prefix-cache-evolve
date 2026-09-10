@@ -28,6 +28,7 @@ from prefix_cache_evolve.problems.prefix_kv_cache.configuration import (
 from prefix_cache_evolve.problems.prefix_kv_cache.reproducibility import (
     build_workload_manifest,
 )
+from prefix_cache_evolve.problems.prefix_kv_cache.sandbox import evaluate_in_docker
 from prefix_cache_evolve.problems.prefix_kv_cache.specialist import (
     candidate_evaluator,
     candidate_exported_names,
@@ -163,15 +164,24 @@ def _evaluate_isolated(
 ) -> EvaluatorResult:
     config = active_evaluator_config(DEFAULT_CONFIG)
     try:
-        result, load_error = run_with_timeout(
-            worker,
-            candidate,
-            complexity,
-            splits,
-            timeout_seconds=config.timeout_s,
-            memory_limit_bytes=config.max_memory_bytes,
-            cpu_limit_seconds=config.timeout_s,
-        )
+        if config.sandbox_image:
+            if worker is _evaluate_factory:
+                raise ValueError(
+                    "the container evaluator requires candidate source, not a callable"
+                )
+            # Docker owns isolation and deadlines; an outer process timeout could
+            # kill the client before it removes its container.
+            result, load_error = worker(candidate, complexity, splits)
+        else:
+            result, load_error = run_with_timeout(
+                worker,
+                candidate,
+                complexity,
+                splits,
+                timeout_seconds=config.timeout_s,
+                memory_limit_bytes=config.max_memory_bytes,
+                cpu_limit_seconds=config.timeout_s,
+            )
     except TimeoutError as exc:
         return _error_result(
             "evaluation timed out",
@@ -219,6 +229,9 @@ def _evaluate_program_path(
 ) -> tuple[PrefixEvaluationResult | None, dict | None]:
     try:
         config = active_evaluator_config(DEFAULT_CONFIG)
+        if config.sandbox_image:
+            source = Path(str(program_path)).read_text(encoding="utf-8")
+            return evaluate_in_docker(source, config, splits=splits), None
         factory = load_candidate_factory(
             str(program_path),
             exported_names=candidate_exported_names(config),
@@ -235,6 +248,8 @@ def _evaluate_source(
 ) -> tuple[PrefixEvaluationResult | None, dict | None]:
     try:
         config = active_evaluator_config(DEFAULT_CONFIG)
+        if config.sandbox_image:
+            return evaluate_in_docker(str(source), config, splits=splits), None
         factory = load_candidate_factory_from_source(
             str(source),
             exported_names=candidate_exported_names(config),
@@ -432,7 +447,7 @@ def _runtime_repair_feedback(invalid_reasons: tuple[str, ...]) -> tuple[str, ...
 def _selection_feedback_metrics(
     prefix_result: PrefixEvaluationResult,
 ) -> dict[str, float]:
-    """Flatten selection and targeted guidance diagnostics for Levi."""
+    """Flatten visible workload diagnostics, excluding hidden and probe splits."""
     metrics = {
         f"selection_{key}": float(value)
         for key, value in prefix_result.score_breakdown.items()
@@ -458,7 +473,7 @@ def _selection_feedback_metrics(
         )
 
     for workload, values in prefix_result.workload_metrics.items():
-        if not (workload.startswith("validation/") or workload in _MUTATION_GUIDANCE_WORKLOADS):
+        if not workload.startswith(("train/", "validation/")):
             continue
         split, workload_name = workload.split("/", maxsplit=1)
         workload_name = workload_name.replace("-", "_")

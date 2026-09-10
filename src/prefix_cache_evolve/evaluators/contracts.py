@@ -8,11 +8,11 @@ from typing import Callable, Protocol
 
 @dataclass(frozen=True)
 class RequestInfo:
-    """Candidate-visible request metadata."""
+    """Candidate-visible metadata; session_id is None when no identity is known."""
 
     request_id: int
     tenant_id: int
-    session_id: int
+    session_id: int | None
     prompt_length: int
     priority: int
     request_type: str

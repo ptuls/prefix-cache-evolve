@@ -36,9 +36,7 @@ _COMMANDS: tuple[tuple[str, click.Command], ...] = (
 
 
 @pytest.mark.parametrize(
-    "command",
-    [command for _, command in _COMMANDS],
-    ids=[name for name, _ in _COMMANDS],
+    "command", [command for _, command in _COMMANDS], ids=[name for name, _ in _COMMANDS]
 )
 def test_click_commands_expose_help(command: click.Command) -> None:
     result = CliRunner().invoke(command, ["--help"])
@@ -131,6 +129,7 @@ assert all(module not in sys.modules for module in modules)
 @pytest.mark.parametrize(
     "arguments",
     (
+        ["analyze", "policy-costs", "--help"],
         ["analyze", "eviction", "--help"],
         ["analyze", "rediscovery", "--help"],
         ["analyze", "regret", "--help"],

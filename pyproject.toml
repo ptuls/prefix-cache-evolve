@@ -108,6 +108,7 @@ packages = ["src/prefix_cache_evolve"]
 "configs/prefix_kv_cache_discovery.yaml" = "prefix_cache_evolve/configs/prefix_kv_cache_discovery.yaml"
 "configs/prefix_kv_cache_eviction_specialist.yaml" = "prefix_cache_evolve/configs/prefix_kv_cache_eviction_specialist.yaml"
 "configs/prefix_kv_cache_rediscovery.yaml" = "prefix_cache_evolve/configs/prefix_kv_cache_rediscovery.yaml"
+"configs/prefix_kv_cache_mooncake.yaml" = "prefix_cache_evolve/configs/prefix_kv_cache_mooncake.yaml"
 "configs/prefix_kv_trace_schema.json" = "prefix_cache_evolve/configs/prefix_kv_trace_schema.json"
 
 [tool.pytest.ini_options]

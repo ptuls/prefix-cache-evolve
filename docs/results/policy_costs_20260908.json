@@ -1,0 +1,146 @@
+{
+  "schema": "prefix-kv-cache-policy-cost-comparison-v1",
+  "sandbox_image": "sha256:3dc2bb5197f501ff7668c384e4864267aee1c2b3ed2b3766cecda57b1ad4c68f",
+  "splits": [
+    "train",
+    "validation"
+  ],
+  "repeats": 1,
+  "simplification_rule": "exact visible-trial behavior; smaller effective AST; promotion size limit",
+  "declared_budgets": {
+    "callback_p99_us": null,
+    "scan_p99_us": null,
+    "state_budget_bytes": null
+  },
+  "identity": {
+    "verifier_version": "1.0.0",
+    "evaluation_context_sha256": "828c9a4367a6ee01ca78fd20720d7c12af4a97b0a2c89ba767051e8589bb1197",
+    "panel_sha256": "c5c844a7bb4a3be5d022f8d95650c8938ae95862c7652de6b2c96fb7cedb01e6"
+  },
+  "pareto_policies": [
+    "candidate_0",
+    "lru",
+    "tinylfu_lru"
+  ],
+  "simplification": {
+    "reference": "candidate_1",
+    "eligible": [
+      "candidate_0"
+    ],
+    "promotion_size_limit": 650,
+    "promoted": false
+  },
+  "policies": {
+    "candidate_0": {
+      "source_path": "/Users/paul.t/work/prefix-cache-evolve/artifacts/policy-costs-20260908/simplified_policy.py",
+      "source_sha256": "6d09294e8f3a6dca3a324b6375d3c00fda1a53dbd4095bc4a19dc96ad71ab448",
+      "implementation_ast_nodes": 628,
+      "effective_ast_nodes": 617,
+      "combined_score": 54.796788668271645,
+      "raw_before_complexity": 62.84366319783909,
+      "budgets": {
+        "status": "unassessed",
+        "limits": {
+          "callback_p99_us": null,
+          "scan_p99_us": null,
+          "sampled_retained_bytes": null
+        },
+        "measured": {
+          "callback_p99_us": 816.415,
+          "scan_p99_us": 292.777,
+          "sampled_retained_bytes": 18641
+        },
+        "failed": [],
+        "deployment_approved": false
+      }
+    },
+    "candidate_1": {
+      "source_path": "/Users/paul.t/work/prefix-cache-evolve/src/prefix_cache_evolve/problems/prefix_kv_cache/seeds/joint_mooncake_synthetic_wildchat_lmcache_20260907.py",
+      "source_sha256": "fb42fd8dae5097fefd8d352fd0244442e9971dd5926aac49ac4ccbc36aa5aa35",
+      "implementation_ast_nodes": 640,
+      "effective_ast_nodes": 629,
+      "combined_score": 54.679694314937365,
+      "raw_before_complexity": 62.843663197839085,
+      "budgets": {
+        "status": "unassessed",
+        "limits": {
+          "callback_p99_us": null,
+          "scan_p99_us": null,
+          "sampled_retained_bytes": null
+        },
+        "measured": {
+          "callback_p99_us": 816.374,
+          "scan_p99_us": 313.662,
+          "sampled_retained_bytes": 18641
+        },
+        "failed": [],
+        "deployment_approved": false
+      }
+    },
+    "tinylfu_lru": {
+      "source_path": null,
+      "source_sha256": "cd915d5361e03d319b4c65be19cebd7b801e60391a5238ed152a51cb54645ddd",
+      "implementation_ast_nodes": 227,
+      "effective_ast_nodes": 227,
+      "combined_score": 61.05975479349711,
+      "raw_before_complexity": 61.05975479349711,
+      "budgets": {
+        "status": "unassessed",
+        "limits": {
+          "callback_p99_us": null,
+          "scan_p99_us": null,
+          "sampled_retained_bytes": null
+        },
+        "measured": {
+          "callback_p99_us": 5.334,
+          "scan_p99_us": 32.797,
+          "sampled_retained_bytes": 547571
+        },
+        "failed": [],
+        "deployment_approved": false
+      }
+    },
+    "lru": {
+      "source_path": null,
+      "source_sha256": "d256608e9cf6b2b2e1dc696f9d6769a66c9759700fdaccc07646aa3ad710583c",
+      "implementation_ast_nodes": 82,
+      "effective_ast_nodes": 82,
+      "combined_score": 46.95023617830695,
+      "raw_before_complexity": 46.95023617830695,
+      "budgets": {
+        "status": "unassessed",
+        "limits": {
+          "callback_p99_us": null,
+          "scan_p99_us": null,
+          "sampled_retained_bytes": null
+        },
+        "measured": {
+          "callback_p99_us": 5.292,
+          "scan_p99_us": 34.333,
+          "sampled_retained_bytes": 352
+        },
+        "failed": [],
+        "deployment_approved": false
+      }
+    }
+  },
+  "simplified_seed": "src/prefix_cache_evolve/problems/prefix_kv_cache/seeds/joint_four_domain_simplified_20260908.py",
+  "trials_per_policy": 109,
+  "total_trials": 436,
+  "notes": "One instrumented repeat per policy on the complete train/validation panel; no probe or hidden inputs, model calls or promotion. Timing is not deployment qualification.",
+  "environment": {
+    "contract": "prefix-kv-cache-policy-costs-v1",
+    "python": "3.11.16 (main, Aug 31 2026, 23:54:33) [GCC 14.2.0]",
+    "platform": "Linux-6.12.13-200.fc41.aarch64-aarch64-with-glibc2.41",
+    "machine": "aarch64"
+  },
+  "validation": {
+    "matches_corrected_reassessment": [
+      "candidate_1",
+      "tinylfu_lru",
+      "lru"
+    ],
+    "matched_visible_trials_per_policy": 109,
+    "preexisting_incumbent_and_seed_sources_unchanged": true
+  }
+}

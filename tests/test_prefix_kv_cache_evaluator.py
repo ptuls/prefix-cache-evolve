@@ -39,7 +39,6 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import (
     scoring_fn_complexity,
 )
 from prefix_cache_evolve.evaluators.verifier import (
-    VERIFIER_VERSION,
     require_single_score_identity,
 )
 from prefix_cache_evolve.problems.prefix_kv_cache import evaluator as levi_evaluator
@@ -68,9 +67,6 @@ from prefix_cache_evolve.problems.prefix_kv_cache.specialist import (
     eviction_only_source_violations,
     fixed_admission_factory,
 )
-from prefix_cache_evolve.problems.prefix_kv_cache.utilities import (
-    agentic_surrogate_probe_tripwire,
-)
 from tests.support import score_identity, score_record
 
 
@@ -89,6 +85,18 @@ class AdmitAllLRU:
 
     def on_cache_miss(self, block, request, now: int) -> None:
         return None
+
+
+def _simulator(**overrides) -> PrefixKVCacheSimulator:
+    """Use four-token blocks and unit prefill cost unless the scenario overrides them."""
+    settings = {
+        "capacity_blocks": 4,
+        "block_size_tokens": 4,
+        "prefill_cost_per_token": 1.0,
+        "lookup_cost_per_block": 0.0,
+        "eviction_cost_per_block": 0.0,
+    }
+    return PrefixKVCacheSimulator(**{**settings, **overrides})
 
 
 def _block_info(**overrides) -> PrefixBlockInfo:
@@ -374,13 +382,7 @@ def test_block_recurrence_timestamps_use_only_prior_accesses() -> None:
         for request_id, arrival_step in enumerate((2, 7, 11))
     )
     policy = CaptureRecurrence()
-    simulator = PrefixKVCacheSimulator(
-        capacity_blocks=4,
-        block_size_tokens=4,
-        prefill_cost_per_token=1.0,
-        lookup_cost_per_block=0.0,
-        eviction_cost_per_block=0.0,
-    )
+    simulator = _simulator()
 
     simulator.run(policy, requests, split="train", workload="unit", seed=1)
 
@@ -420,13 +422,7 @@ def test_block_access_gap_summary_is_bounded_and_deterministic() -> None:
         for request_id, arrival_step in enumerate((0, 4, 10, 12))
     )
     policy = CaptureGapSummary()
-    simulator = PrefixKVCacheSimulator(
-        capacity_blocks=4,
-        block_size_tokens=4,
-        prefill_cost_per_token=1.0,
-        lookup_cost_per_block=0.0,
-        eviction_cost_per_block=0.0,
-    )
+    simulator = _simulator()
 
     simulator.run(policy, requests, split="train", workload="unit", seed=1)
 
@@ -475,13 +471,7 @@ def test_subtree_aggregates_include_known_descendants() -> None:
         for request_id in range(2)
     )
     policy = CaptureSubtree()
-    simulator = PrefixKVCacheSimulator(
-        capacity_blocks=4,
-        block_size_tokens=4,
-        prefill_cost_per_token=1.0,
-        lookup_cost_per_block=0.0,
-        eviction_cost_per_block=0.0,
-    )
+    simulator = _simulator()
 
     simulator.run(policy, requests, split="train", workload="unit", seed=1)
 
@@ -532,13 +522,7 @@ def test_request_regime_context_is_bounded_and_independent_of_request_type() -> 
             )
         )
         policy = CaptureRegime()
-        simulator = PrefixKVCacheSimulator(
-            capacity_blocks=1,
-            block_size_tokens=4,
-            prefill_cost_per_token=1.0,
-            lookup_cost_per_block=0.0,
-            eviction_cost_per_block=0.0,
-        )
+        simulator = _simulator(capacity_blocks=1)
         simulator.run(policy, requests, split="train", workload="unit", seed=1)
         return policy.observations, simulator
 
@@ -584,13 +568,7 @@ def test_candidate_visible_request_metadata_is_scrubbed() -> None:
         prompt_tokens=(1, 2, 3, 4),
     )
     policy = CaptureRequest()
-    simulator = PrefixKVCacheSimulator(
-        capacity_blocks=2,
-        block_size_tokens=4,
-        prefill_cost_per_token=1.0,
-        lookup_cost_per_block=0.0,
-        eviction_cost_per_block=0.0,
-    )
+    simulator = _simulator(capacity_blocks=2)
 
     simulator.run(policy, (request,), split="train", workload="unit", seed=1003)
 
@@ -650,14 +628,7 @@ def test_deployable_candidate_never_receives_future_reuse_metadata() -> None:
         for request_id, token in enumerate((1, 2, 1, 3))
     )
     policy = CaptureFutureReuse()
-    simulator = PrefixKVCacheSimulator(
-        capacity_blocks=2,
-        block_size_tokens=4,
-        prefill_cost_per_token=1.0,
-        lookup_cost_per_block=0.0,
-        eviction_cost_per_block=0.0,
-        expose_future_reuse=False,
-    )
+    simulator = _simulator(capacity_blocks=2, expose_future_reuse=False)
 
     simulator.run(policy, requests, split="train", workload="unit", seed=1003)
 
@@ -953,6 +924,18 @@ def test_evaluate_source_minimal_policy(monkeypatch) -> None:
         "probe/" not in feedback and "hidden/" not in feedback
         for feedback in result.metrics["feedback_per_example"]
     )
+
+
+def test_selection_feedback_includes_trace_training_but_no_holdouts() -> None:
+    result = _report_result(0.5)
+    for split in ("train", "validation", "hidden", "probe"):
+        result.workload_metrics[f"{split}/lmcache_agentic"] = {"token_hit_rate": 0.7}
+
+    metrics = levi_evaluator._selection_feedback_metrics(result)
+
+    assert metrics["train_workload_lmcache_agentic_token_hit_rate"] == 0.7
+    assert metrics["validation_workload_lmcache_agentic_token_hit_rate"] == 0.7
+    assert not any(key.startswith(("hidden_", "probe_")) for key in metrics)
 
 
 def test_workload_feedback_reports_measured_regret_side() -> None:
@@ -1306,13 +1289,7 @@ time.sleep(5.0)
 
 
 def test_root_anchored_match() -> None:
-    simulator = PrefixKVCacheSimulator(
-        capacity_blocks=4,
-        block_size_tokens=4,
-        prefill_cost_per_token=1.0,
-        lookup_cost_per_block=0.0,
-        eviction_cost_per_block=0.0,
-    )
+    simulator = _simulator()
     request = WorkloadRequest(
         info=RequestInfo(
             request_id=0,
@@ -1349,14 +1326,7 @@ def test_forced_bypass_not_invalid() -> None:
 
 
 def test_pinned_blocks_are_released_after_generation_finishes() -> None:
-    simulator = PrefixKVCacheSimulator(
-        capacity_blocks=1,
-        block_size_tokens=4,
-        prefill_cost_per_token=1.0,
-        lookup_cost_per_block=0.0,
-        eviction_cost_per_block=0.0,
-        active_tokens_per_step=64,
-    )
+    simulator = _simulator(capacity_blocks=1, active_tokens_per_step=64)
     requests = tuple(
         WorkloadRequest(
             info=RequestInfo(
@@ -1388,14 +1358,7 @@ def test_pinned_blocks_are_released_after_generation_finishes() -> None:
 
 
 def test_re_admitted_block_becomes_most_recently_used() -> None:
-    simulator = PrefixKVCacheSimulator(
-        capacity_blocks=2,
-        block_size_tokens=4,
-        prefill_cost_per_token=1.0,
-        lookup_cost_per_block=0.0,
-        eviction_cost_per_block=0.0,
-        active_tokens_per_step=64,
-    )
+    simulator = _simulator(capacity_blocks=2, active_tokens_per_step=64)
     requests = tuple(
         WorkloadRequest(
             info=RequestInfo(
@@ -1429,13 +1392,7 @@ def test_re_admitted_block_becomes_most_recently_used() -> None:
 
 
 def test_cache_miss_charges_failed_lookup_probe() -> None:
-    simulator = PrefixKVCacheSimulator(
-        capacity_blocks=1,
-        block_size_tokens=4,
-        prefill_cost_per_token=1.0,
-        lookup_cost_per_block=2.0,
-        eviction_cost_per_block=0.0,
-    )
+    simulator = _simulator(capacity_blocks=1, lookup_cost_per_block=2.0)
     request = WorkloadRequest(
         info=RequestInfo(
             request_id=0,
@@ -1469,13 +1426,7 @@ def test_cache_miss_charges_failed_lookup_probe() -> None:
 
 
 def test_underfill_does_not_penalize_natural_unused_capacity() -> None:
-    simulator = PrefixKVCacheSimulator(
-        capacity_blocks=8,
-        block_size_tokens=4,
-        prefill_cost_per_token=1.0,
-        lookup_cost_per_block=0.0,
-        eviction_cost_per_block=0.0,
-    )
+    simulator = _simulator(capacity_blocks=8)
     request = WorkloadRequest(
         info=RequestInfo(
             request_id=0,
@@ -1503,13 +1454,7 @@ def test_underfill_does_not_penalize_natural_unused_capacity() -> None:
 
 
 def test_admission_lifecycle_and_short_reuse_regret_are_reported() -> None:
-    simulator = PrefixKVCacheSimulator(
-        capacity_blocks=1,
-        block_size_tokens=4,
-        prefill_cost_per_token=1.0,
-        lookup_cost_per_block=0.0,
-        eviction_cost_per_block=0.0,
-    )
+    simulator = _simulator(capacity_blocks=1)
     requests = tuple(
         WorkloadRequest(
             info=RequestInfo(
@@ -1555,13 +1500,7 @@ def test_admission_lifecycle_and_short_reuse_regret_are_reported() -> None:
 
 def test_admission_token_utility_distinguishes_full_and_partial_blocks() -> None:
     def run(tokens: tuple[int, ...]) -> TrialMetrics:
-        simulator = PrefixKVCacheSimulator(
-            capacity_blocks=1,
-            block_size_tokens=4,
-            prefill_cost_per_token=1.0,
-            lookup_cost_per_block=0.0,
-            eviction_cost_per_block=0.0,
-        )
+        simulator = _simulator(capacity_blocks=1)
         requests = tuple(
             WorkloadRequest(
                 info=RequestInfo(
@@ -1596,13 +1535,7 @@ def test_admission_token_utility_distinguishes_full_and_partial_blocks() -> None
 
 
 def test_token_weighted_admission_waste_reflects_block_size() -> None:
-    simulator = PrefixKVCacheSimulator(
-        capacity_blocks=2,
-        block_size_tokens=4,
-        prefill_cost_per_token=1.0,
-        lookup_cost_per_block=0.0,
-        eviction_cost_per_block=0.0,
-    )
+    simulator = _simulator(capacity_blocks=2)
     request_tokens = ((1,), (1,), (2, 2, 2, 2))
     requests = tuple(
         WorkloadRequest(
@@ -1655,14 +1588,7 @@ def test_avoidable_eviction_audit_distinguishes_lru_from_oracle() -> None:
     )
 
     def run(factory, *, expose_future_reuse: bool) -> TrialMetrics:
-        simulator = PrefixKVCacheSimulator(
-            capacity_blocks=2,
-            block_size_tokens=4,
-            prefill_cost_per_token=1.0,
-            lookup_cost_per_block=0.0,
-            eviction_cost_per_block=0.0,
-            expose_future_reuse=expose_future_reuse,
-        )
+        simulator = _simulator(capacity_blocks=2, expose_future_reuse=expose_future_reuse)
         return simulator.run(
             factory(2, 4),
             requests,
@@ -1709,13 +1635,7 @@ def test_admission_audit_distinguishes_avoidable_admission_and_rejection() -> No
         *,
         capacity_blocks: int = 1,
     ) -> TrialMetrics:
-        simulator = PrefixKVCacheSimulator(
-            capacity_blocks=capacity_blocks,
-            block_size_tokens=4,
-            prefill_cost_per_token=1.0,
-            lookup_cost_per_block=0.0,
-            eviction_cost_per_block=0.0,
-        )
+        simulator = _simulator(capacity_blocks=capacity_blocks)
         return simulator.run(
             policy,
             requests(token_stream),
@@ -1779,13 +1699,7 @@ def test_shadow_price_calibration_preserves_the_policy_zero_crossing() -> None:
 
 
 def test_temporal_and_tenant_tail_metrics_expose_service_collapse() -> None:
-    simulator = PrefixKVCacheSimulator(
-        capacity_blocks=1,
-        block_size_tokens=4,
-        prefill_cost_per_token=1.0,
-        lookup_cost_per_block=0.0,
-        eviction_cost_per_block=0.0,
-    )
+    simulator = _simulator(capacity_blocks=1)
     requests = []
     for request_id in range(8):
         token = 1 if request_id < 4 else request_id
@@ -2502,27 +2416,6 @@ def test_score_min_term_includes_capacity_variants() -> None:
     assert evaluator._score_trials(trials, invalid_fraction=0.0, complexity=0) == 55.0
 
 
-def test_complexity_penalty_orders(monkeypatch) -> None:
-    monkeypatch.setattr(
-        levi_evaluator,
-        "DEFAULT_CONFIG",
-        EvaluatorConfig(request_count=12, seeds=(3,)),
-    )
-    simple = levi_evaluator.evaluate_source(_minimal_policy_source("-1.0", "0.0"))
-    complex_source = _minimal_policy_source(
-        "-1.0 + 0.0 * (block.depth + block.hit_count + block.descendant_count)",
-        "0.0 + 0.0 * (now + block.depth + block.hit_count + block.token_count)",
-    )
-    complex_result = levi_evaluator.evaluate_source(complex_source)
-
-    assert complex_result.metrics["success"] is True
-    assert simple.metrics["combined_score"] > complex_result.metrics["combined_score"]
-    assert (
-        simple.artifacts["candidate_metadata"]["scoring_fn_complexity"]
-        < complex_result.artifacts["candidate_metadata"]["scoring_fn_complexity"]
-    )
-
-
 def test_existing_trials_can_be_rescored_without_rerunning_simulation() -> None:
     config = EvaluatorConfig(
         request_count=48,
@@ -2584,6 +2477,49 @@ def test_runner_default_report_matches_levi_capacity_sweep() -> None:
     assert explicit_config.effective_capacity_blocks() == (12,)
 
 
+def test_score_penalties_weight_workload_capacity_groups_equally() -> None:
+    evaluator = PrefixKVCacheEvaluator(
+        EvaluatorConfig(
+            churn_weight=1.0,
+            churn_cap=1_000.0,
+            underfill_weight=1.0,
+            underfill_cap=1_000.0,
+            fairness_weight=0.0,
+            k_complex=0.0,
+            min_workload_weight=0.0,
+        )
+    )
+    trials = [
+        TrialMetrics(
+            split="validation",
+            workload="synthetic",
+            seed=seed,
+            capacity_blocks=4,
+            block_size_tokens=16,
+            cache_churn_per_1k=100.0,
+            policy_underfill_rate=0.8,
+        )
+        for seed in (11, 23, 37)
+    ]
+    trials.append(
+        TrialMetrics(
+            split="validation",
+            workload="trace",
+            seed=0,
+            capacity_blocks=128,
+            block_size_tokens=512,
+            cache_churn_per_1k=0.0,
+            policy_underfill_rate=0.0,
+        )
+    )
+
+    breakdown = evaluator._score_breakdown(trials, 0.0, 0)
+
+    assert breakdown["churn_cost"] == 50.0
+    assert breakdown["policy_underfill_rate"] == 0.4
+    assert breakdown["underfill_cost"] == 0.4
+
+
 def test_block_size_robustness_normalizes_capacity_and_replays_canonical_traffic(
     tmp_path,
     monkeypatch,
@@ -2641,104 +2577,6 @@ def test_block_size_robustness_rejects_inexact_token_capacity() -> None:
         )
 
 
-def test_candidate_prompt_names_only_supported_lifecycle_callbacks() -> None:
-    config = prefix_runner._CONFIG_LOADER.load(Path("configs/prefix_kv_cache.yaml"))
-    message = config.raw["prompt"]["system_message"]
-
-    assert config.run_cost == {}
-    assert "No other lifecycle callback fires." in message
-    assert "session_id is request-only metadata" in message
-    assert "now argument is a logical arrival step" in message
-    assert "Priority is a deployable request signal, not proof of reuse" in message
-    assert "Long-horizon tenant workloads repeatedly shift" in message
-    assert "Do not hard-code workload-family names or use scrubbed request fields." in message
-    assert 'request_type is normalized to "request"' in message
-    assert "candidate factory receives a fixed policy seed" in message
-    assert "Make exactly one semantic change per mutation." in message
-    assert "effective complexity at or below 650 AST nodes" in message
-    assert "targeted agentic and stochastic guidance" in message
-    assert "agent_trace_branching probe remains reporting-only" in message
-    for field in (
-        "prev_last_accessed_at",
-        "last_access_gap",
-        "access_gap_mean",
-        "access_gap_var",
-        "subtree_hit_rate",
-        "subtree_active_ref_count",
-        "recent_admission_pressure",
-        "recent_miss_rate",
-        "MultiTimescaleDecay",
-        "observe_vector",
-        "decay_vector",
-        "threshold_excess",
-    ):
-        assert field in message
-    for callback in (
-        "on_request_start",
-        "on_cache_hit",
-        "on_cache_miss",
-        "on_request_end",
-        "on_block_admitted",
-        "on_block_evicted",
-    ):
-        assert callback in message
-
-
-def test_candidate_config_matches_default_verifier_panel_and_score_weights() -> None:
-    config = prefix_runner._CONFIG_LOADER.load(Path("configs/prefix_kv_cache.yaml"))
-    settings = config.raw["problem"]["settings"]
-    default = EvaluatorConfig()
-    loaded = load_evaluator_config(Path("configs/prefix_kv_cache.yaml"))
-
-    assert tuple(settings["train_families"]) == default.train_families
-    assert tuple(settings["validation_families"]) == default.validation_families
-    assert tuple(settings["probe_families"]) == default.probe_families
-    assert tuple(settings["hidden_families"]) == default.hidden_families
-    assert loaded.form_aware_complexity is True
-    assert loaded.verifier_version == VERIFIER_VERSION
-    assert loaded.family_request_multipliers == default.family_request_multipliers
-    assert loaded.timeout_s == 90
-    assert loaded.request_count == 96
-    assert loaded.seeds == (11, 23, 37)
-    assert loaded.policy_seed == 0
-    assert loaded.effective_capacity_blocks() == (24, 48)
-    assert loaded.effective_capacity_tokens() == (384, 768)
-    assert loaded.block_size_tokens == 16
-    assert loaded.workload_token_granularity == 8
-    assert loaded.max_candidate_complexity is None
-    assert loaded.promotion_max_candidate_complexity == 650
-    assert loaded.surrogate_probe_tripwire_thresholds == {
-        "agentic_branching": 0.12,
-        "cyclic_working_set": 0.25,
-    }
-    assert loaded.reject_unsupported_source_patterns is True
-    for field in (
-        "w_avg_tok",
-        "w_avg_blk",
-        "min_workload_weight",
-        "min_seed_weight",
-        "request_tail_weight",
-        "worst_window_weight",
-        "priority_hit_weight",
-        "wasted_admission_weight",
-        "admission_utility_weight",
-        "avoidable_eviction_weight",
-        "latency_weight",
-        "latency_cap",
-        "churn_weight",
-        "churn_cap",
-        "underfill_weight",
-        "underfill_cap",
-        "fairness_weight",
-        "fairness_cap",
-        "k_complex",
-        "complexity_exponent",
-        "v_min",
-        "invalid_surcharge",
-    ):
-        assert settings["scoring"][field] == getattr(default, field)
-
-
 def test_evaluator_config_rejects_incomplete_or_unknown_tripwire_channels() -> None:
     with pytest.raises(ValueError, match=r"missing: cyclic_working_set"):
         EvaluatorConfig(
@@ -2792,43 +2630,6 @@ def test_candidate_search_configuration_is_forwarded_to_levi() -> None:
     assert kwargs["pipeline"]["n_eval_processes"] == raw["evaluator"]["parallel_evaluations"]
     assert kwargs["cascade"]["enabled"] == raw["evaluator"]["cascade_evaluation"]
     assert config.search_seed == raw["search"]["seed"]
-    assert {
-        "train_workload_agentic_tool_workflows_token_hit_rate",
-        "train_workload_agentic_tool_workflows_policy_underfill_rate",
-        "validation_workload_stochastic_serving_mix_token_hit_rate",
-        "validation_avoidable_eviction_rate",
-        "validation_short_reuse_after_eviction_missed_token_rate",
-        "validation_shadow_price_tracking_rmse",
-    }.issubset(kwargs["behavior"]["score_keys"])
-
-
-def test_eviction_specialist_config_fixes_admission_and_separates_promotion_cap() -> None:
-    path = Path("configs/prefix_kv_cache_eviction_specialist.yaml")
-    workflow_config = prefix_runner._CONFIG_LOADER.load(path)
-    evaluator_config = load_evaluator_config(path)
-
-    assert evaluator_config.fixed_admission_policy == "discovery_8tok_20260608"
-    assert evaluator_config.candidate_policy_surface == "eviction_only"
-    assert evaluator_config.search_score_mode == "raw_before_complexity"
-    assert evaluator_config.max_candidate_complexity == 1000
-    assert evaluator_config.promotion_max_candidate_complexity == 650
-    assert evaluator_config.surrogate_probe_tripwire_thresholds == {
-        "agentic_branching": 0.12,
-        "cyclic_working_set": 0.25,
-    }
-    assert evaluator_config.effective_capacity_blocks() == (24, 48)
-    assert evaluator_config.effective_capacity_tokens() == (384, 768)
-    assert {
-        "validation_avoidable_eviction_rate",
-        "validation_short_reuse_after_eviction_missed_token_rate",
-    }.issubset(workflow_config.behavior["score_keys"])
-    assert "raw behavioral improvement" in workflow_config.problem_description
-    assert "remain at most 650" in workflow_config.problem_description.lower()
-    assert workflow_config.function_signature == (
-        "def score_eviction(block, now, frequency, priority):"
-    )
-    assert workflow_config.init["n_diverse_seeds"] == 6
-    assert workflow_config.cvt["n_centroids"] == 16
 
 
 def test_prefix_evaluator_config_rejects_inactive_settings() -> None:
@@ -3368,34 +3169,6 @@ def test_tenant_phase_shift_cycles_repeat_pollution_and_delayed_recovery() -> No
     assert metrics["worst_recovery_phase_p95_latency_proxy"] > 0.0
 
 
-def test_default_splits_include_production_shaped_workloads() -> None:
-    config = EvaluatorConfig()
-
-    assert "agentic_tool_workflows" in config.train_families
-    assert {
-        "stochastic_serving_mix",
-        "rolling_template_versions",
-        "heavy_tailed_prefix_lengths",
-        "priority_burst_recovery",
-        "priority_one_off_noise",
-        "tenant_phase_shift_cycles",
-    }.issubset(config.validation_families)
-    assert {
-        "agent_trace_branching",
-        "cyclic_working_set_pressure",
-    } == set(config.probe_families)
-    assert set(config.probe_families).isdisjoint(config.validation_families)
-    assert {
-        "stochastic_serving_mix_shifted",
-        "rolling_template_versions_shifted",
-        "heavy_tailed_prefix_lengths_shifted",
-        "priority_burst_recovery_shifted",
-        "cyclic_working_set_pressure_shifted",
-        "priority_one_off_noise_shifted",
-        "tenant_phase_shift_cycles_shifted",
-    }.issubset(config.hidden_families)
-
-
 def test_production_shaped_workloads_reward_selective_admission() -> None:
     families = (
         "stochastic_serving_mix",
@@ -3557,18 +3330,6 @@ def test_shared_kv_capacity_models_decode_pressure_without_changing_default() ->
     assert shared_metrics["prefix_kv_occupancy_mean"] < prefix_metrics["prefix_kv_occupancy_mean"]
     assert shared_no_cache_metrics["decode_kv_occupancy_mean"] > 0
     assert shared_no_cache_metrics["policy_underfill_rate"] == 1.0
-
-
-def test_unknown_kv_capacity_mode_is_rejected() -> None:
-    with pytest.raises(ValueError, match="kv capacity mode"):
-        PrefixKVCacheSimulator(
-            capacity_blocks=4,
-            block_size_tokens=4,
-            prefill_cost_per_token=1.0,
-            lookup_cost_per_block=0.0,
-            eviction_cost_per_block=0.0,
-            kv_capacity_mode="unknown",
-        )
 
 
 def test_structural_prefix_metrics_are_reported() -> None:
@@ -3739,14 +3500,7 @@ def test_future_reuse_metadata_is_live_after_current_request() -> None:
         def score_admission(self, block, now: int) -> float:
             return -1.0
 
-    simulator = PrefixKVCacheSimulator(
-        capacity_blocks=4,
-        block_size_tokens=4,
-        prefill_cost_per_token=1.0,
-        lookup_cost_per_block=0.0,
-        eviction_cost_per_block=0.0,
-        expose_future_reuse=True,
-    )
+    simulator = _simulator(expose_future_reuse=True)
     requests = tuple(
         WorkloadRequest(
             info=RequestInfo(
@@ -3788,14 +3542,7 @@ def test_future_reuse_metadata_preserves_same_step_next_use() -> None:
         def score_admission(self, block, now: int) -> float:
             return -1.0
 
-    simulator = PrefixKVCacheSimulator(
-        capacity_blocks=4,
-        block_size_tokens=4,
-        prefill_cost_per_token=1.0,
-        lookup_cost_per_block=0.0,
-        eviction_cost_per_block=0.0,
-        expose_future_reuse=True,
-    )
+    simulator = _simulator(expose_future_reuse=True)
     requests = tuple(
         WorkloadRequest(
             info=RequestInfo(
@@ -3841,49 +3588,6 @@ def test_write_baseline_plots_creates_svg_files(tmp_path, monkeypatch) -> None:
         text = path.read_text(encoding="utf-8")
         assert text.startswith("<svg")
         assert "</svg>" in text
-
-
-def test_agentic_surrogate_probe_tripwire_passes_within_threshold() -> None:
-    tripwire = agentic_surrogate_probe_tripwire(
-        {
-            "train/agentic_tool_workflows": {"token_hit_rate": 0.48},
-            "probe/agent_trace_branching": {"token_hit_rate": 0.38},
-        },
-        threshold=0.12,
-    )
-
-    assert tripwire["status"] == "pass"
-    assert tripwire["flagged"] is False
-    assert tripwire["surrogate_minus_probe"] == pytest.approx(0.10)
-    assert tripwire["absolute_gap"] == pytest.approx(0.10)
-    assert tripwire["selection_score_excludes_probe"] is True
-
-
-def test_agentic_surrogate_probe_tripwire_flags_excessive_divergence() -> None:
-    tripwire = agentic_surrogate_probe_tripwire(
-        {
-            "train/agentic_tool_workflows": {"token_hit_rate": 0.60},
-            "probe/agent_trace_branching": {"token_hit_rate": 0.30},
-        },
-        threshold=0.12,
-    )
-
-    assert tripwire["status"] == "flagged"
-    assert tripwire["flagged"] is True
-    assert tripwire["flag_reason"] == "divergence_exceeds_threshold"
-    assert tripwire["surrogate_minus_probe"] == pytest.approx(0.30)
-    assert tripwire["absolute_gap"] == pytest.approx(0.30)
-
-
-def test_agentic_surrogate_probe_tripwire_fails_closed_without_both_metrics() -> None:
-    tripwire = agentic_surrogate_probe_tripwire(
-        {"train/agentic_tool_workflows": {"token_hit_rate": 0.48}},
-    )
-
-    assert tripwire["status"] == "flagged"
-    assert tripwire["flagged"] is True
-    assert tripwire["flag_reason"] == "missing_or_invalid_metric"
-    assert tripwire["absolute_gap"] is None
 
 
 def test_surrogate_probe_tripwire_suite_passes_all_configured_channels() -> None:

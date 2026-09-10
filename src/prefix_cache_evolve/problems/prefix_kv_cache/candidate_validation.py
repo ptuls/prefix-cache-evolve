@@ -42,6 +42,7 @@ _DYNAMIC_BUILTINS = {
     "locals",
     "open",
     "setattr",
+    "type",
     "vars",
 }
 _PRIMITIVE_MODULE = "prefix_cache_evolve.problems.prefix_kv_cache.primitives"
@@ -108,6 +109,10 @@ def candidate_source_violations(
         return tuple(violations)
 
     imported_names: dict[str, str] = {}
+    parents = {
+        id(child): parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)
+    }
+    class_names = {node.name for node in tree.body if isinstance(node, ast.ClassDef)}
     used_names = {
         node.id
         for node in ast.walk(tree)
@@ -139,7 +144,15 @@ def candidate_source_violations(
             violations.append(f"unused import {imported_from}")
 
     for descendant in ast.walk(tree):
-        if isinstance(descendant, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if isinstance(descendant, (ast.Import, ast.ImportFrom)) and descendant not in tree.body:
+            violations.append("nested imports are not allowed in candidate code")
+        elif (
+            isinstance(descendant, ast.Attribute)
+            and isinstance(descendant.ctx, (ast.Store, ast.Del))
+            and not _is_instance_state_write(descendant, parents)
+        ):
+            violations.append("attribute writes must target candidate-owned self state")
+        elif isinstance(descendant, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if descendant.name in _UNSUPPORTED_CALLBACKS:
                 violations.append(f"unsupported callback {descendant.name}")
             if descendant.decorator_list:
@@ -165,6 +178,13 @@ def candidate_source_violations(
             and descendant.id in _DYNAMIC_BUILTINS
         ):
             violations.append(f"{descendant.id}() is not allowed in candidate code")
+        elif (
+            isinstance(descendant, ast.Name)
+            and isinstance(descendant.ctx, ast.Load)
+            and descendant.id in class_names
+            and not _is_allowed_class_reference(descendant, parents)
+        ):
+            violations.append("candidate classes may only be referenced as direct constructors")
         elif isinstance(descendant, ast.ExceptHandler) and _is_broad_exception_handler(descendant):
             violations.append("broad exception handlers are not allowed")
         elif isinstance(descendant, ast.Call):
@@ -198,6 +218,12 @@ def static_repair_feedback(
             )
         elif violation.startswith("unused import "):
             repairs.append(f"Delete {violation.removeprefix('unused import ')} from the imports.")
+        elif violation == "nested imports are not allowed in candidate code":
+            repairs.append("Keep permitted math and primitive imports at module scope.")
+        elif violation == "attribute writes must target candidate-owned self state":
+            repairs.append(
+                "Write persistent attributes only on the candidate policy's self object."
+            )
         elif violation.startswith("unsupported callback "):
             repairs.append(f"Delete {violation.removeprefix('unsupported callback ')} entirely.")
         elif violation.startswith("eviction-only specialist"):
@@ -368,3 +394,49 @@ def _threshold_excess_violations(node: ast.Call) -> tuple[str, ...]:
     if supplied_names != {"value", "threshold"}:
         violations.append("threshold_excess requires value and threshold")
     return tuple(violations)
+
+
+def _is_instance_state_write(
+    node: ast.Attribute,
+    parents: dict[int, ast.AST],
+) -> bool:
+    """Return whether a direct self write belongs to an instance method."""
+    if not (isinstance(node.value, ast.Name) and node.value.id == "self"):
+        return False
+    ancestor: ast.AST = node
+    while id(ancestor) in parents:
+        ancestor = parents[id(ancestor)]
+        if isinstance(ancestor, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            parent = parents.get(id(ancestor))
+            positional = (*ancestor.args.posonlyargs, *ancestor.args.args)
+            return (
+                isinstance(parent, ast.ClassDef)
+                and bool(positional)
+                and positional[0].arg == "self"
+            )
+        if isinstance(ancestor, (ast.ClassDef, ast.Lambda)):
+            return False
+    return False
+
+
+def _is_allowed_class_reference(
+    node: ast.Name,
+    parents: dict[int, ast.AST],
+) -> bool:
+    """Allow direct construction and inert type annotations only."""
+    parent = parents.get(id(node))
+    if isinstance(parent, ast.Call) and parent.func is node:
+        return True
+    ancestor: ast.AST = node
+    while id(ancestor) in parents:
+        parent = parents[id(ancestor)]
+        if isinstance(parent, ast.arg) and parent.annotation is ancestor:
+            return True
+        if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return parent.returns is ancestor
+        if isinstance(parent, ast.AnnAssign):
+            return parent.annotation is ancestor
+        if isinstance(parent, ast.stmt):
+            return False
+        ancestor = parent
+    return False

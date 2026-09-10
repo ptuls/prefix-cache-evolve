@@ -16,8 +16,9 @@ from prefix_cache_evolve.workflow.config import ConfigLoader, yaml_documents_equ
 from prefix_cache_evolve.workflow.execution import (
     LeviRunner,
     LeviScoreFunction,
-    _configured_paradigm_max_tokens,
     _configured_paradigm_model_names,
+    _enable_levi_source_evaluation,
+    _evaluate_levi_code,
     _module_name_from_package_path,
 )
 from prefix_cache_evolve.workflow.levi_compat import (
@@ -96,25 +97,22 @@ def test_workflow_config_resolves_provider_and_search_seed() -> None:
     assert config.api_key_env == "LOCAL_MODEL_API_KEY"
 
 
-def test_levi_score_function_preserves_identity_and_filters_nonfinite_metrics() -> None:
-    def evaluate_factory(factory):
+def test_levi_score_function_preserves_scores_identity_and_feedback():
+    metrics = {
+        **score_identity(),
+        "combined_score": 2.5,
+        "success": True,
+        "per_example_scores": [0.2, 0.8],
+        "feedback_per_example": ["weak first workload", "weak second workload"],
+    }
+
+    def evaluate_factory(_factory):
         return EvaluatorResult(
-            metrics={
-                **score_identity(),
-                "combined_score": factory(),
-                "ignored_inf": float("inf"),
-                "ignored_text": "n/a",
-            },
+            metrics={**metrics, "ignored_inf": float("inf"), "ignored_text": "n/a"},
             artifacts={},
         )
 
-    score_fn = LeviScoreFunction(evaluate_factory)
-
-    assert score_fn(lambda: 2.5) == {
-        "score": 2.5,
-        **score_identity(),
-        "combined_score": 2.5,
-    }
+    assert LeviScoreFunction(evaluate_factory)(lambda: None) == {"score": 2.5, **metrics}
 
 
 def test_levi_score_function_prefers_source_aware_evaluator() -> None:
@@ -156,6 +154,55 @@ def test_levi_score_function_fails_closed_when_source_is_required() -> None:
     }
 
 
+@requires_levi
+def test_levi_adapter_validates_source_before_executing_top_level_code(tmp_path, monkeypatch):
+    from levi.artifacts import code
+    from levi.config import LeviConfig
+
+    from prefix_cache_evolve.problems.prefix_kv_cache import evaluator
+    from prefix_cache_evolve.problems.prefix_kv_cache.configuration import (
+        DEFAULT_CONFIG_PATH,
+        prefix_kv_config_environment,
+    )
+
+    marker = tmp_path / "must-not-exist"
+    source = f"open({str(marker)!r}, 'w').write('executed')\ndef build_candidate():\n    return 1\n"
+    score_fn = LeviScoreFunction(evaluator.evaluate_factory, evaluator.evaluate_source)
+    config = LeviConfig(
+        problem_description="Preflight source validation",
+        function_signature="def build_candidate(capacity_blocks, block_size_tokens, seed=None):",
+        score_fn=score_fn,
+        budget={"evaluations": 1},
+    )
+
+    class InlineExecutor:
+        async def run(self, func, *args, **kwargs):
+            assert func is _evaluate_levi_code
+            assert pickle.loads(pickle.dumps(func)) is func
+            return func(*args)
+
+    monkeypatch.setattr(code, "evaluate_code", code.evaluate_code)
+    _enable_levi_source_evaluation()
+    with prefix_kv_config_environment(DEFAULT_CONFIG_PATH):
+        result = asyncio.run(code.CodeAdapter(config).evaluate(InlineExecutor(), source))
+    assert "Static policy violations" in result["error"]
+    assert not marker.exists()
+
+
+@requires_levi
+def test_levi_source_dispatch_keeps_generic_factory_evaluators_working():
+    def evaluate_factory(factory):
+        return EvaluatorResult(metrics={"combined_score": factory()}, artifacts={})
+
+    score_fn = LeviScoreFunction(evaluate_factory)
+    result = _evaluate_levi_code(
+        "def candidate_factory():\n    return 2.5\n", score_fn, None, "candidate_factory"
+    )
+    assert result["score"] == 2.5
+    with pytest.raises(ValueError, match="does not support"):
+        score_fn.score_source("unused")
+
+
 def test_levi_score_function_clamps_invalid_score() -> None:
     def evaluate_factory(_factory):
         return EvaluatorResult(metrics={"combined_score": float("nan")}, artifacts={})
@@ -163,29 +210,6 @@ def test_levi_score_function_clamps_invalid_score() -> None:
     score_fn = LeviScoreFunction(evaluate_factory)
 
     assert score_fn(lambda: None) == {"score": 0.0}
-
-
-def test_levi_score_function_forwards_failure_feedback() -> None:
-    def evaluate_factory(_factory):
-        return EvaluatorResult(
-            metrics={
-                "combined_score": 2.0,
-                "success": True,
-                "per_example_scores": [0.2, 0.8],
-                "feedback_per_example": ["weak first workload", "weak second workload"],
-            },
-            artifacts={},
-        )
-
-    score_fn = LeviScoreFunction(evaluate_factory)
-
-    assert score_fn(lambda: None) == {
-        "score": 2.0,
-        "combined_score": 2.0,
-        "success": 1.0,
-        "per_example_scores": [0.2, 0.8],
-        "feedback_per_example": ["weak first workload", "weak second workload"],
-    }
 
 
 def test_levi_score_function_rejects_unsuccessful_results() -> None:
@@ -259,8 +283,14 @@ def test_levi_code_adapter_accepts_failure_feedback() -> None:
 
 
 @requires_levi
-def test_levi_duplicate_init_behaviors_fall_back_to_distinct_uniform_centroids(monkeypatch) -> None:
-    from levi.behavior import BehaviorExtractor
+@pytest.mark.parametrize(
+    "initial_values",
+    [[0.1], [0.1, 0.3], [0.1] * 4],
+    ids=["single_seed", "sparse_distinct_seeds", "duplicate_behaviors"],
+)
+def test_levi_archive_can_grow_after_sparse_initialization(monkeypatch, initial_values) -> None:
+    from levi.behavior import BehaviorExtractor, FeatureVector
+    from levi.core import EvaluationResult, Program
     from levi.pool.cvt_map_elites import CVTMAPElitesPool
 
     extractor = BehaviorExtractor(ast_features=["cyclomatic_complexity"])
@@ -270,19 +300,55 @@ def test_levi_duplicate_init_behaviors_fall_back_to_distinct_uniform_centroids(m
         "_init_cvt_centroids",
         lambda: np.array([[0.1], [0.3], [0.7], [0.9]]),
     )
-    duplicate_behaviors = [np.array([0.5])] * 4
+    behaviors = [np.array([value]) for value in initial_values]
 
     with activate_levi_runtime(LeviRuntimeSettings(search_seed=0)):
         n_centroids, labels = pool.set_centroids_from_data(
-            duplicate_behaviors,
+            behaviors,
             n_centroids=4,
         )
 
     assert n_centroids == 4
     assert len(np.unique(pool._centroids, axis=0)) == 4
-    assert len(np.unique(labels)) == 1
+    assert len(labels) == len(initial_values)
     assert np.array_equal(pool._mins, np.zeros(1))
     assert np.array_equal(pool._maxs, np.ones(1))
+    for cell, value in zip(labels, initial_values):
+        pool.add_at_cell(
+            int(cell),
+            Program(content="def seed():\n    return 1\n"),
+            EvaluationResult(scores={"score": 2.0}),
+            FeatureVector({"cyclomatic_complexity": value}),
+        )
+    assert pool.size() == len(set(initial_values))
+    assert pool.add_with_raw_behavior(
+        Program(content="def alternative():\n    return 2\n"),
+        EvaluationResult(scores={"score": 1.0}),
+        {"cyclomatic_complexity": 0.9},
+    )
+    assert pool.size() == len(set(initial_values)) + 1
+
+
+@requires_levi
+def test_levi_sufficient_initialization_keeps_data_driven_centroids(monkeypatch) -> None:
+    from levi.behavior import BehaviorExtractor
+    from levi.pool.cvt_map_elites import CVTMAPElitesPool
+
+    def unexpected_fallback():
+        pytest.fail("Distinct observations should determine the centroids")
+
+    extractor = BehaviorExtractor(ast_features=["cyclomatic_complexity"])
+    pool = CVTMAPElitesPool(extractor, n_centroids=2, data_driven_centroids=True)
+    monkeypatch.setattr(pool, "_init_cvt_centroids", unexpected_fallback)
+
+    with activate_levi_runtime(LeviRuntimeSettings(search_seed=0)):
+        n_centroids, labels = pool.set_centroids_from_data(
+            [np.array([0.2]), np.array([0.8])], n_centroids=2
+        )
+
+    assert n_centroids == 2
+    assert len(np.unique(labels)) == 2
+    np.testing.assert_allclose(np.sort(pool._centroids[:, 0]), [0.2, 0.8])
 
 
 @requires_levi
@@ -291,7 +357,9 @@ def test_compact_paradigm_shift_override_reaches_levi_prompt() -> None:
     from levi.config import BudgetConfig, LeviConfig
     from levi.core import EvaluationResult, Program
 
-    run_config = ConfigLoader().load(Path("configs/prefix_kv_cache.yaml"))
+    run_config = ConfigLoader().from_dict(
+        {"prompt_overrides": {"paradigm_shift": "Custom strategy instruction"}}
+    )
     levi_config = LeviConfig(
         problem_description="test problem",
         function_signature="def build_candidate():",
@@ -308,26 +376,7 @@ def test_compact_paradigm_shift_override_reaches_levi_prompt() -> None:
 
     prompt = adapter.build_paradigm_shift_prompt([(0, representative)], n_evaluations=1)
 
-    assert "Target at most 550 effective AST nodes" in prompt
-    assert "Candidates above 650 nodes are exploration-only" in prompt
-    assert "COMPLETELY DIFFERENT strategy" not in prompt
-
-
-def test_configured_paradigm_max_tokens_prefers_paradigm_budget() -> None:
-    config = SimpleNamespace(
-        punctuated_equilibrium={"max_tokens": 12_000},
-        pipeline={"max_tokens": 6_000},
-    )
-
-    assert _configured_paradigm_max_tokens(config) == 12_000
-
-
-@requires_levi
-def test_production_config_resolves_reasoning_paradigm_budget_and_model() -> None:
-    config = ConfigLoader().load(Path("configs/prefix_kv_cache.yaml"))
-
-    assert _configured_paradigm_max_tokens(config) == 12_000
-    assert _configured_paradigm_model_names(config) == frozenset({"openai/gpt-5.5"})
+    assert "Custom strategy instruction" in prompt
 
 
 @requires_levi

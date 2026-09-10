@@ -1,0 +1,437 @@
+{
+  "active_controls": {
+    "exploration_source_limit": 750,
+    "promotion_source_limit": 650,
+    "search_score_mode": "combined",
+    "specialist_search_score_mode": "raw_before_complexity"
+  },
+  "analysis_script": {
+    "path": "artifacts/complexity-review-20260908/analyze.py",
+    "sha256": "8937ab047c0acbba457eaa772406f1dd2910f16a79ba61d72d773c5136a36326"
+  },
+  "baseline_source_sha256": "79ad072deae70f056b7fac1ce259fbf3f92346b4fd30e1b5a1f2d943584f8925",
+  "class_shell_nodes": 1,
+  "coefficient": 0.065,
+  "coefficient_for_tie_with_illustrative_counted_tiny": 0.026578727353699795,
+  "coefficient_for_tie_with_zero_charge_tiny": 0.014203146526572086,
+  "coefficient_sweep": [
+    {
+      "coefficient": 0.0,
+      "newer_penalty": 0.0,
+      "ranking": [
+        "four_domain",
+        "tinylfu_lru",
+        "lfu",
+        "prefix_anchor",
+        "cost_aware_lru",
+        "lru",
+        "sglang_radix_attention",
+        "tenant_fair_lru",
+        "prefix_fanout",
+        "vllm_apc",
+        "depth_prefer_shallow",
+        "previous_joint",
+        "production_incumbent",
+        "recompute_greedy",
+        "no_cache"
+      ],
+      "scores": {
+        "cost_aware_lru": 47.400175010133765,
+        "depth_prefer_shallow": 35.23266969344406,
+        "four_domain": 62.843663197839085,
+        "lfu": 51.31830981085339,
+        "lru": 46.95023617830695,
+        "no_cache": -55.83077784654841,
+        "prefix_anchor": 47.545639131918264,
+        "prefix_fanout": 36.307969583147184,
+        "previous_joint": 33.452657771146185,
+        "production_incumbent": 20.581114393081208,
+        "recompute_greedy": 19.86975813246862,
+        "sglang_radix_attention": 46.95023617830695,
+        "tenant_fair_lru": 46.92652767344403,
+        "tinylfu_lru": 61.05975479349711,
+        "vllm_apc": 35.81316972973518
+      }
+    },
+    {
+      "coefficient": 0.01,
+      "newer_penalty": 1.2559952127541107,
+      "ranking": [
+        "four_domain",
+        "tinylfu_lru",
+        "lfu",
+        "prefix_anchor",
+        "cost_aware_lru",
+        "lru",
+        "sglang_radix_attention",
+        "tenant_fair_lru",
+        "prefix_fanout",
+        "vllm_apc",
+        "depth_prefer_shallow",
+        "previous_joint",
+        "recompute_greedy",
+        "production_incumbent",
+        "no_cache"
+      ],
+      "scores": {
+        "cost_aware_lru": 47.400175010133765,
+        "depth_prefer_shallow": 35.23266969344406,
+        "four_domain": 61.58766798508498,
+        "lfu": 51.31830981085339,
+        "lru": 46.95023617830695,
+        "no_cache": -55.83077784654841,
+        "prefix_anchor": 47.545639131918264,
+        "prefix_fanout": 36.307969583147184,
+        "previous_joint": 32.22070132052589,
+        "production_incumbent": 19.411488372076715,
+        "recompute_greedy": 19.86975813246862,
+        "sglang_radix_attention": 46.95023617830695,
+        "tenant_fair_lru": 46.92652767344403,
+        "tinylfu_lru": 61.05975479349711,
+        "vllm_apc": 35.81316972973518
+      }
+    },
+    {
+      "coefficient": 0.015,
+      "newer_penalty": 1.8839928191311661,
+      "ranking": [
+        "tinylfu_lru",
+        "four_domain",
+        "lfu",
+        "prefix_anchor",
+        "cost_aware_lru",
+        "lru",
+        "sglang_radix_attention",
+        "tenant_fair_lru",
+        "prefix_fanout",
+        "vllm_apc",
+        "depth_prefer_shallow",
+        "previous_joint",
+        "recompute_greedy",
+        "production_incumbent",
+        "no_cache"
+      ],
+      "scores": {
+        "cost_aware_lru": 47.400175010133765,
+        "depth_prefer_shallow": 35.23266969344406,
+        "four_domain": 60.95967037870792,
+        "lfu": 51.31830981085339,
+        "lru": 46.95023617830695,
+        "no_cache": -55.83077784654841,
+        "prefix_anchor": 47.545639131918264,
+        "prefix_fanout": 36.307969583147184,
+        "previous_joint": 31.604723095215743,
+        "production_incumbent": 18.82667536157447,
+        "recompute_greedy": 19.86975813246862,
+        "sglang_radix_attention": 46.95023617830695,
+        "tenant_fair_lru": 46.92652767344403,
+        "tinylfu_lru": 61.05975479349711,
+        "vllm_apc": 35.81316972973518
+      }
+    },
+    {
+      "coefficient": 0.02,
+      "newer_penalty": 2.5119904255082215,
+      "ranking": [
+        "tinylfu_lru",
+        "four_domain",
+        "lfu",
+        "prefix_anchor",
+        "cost_aware_lru",
+        "lru",
+        "sglang_radix_attention",
+        "tenant_fair_lru",
+        "prefix_fanout",
+        "vllm_apc",
+        "depth_prefer_shallow",
+        "previous_joint",
+        "recompute_greedy",
+        "production_incumbent",
+        "no_cache"
+      ],
+      "scores": {
+        "cost_aware_lru": 47.400175010133765,
+        "depth_prefer_shallow": 35.23266969344406,
+        "four_domain": 60.33167277233086,
+        "lfu": 51.31830981085339,
+        "lru": 46.95023617830695,
+        "no_cache": -55.83077784654841,
+        "prefix_anchor": 47.545639131918264,
+        "prefix_fanout": 36.307969583147184,
+        "previous_joint": 30.988744869905595,
+        "production_incumbent": 18.241862351072225,
+        "recompute_greedy": 19.86975813246862,
+        "sglang_radix_attention": 46.95023617830695,
+        "tenant_fair_lru": 46.92652767344403,
+        "tinylfu_lru": 61.05975479349711,
+        "vllm_apc": 35.81316972973518
+      }
+    },
+    {
+      "coefficient": 0.0325,
+      "newer_penalty": 4.08198444145086,
+      "ranking": [
+        "tinylfu_lru",
+        "four_domain",
+        "lfu",
+        "prefix_anchor",
+        "cost_aware_lru",
+        "lru",
+        "sglang_radix_attention",
+        "tenant_fair_lru",
+        "prefix_fanout",
+        "vllm_apc",
+        "depth_prefer_shallow",
+        "previous_joint",
+        "recompute_greedy",
+        "production_incumbent",
+        "no_cache"
+      ],
+      "scores": {
+        "cost_aware_lru": 47.400175010133765,
+        "depth_prefer_shallow": 35.23266969344406,
+        "four_domain": 58.76167875638822,
+        "lfu": 51.31830981085339,
+        "lru": 46.95023617830695,
+        "no_cache": -55.83077784654841,
+        "prefix_anchor": 47.545639131918264,
+        "prefix_fanout": 36.307969583147184,
+        "previous_joint": 29.448799306630224,
+        "production_incumbent": 16.77982982481661,
+        "recompute_greedy": 19.86975813246862,
+        "sglang_radix_attention": 46.95023617830695,
+        "tenant_fair_lru": 46.92652767344403,
+        "tinylfu_lru": 61.05975479349711,
+        "vllm_apc": 35.81316972973518
+      }
+    },
+    {
+      "coefficient": 0.065,
+      "newer_penalty": 8.16396888290172,
+      "ranking": [
+        "tinylfu_lru",
+        "four_domain",
+        "lfu",
+        "prefix_anchor",
+        "cost_aware_lru",
+        "lru",
+        "sglang_radix_attention",
+        "tenant_fair_lru",
+        "prefix_fanout",
+        "vllm_apc",
+        "depth_prefer_shallow",
+        "previous_joint",
+        "recompute_greedy",
+        "production_incumbent",
+        "no_cache"
+      ],
+      "scores": {
+        "cost_aware_lru": 47.400175010133765,
+        "depth_prefer_shallow": 35.23266969344406,
+        "four_domain": 54.679694314937365,
+        "lfu": 51.31830981085339,
+        "lru": 46.95023617830695,
+        "no_cache": -55.83077784654841,
+        "prefix_anchor": 47.545639131918264,
+        "prefix_fanout": 36.307969583147184,
+        "previous_joint": 25.444940842114264,
+        "production_incumbent": 12.97854525655201,
+        "recompute_greedy": 19.86975813246862,
+        "sglang_radix_attention": 46.95023617830695,
+        "tenant_fair_lru": 46.92652767344403,
+        "tinylfu_lru": 61.05975479349711,
+        "vllm_apc": 35.81316972973518
+      }
+    },
+    {
+      "coefficient": 0.1,
+      "newer_penalty": 12.55995212754111,
+      "ranking": [
+        "tinylfu_lru",
+        "lfu",
+        "four_domain",
+        "prefix_anchor",
+        "cost_aware_lru",
+        "lru",
+        "sglang_radix_attention",
+        "tenant_fair_lru",
+        "prefix_fanout",
+        "vllm_apc",
+        "depth_prefer_shallow",
+        "previous_joint",
+        "recompute_greedy",
+        "production_incumbent",
+        "no_cache"
+      ],
+      "scores": {
+        "cost_aware_lru": 47.400175010133765,
+        "depth_prefer_shallow": 35.23266969344406,
+        "four_domain": 50.283711070297976,
+        "lfu": 51.31830981085339,
+        "lru": 46.95023617830695,
+        "no_cache": -55.83077784654841,
+        "prefix_anchor": 47.545639131918264,
+        "prefix_fanout": 36.307969583147184,
+        "previous_joint": 21.133093264943227,
+        "production_incumbent": 8.884854183036289,
+        "recompute_greedy": 19.86975813246862,
+        "sglang_radix_attention": 46.95023617830695,
+        "tenant_fair_lru": 46.92652767344403,
+        "tinylfu_lru": 61.05975479349711,
+        "vllm_apc": 35.81316972973518
+      }
+    }
+  ],
+  "complexity_counter": {
+    "path": "src/prefix_cache_evolve/evaluators/complexity.py",
+    "sha256": "dc789674b53be1e27ee84540133a92c8544d6048be805f696dcdbd3325952f51"
+  },
+  "complexity_for_tie_at_current_coefficient": 82.7838448702005,
+  "credit_cap_nodes": 160,
+  "current_penalty": 8.16396888290172,
+  "date": "2026-09-08",
+  "effective_nodes": 629,
+  "exponent": 0.75,
+  "formula": "penalty = coefficient * effective_ast_nodes ** exponent",
+  "frozen_results": {
+    "path": "artifacts/replay-reassessment-20260908/summary.json",
+    "sha256": "5a433228581ab69279ff5bb4a2c219d9bfeeab3850e1ad970fa49912b96645f9"
+  },
+  "illustrative_baseline_counts": {
+    "lru": {
+      "effective_nodes": 82,
+      "hypothetical_penalty": 1.771225050948554,
+      "hypothetical_score": 45.1790111273584,
+      "included_classes": [
+        "_BasePolicy",
+        "_LRUPolicy"
+      ],
+      "note": "Illustrative class-plus-base source accounting; annotations and helper style are retained. No factory wrapper or external primitives are charged. Not a revised official baseline score."
+    },
+    "tenant_fair_lru": {
+      "effective_nodes": 314,
+      "hypothetical_penalty": 4.848535644277445,
+      "hypothetical_score": 42.07799202916658,
+      "included_classes": [
+        "_BasePolicy",
+        "_TenantFairLRUPolicy"
+      ],
+      "note": "Illustrative class-plus-base source accounting; annotations and helper style are retained. No factory wrapper or external primitives are charged. Not a revised official baseline score."
+    },
+    "tinylfu_lru": {
+      "effective_nodes": 227,
+      "hypothetical_penalty": 3.801305285839493,
+      "hypothetical_score": 57.25844950765762,
+      "included_classes": [
+        "_BasePolicy",
+        "_TinyLFULRUPolicy"
+      ],
+      "note": "Illustrative class-plus-base source accounting; annotations and helper style are retained. No factory wrapper or external primitives are charged. Not a revised official baseline score."
+    }
+  },
+  "limitations": [
+    "No policies were evolved under alternative coefficients; this does not predict their search trajectories.",
+    "AST size is not measured callback latency or retained-state bytes.",
+    "Illustrative baseline counts depend on source packaging and annotation style.",
+    "Changing a weight after seeing rankings must not be presented as an independent policy gain."
+  ],
+  "member_credits": {
+    "__init__": 3,
+    "on_request_start": 6,
+    "score_admission": 2
+  },
+  "member_raw_nodes": {
+    "__init__": 51,
+    "_block_features": 35,
+    "_on_cache_event": 7,
+    "on_cache_hit = _on_cache_event": 5,
+    "on_cache_miss = _on_cache_event": 5,
+    "on_request_start": 150,
+    "score_admission": 232,
+    "score_eviction": 154
+  },
+  "method": "Arithmetic rescoring of frozen validation outcomes only. The configured scoring formula was reproduced for all 15 policies before sensitivity analysis.",
+  "model_cost_usd": 0,
+  "new_replays": 0,
+  "newer_raw_lead_over_tiny": 1.7839084043419717,
+  "newer_vs_old_penalty_difference": 0.15625195386979712,
+  "node_type_counts": {
+    "Add": 16,
+    "Assign": 26,
+    "Attribute": 57,
+    "BinOp": 55,
+    "Call": 34,
+    "ClassDef": 1,
+    "Compare": 3,
+    "Constant": 56,
+    "Div": 3,
+    "Expr": 1,
+    "FunctionDef": 6,
+    "If": 3,
+    "Is": 1,
+    "IsNot": 2,
+    "Load": 151,
+    "Mult": 26,
+    "Name": 120,
+    "Pass": 1,
+    "Return": 3,
+    "Store": 32,
+    "Sub": 10,
+    "Tuple": 6,
+    "USub": 1,
+    "UnaryOp": 1,
+    "arg": 19,
+    "arguments": 6
+  },
+  "operative_config_changed": false,
+  "penalty_curve": [
+    {
+      "nodes": 100,
+      "penalty": 2.0554804791094465
+    },
+    {
+      "nodes": 300,
+      "penalty": 4.6854822575627715
+    },
+    {
+      "nodes": 500,
+      "penalty": 6.872913212363667
+    },
+    {
+      "nodes": 529,
+      "penalty": 7.169768127352516
+    },
+    {
+      "nodes": 572,
+      "penalty": 7.602569136529197
+    },
+    {
+      "nodes": 613,
+      "penalty": 8.007716929031924
+    },
+    {
+      "nodes": 629,
+      "penalty": 8.16396888290172
+    },
+    {
+      "nodes": 650,
+      "penalty": 8.367551117024679
+    },
+    {
+      "nodes": 750,
+      "penalty": 9.315567223992575
+    },
+    {
+      "nodes": 1000,
+      "penalty": 11.558816165252999
+    }
+  ],
+  "primitive_credit": 11,
+  "raw_nodes": 640,
+  "savings_from_deleting_100_nodes_at_current_size": 0.9942007555492047,
+  "schema": "prefix-kv-cache-complexity-review-v1",
+  "source": {
+    "path": "src/prefix_cache_evolve/problems/prefix_kv_cache/seeds/joint_mooncake_synthetic_wildchat_lmcache_20260907.py",
+    "sha256": "fb42fd8dae5097fefd8d352fd0244442e9971dd5926aac49ac4ccbc36aa5aa35"
+  }
+}

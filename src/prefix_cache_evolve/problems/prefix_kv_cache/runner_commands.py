@@ -67,6 +67,8 @@ class RunnerOptions:
     block_size_report: bool
     block_size_sweep: str
     block_size_output: Path
+    trace_baselines: tuple[str, ...] = ()
+    report_baselines: tuple[str, ...] = ()
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, Any]) -> RunnerOptions:
@@ -119,6 +121,8 @@ class RunnerOptions:
     def validate(self) -> RunnerAction:
         """Validate cross-option constraints and return the selected action."""
         action = self.action()
+        if self.trace_baselines and self.replay_trace is None:
+            raise click.UsageError("--trace-baseline requires --replay-trace")
         if self.model and (self.primary_model or self.secondary_model):
             raise click.UsageError(
                 "--model cannot be combined with --primary-model or --secondary-model"
@@ -151,6 +155,7 @@ def dispatch(options: RunnerOptions) -> None:
             search_seed=options.search_seed,
             api_base=options.api_base,
             api_key_env=options.api_key_env,
+            seed_program=options.seed_program,
         )
     elif action is RunnerAction.CALIBRATE_TRACE:
         assert options.calibrate_trace is not None
@@ -172,6 +177,7 @@ def dispatch(options: RunnerOptions) -> None:
             capacity_blocks=options.capacity_blocks,
             capacity_sweep_blocks=capacity_sweep_blocks,
             block_size_tokens=options.block_size_tokens,
+            baseline_names=options.trace_baselines,
         )
     elif action is RunnerAction.WORKLOAD_MANIFEST:
         runner.write_workload_manifest_report(
@@ -209,6 +215,7 @@ def dispatch(options: RunnerOptions) -> None:
             block_size_tokens=options.block_size_tokens,
             candidate_program=options.candidate_program,
             config_file=options.config,
+            baseline_names=options.report_baselines,
         )
     elif action is RunnerAction.HIDDEN_REPORT:
         runner.hidden_report(
@@ -218,6 +225,7 @@ def dispatch(options: RunnerOptions) -> None:
             block_size_tokens=options.block_size_tokens,
             candidate_program=options.candidate_program,
             config_file=options.config,
+            baseline_names=options.report_baselines,
         )
     elif action is RunnerAction.PROBE_REPORT:
         runner.probe_report(
@@ -228,6 +236,7 @@ def dispatch(options: RunnerOptions) -> None:
             block_size_tokens=options.block_size_tokens,
             candidate_program=options.candidate_program,
             config_file=options.config,
+            baseline_names=options.report_baselines,
         )
     elif action is RunnerAction.PLOT_REPORT:
         paths = runner.write_baseline_plots(
@@ -247,6 +256,7 @@ def dispatch(options: RunnerOptions) -> None:
             quick=quick,
             seed_program=options.seed_program,
             artifact_output=None if options.no_save_artifacts else options.artifact_output,
+            baseline_names=options.report_baselines,
             model=options.model,
             primary_model=options.primary_model,
             secondary_model=options.secondary_model,

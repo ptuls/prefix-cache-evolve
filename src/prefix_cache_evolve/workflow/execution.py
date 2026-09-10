@@ -79,6 +79,20 @@ class LeviScoreFunction:
             result = self._evaluate_source(source)
         else:
             result = self._evaluate_factory(factory)
+        return self._metrics(result)
+
+    @property
+    def source_aware(self) -> bool:
+        """Return whether candidate source must be checked before execution."""
+        return self._evaluate_source is not None
+
+    def score_source(self, source: str) -> dict[str, Any]:
+        """Evaluate source without executing it through Levi's generic loader."""
+        if self._evaluate_source is None:
+            raise ValueError("this evaluator does not support source-aware scoring")
+        return self._metrics(self._evaluate_source(source))
+
+    def _metrics(self, result: EvaluatorResult) -> dict[str, Any]:
         metrics = result.metrics or {}
         success = metrics.get("success")
         if success is not None and not bool(success):
@@ -157,6 +171,7 @@ class LeviRunner:
             output_dir = f"runs/{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
             kwargs["output_dir"] = output_dir
 
+        _enable_levi_source_evaluation()
         paradigm_max_tokens = _configured_paradigm_max_tokens(config)
         paradigm_model_names = _configured_paradigm_model_names(config)
         search_seed = int(getattr(config, "search_seed", 0))
@@ -316,6 +331,29 @@ def _candidate_source(factory: Callable[..., object], inputs: Any) -> str | None
         if isinstance(value, str):
             return value
     return None
+
+
+def _evaluate_levi_code(
+    source: str, score_fn: Callable[..., dict], inputs: Any, fn_name: str
+) -> dict[str, Any]:
+    """Dispatch source-aware scoring before any candidate module executes.
+
+    Levi's generic loader executes the module before calling its score function.
+    Our source evaluator owns static validation and isolated candidate loading.
+    The top-level adapter is picklable for Levi's process pool.
+    """
+    if isinstance(score_fn, LeviScoreFunction) and score_fn.source_aware:
+        return score_fn.score_source(source)
+    from levi.utils.evaluation import evaluate_code
+
+    return evaluate_code(source, score_fn, inputs, fn_name)
+
+
+def _enable_levi_source_evaluation() -> None:
+    """Route every CodeAdapter evaluation through the source-aware dispatcher."""
+    from levi.artifacts import code
+
+    code.evaluate_code = _evaluate_levi_code
 
 
 def _configured_paradigm_max_tokens(config: Any) -> int | None:

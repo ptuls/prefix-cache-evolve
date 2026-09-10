@@ -120,6 +120,12 @@ cost \$21.981, and the documented pre-promotion research program cost at least
 \$44.845 in recorded model API charges.
 However, a post-promotion geometry sweep shows that this result is specific to
 16-token blocks: the previous incumbent remains materially stronger at 8 tokens.
+An experimental joint 16/512-token search now combines the synthetic suite with
+frozen Mooncake production windows.  Its audited 613-node candidate scores
+\(62.078\) versus \(61.615\) for TinyLFU-LRU on visible joint validation and
+\(6.129\) versus \(-0.230\) on the post-selection combined hidden panel.  One
+agentic request-tail gate remains outside its limit, so this candidate has not
+replaced the promoted synthetic incumbent.
 Its apparent charged-probe
 regression on the discovery verifier is entirely due to source-complexity accounting:
 raw probe behavior improves, agent churn falls, and cyclic behavior is unchanged.  The
@@ -721,6 +727,12 @@ Candidate source executes in an isolated process, but arbitrary malicious Python
 attempt reflection or inspect local source and artifacts.  Reported searches therefore
 also retain static source checks and source audit; a capability-isolated policy process
 or restricted DSL would be required for security against deliberately evasive code.
+The production-trace workflow adds a stricter Docker backend: candidate source is
+checked before execution and runs as a non-root user with no network, read-only inputs
+and root filesystem, dropped capabilities, and bounded CPU, memory, processes, output,
+and time.  Only selected hash-pinned trace windows are mounted.  This backend is the
+required path when generated code runs near host credentials; ordinary historical
+workflows retain the weaker process-isolation boundary described above.
 
 \section{Workload Model}
 
@@ -1971,6 +1983,103 @@ two required runs cost \$5.070 together; the broader retained lineage
 cost \$21.981.  These figures should not be collapsed into the \$4.133 production-run
 cost.
 
+\subsection{Production tool-and-agent trace result}
+
+A separate experiment replays the public Mooncake FAST25 tool-and-agent trace from Kimi
+production traffic at its native 512-token block size and capacities 128, 512, and
+2,048.  Chronological search windows contain 1,742 requests; two later frozen windows
+contain 2,592 requests.  The trace preserves arrival time, prompt/output length, and
+cumulative prefix identity, but omits content and real session, tenant, priority,
+model, and tool-DAG identity.  Every window begins with cold cache and policy state.
+
+The isolated one-hour OpenAI search was configured for 32 evaluations and \$8, but
+candidate runtime made the wall deadline binding after three evaluator attempts and
+\$1.1775.  The sole scored mutation reached $30.675$, below the unchanged parent's
+$40.465$ visible score, so the final archive and validation-only selection retained
+the parent.  On the untouched later windows, TinyLFU-LRU scores $50.491$ versus
+$34.900$ for the parent.  Token hit is nearly equal ($0.3552$ versus $0.3567$),
+while TinyLFU-LRU reduces churn from $2{,}621$ to $1{,}032$ evictions per thousand
+requests and admission waste from $0.9590$ to $0.8959$.  The parent still leads the
+tested policies on the original synthetic hidden panel at $3.064$, because selection
+made no source change.  This is a negative evolution result and a stronger production
+baseline, not evidence that the incumbent is unimprovable; no policy was promoted.
+Exact identities and limitations are retained in
+\filepath{docs/results/mooncake\_evolution\_20260906.json}.
+
+A subsequent full-budget search used \code{gpt-5.6-luna} for mutations and
+\code{gpt-5.6-sol} for diversity and medium-reasoning paradigm shifts.  It
+completed 30 evaluator results under a 32-reservation concurrent budget, spent
+\$0.4005, and selected a 417-node segmented ghost policy.  Visible validation
+reached $63.158$, just below TinyLFU-LRU at $63.709$.  On the frozen production
+holdout, however, the candidate scored $61.094$, ahead of TinyLFU-LRU at
+$50.491$ and the incumbent at $34.900$.  Relative to the incumbent, token hit
+was nearly unchanged ($0.3569$ versus $0.3567$), while churn fell from
+$2{,}621$ to $223$ per thousand requests and admission waste fell from $0.9590$
+to $0.8473$.
+
+This gain is specific to the tested 512-token production geometry.  The
+candidate scored $61.368$ versus the incumbent's $65.649$ on synthetic visible
+and $-6.078$ versus $3.064$ on synthetic hidden.  Its prompt-block calculation
+contains the literal 512 instead of the supplied block-size argument, and its
+synthetic churn is materially higher.  It is therefore retained only as a
+production-specialist candidate; the general incumbent is unchanged.  Exact
+results are retained in
+\filepath{docs/results/mooncake\_evolution\_gpt56\_20260906.json}.
+
+\subsection{Joint synthetic and production-trace evolution}
+
+A follow-up evaluator combined the full synthetic selection suite and the
+Mooncake search windows while preserving 16-token and 512-token native block
+geometries.  A Mooncake-specialist-seeded run found no improvement.  Searching
+from the general incumbent instead produced a 627-node candidate at $61.942$;
+removing one unused assignment and rerunning the policy reduced effective
+complexity to 613 and raised the code-as-data score to $62.078$, ahead of
+TinyLFU-LRU at $61.615$.
+
+The policy gives up only $0.227$ points against its parent on synthetic
+validation ($65.422$ versus $65.649$) while gaining $17.505$ points on Mooncake
+validation ($57.970$ versus $40.465$).  It normalizes recomputation value by the
+supplied block size and relaxes its deep-prefix admission penalty only after
+decayed recurrence exceeds one.  On the frozen combined hidden panel it scores
+$6.129$ versus $-0.230$ for TinyLFU-LRU, raises token hit from $42.9\%$ to
+$44.78\%$, and reduces churn from 832 to 200 evictions per thousand requests.
+
+This is the strongest cross-domain candidate in the retained experiments, but
+it is not promoted.  Its surrogate-to-probe request-tail hit gap is $0.1645$
+against a fail-closed $0.1500$ limit, although the other six agentic checks
+pass.  The opened holdout cannot guide further mutation; replication on an
+independent capture or an online shadow test is required.  Full identities and
+per-workload results are retained in
+\filepath{docs/results/mooncake\_synthetic\_evolution\_20260907.json}.
+
+\subsection{Collected agent-session evolution}
+
+A later four-domain evaluator added WildChat conversations and a pinned sample
+of LMCache Agentic Traces to the synthetic and Mooncake suite.  LMCache rows
+contain cumulative message histories, output lengths, and measured tool gaps,
+so the converter can recover opaque prefix paths and session order without
+retaining content.  The bounded sample contains 16 complete SWE-bench, GAIA,
+and WildClaw sessions with 329 requests, partitioned by session before outcome
+evaluation.  It is collected agent traffic, not production serving telemetry;
+cross-session starts and provider prompt templates are approximations.
+
+A 48-evaluation GPT-5.6 search completed 46 results, cost \$0.9188, and improved
+its seed from $25.854$ to $39.050$.  A behavior-preserving source audit reduced
+effective complexity from 691 to 629 and raised the charged score to $39.646$.
+WildChat validation token hit rose from $4.0\%$ to $50.0\%$, and LMCache train
+and validation reached $80.5\%$ and $94.7\%$.  The admission recovery incurred
+too much churn and waste: TinyLFU-LRU remained ahead at $62.491$ on the visible
+objective.
+
+The simplified source was frozen before the three LMCache hidden sessions were
+opened.  It reached $93.93\%$ LMCache token hit, but vLLM APC reached $94.40\%$
+with roughly half the churn and much less waste.  Across shifted synthetic,
+later Mooncake, and LMCache hidden traffic, the candidate scored $-7.974$
+versus $11.705$ for TinyLFU-LRU.  The agentic surrogate gate also failed its
+token-hit and waste gap limits.  The candidate is retained as a future seed;
+no incumbent was promoted.  Full evidence is retained in
+\filepath{docs/results/mooncake\_synthetic\_wildchat\_lmcache\_evolution\_20260907.json}.
+
 \subsection{Discovery result and mechanism}
 
 On the historical 8-token discovery verifier, the pressure-aware incumbent scores
@@ -2339,8 +2448,10 @@ Under the operative verifier and workload configuration:
   memory.
   \item \textbf{Proxy latency.} The deterministic formula is useful for ranking but does
   not include kernel scheduling, bandwidth, allocator overhead, or device contention.
-  \item \textbf{Synthetic traffic.} Workloads encode plausible failure modes but are not
-  calibrated from production trace distributions.
+  \item \textbf{Synthetic headline and one production capture.} The headline workloads
+  encode plausible failure modes without production calibration.  The separate
+  Mooncake replay adds one same-capture chronological production sample, but lacks
+  identity and content fields and does not establish general production behavior.
   \item \textbf{Single-cache topology.} There is no routing, replication, cache
   partitioning, host offload, or distributed ownership.
   \item \textbf{Shared-KV mode is a demand stress test, not a scheduler.} It exposes
@@ -2392,6 +2503,15 @@ Under the operative verifier and workload configuration:
   generated programs still accumulated substantial bespoke control flow.
   \item A later 298-evaluation compact-family search promoted the pressure-aware
   incumbent, which improved selection, probe, and hidden adjudication.
+  \item The first Mooncake production-trace search reached only three evaluator
+  attempts before its one-hour wall limit.  A later GPT-5.6 run completed the
+  concurrent evaluation budget and found a strong production-specific policy, but
+  that policy regressed on the original synthetic suite and embeds the 512-token
+  geometry in one calculation.
+  \item Joint synthetic and Mooncake evolution found a compact cross-domain
+  improvement and passed hidden adjudication, but one held-out agentic request-tail
+  check remains outside its fail-closed limit.  The same production capture cannot
+  supply independent replication.
 \end{itemize}
 
 \subsection{Recommended next experiments}
@@ -2415,9 +2535,9 @@ Under the operative verifier and workload configuration:
   explicit decode-failure or SLO objective.  The current reasoning panel's \(77.5\%\)
   incumbent allocation-failure rate shows that eviction-only optimization is the wrong
   control surface under sustained reasoning bursts.
-  \item Calibrate workload mixture, prefix depths, arrival bursts, output lengths, and
-  tenant phase durations from anonymized production traces, then replay held-out
-  trace-derived metadata.
+  \item Replicate the Mooncake result on independent captures with real anonymized
+  tenant/session grouping and measured serving outcomes, then calibrate workload
+  mixture, prefix depths, arrival bursts, output lengths, and tenant phase durations.
   \item Add routing, tiering, and host-offload simulators so placement policies can be
   compared with single-cache victim scoring.
   \item Add a bounded global failure store and feed recurring repair and behavioral

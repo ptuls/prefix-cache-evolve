@@ -196,10 +196,116 @@ The conversion creates `artifacts/traces/wildchat.jsonl` and
 prefix hashes.
 
 The converter writes only HMAC identifiers, token lengths, timestamps, and
-opaque prefix-block hashes. It does not retain prompt text. WildChat has one
-timestamp per conversation, so the converter records synthetic
-intra-conversation spacing and labels the artifact as conversation-derived
-rather than a production serving trace.
+opaque prefix-block hashes. It does not retain prompt text. WildChat's recorded
+assistant timestamps mark response completion; replay uses them as timing
+proxies. Missing timestamps use synthetic spacing. The result is a
+conversation-derived workload rather than a production serving trace.
+
+To use the converted data for evolution, prepare a pinned panel:
+
+```bash
+uv run prefix-cache-tools datasets trace-panel \
+  --trace artifacts/traces/wildchat.jsonl \
+  --family wildchat \
+  --output-dir artifacts/traces/wildchat-panel
+
+# Inspect the real-data configuration and compare baselines locally.
+uv run prefix-cache-evolve \
+  --config artifacts/traces/wildchat-panel/evolution.yaml --show-config
+uv run prefix-cache-evolve \
+  --config artifacts/traces/wildchat-panel/evolution.yaml --baseline-report
+
+# Optional model-powered search, using the production incumbent as its seed.
+uv sync --frozen --extra wildchat --extra evolution
+uv run prefix-cache-evolve \
+  --config artifacts/traces/wildchat-panel/evolution.yaml --iterations 100
+```
+
+The panel keeps each tenant's conversations in one split. Train and validation
+are visible during search; hidden traces are reserved for final evaluation.
+Synthetic probes are retained, and `--keep-synthetic` also retains the base
+train/validation/hidden workloads. Trace checksums and block geometry are
+verified before search. See the [trace evolution guide](docs/reproducibility.md#trace-panels-for-evolution)
+for sizing, held-out evaluation, and replaying saved runs. The first
+[WildChat smoke check](docs/results/wildchat_smoke_20260905.md) exercises this
+path with 20 conversations; it is a pipeline check, not a policy-promotion result.
+
+For actual agentic production traffic, the
+[Mooncake replay guide](docs/reproducibility.md#agentic-production-replay-mooncake)
+uses Kimi's public tool-and-agent serving trace. The new
+`prefix-cache-tools datasets mooncake` converter preserves arrival timestamps
+and native 512-token prefix hashes. See the
+[initial production-trace check](docs/results/mooncake_toolagent_20260905.md).
+For evolution, use the [chronological production panel workflow](
+docs/reproducibility.md#production-trace-evolution-with-chronological-holdouts).
+It preserves unknown session identities, freezes later time windows for final
+evaluation, and runs generated candidates in a networkless container.
+
+[Qwen-Bailian and AgentX](docs/serving_datasets.md) add independent production
+and coding-agent traces. `datasets qwen` preserves native 16-token block hashes;
+`datasets agentx` preserves 64-token session/model-scoped prefixes and nested
+request timing. Use Qwen for search and `datasets attach-holdout` to reserve
+AgentX for final validation in the `hidden` split. The normal `validation`
+split feeds back into evolution and is not held out.
+The routine AgentX panel uses four complete sessions selected with a fixed random
+seed; its manifest records the selection and a 20-million-input-token budget.
+
+The completed [production agentic evolution](docs/results/mooncake_evolution_20260906.md)
+found no improved candidate within its one-hour bound; TinyLFU-LRU remained the
+strongest tested policy on untouched later production windows, and no incumbent
+was promoted.
+The subsequent [GPT-5.6 full run](docs/results/mooncake_evolution_gpt56_20260906.md)
+evolved a candidate scoring `61.094` on the production holdout, ahead of
+TinyLFU-LRU at `50.491`. It was retained as a production-specialist candidate
+rather than promoted because it regressed on the original synthetic suite.
+
+The follow-up [joint synthetic and Mooncake search](docs/results/mooncake_synthetic_evolution_20260907.md)
+preserved native 16- and 512-token geometries in one selection suite. Its
+audited 613-node candidate scores `62.078` on visible joint validation versus
+`61.615` for TinyLFU-LRU, while scoring `65.422` on synthetic validation and
+`57.970` on Mooncake validation. After selection was frozen, it scored `6.129`
+on the combined hidden panel versus `-0.230` for TinyLFU-LRU. It remains a
+candidate because one of seven fail-closed agentic checks, request-tail token
+hit, exceeded its gap limit.
+
+Collected agent sessions from
+[LMCache Agentic Traces](https://huggingface.co/datasets/sammshen/lmcache-agentic-traces)
+can also be converted from pinned Hugging Face or local JSON/Parquet input:
+
+```bash
+uv run prefix-cache-tools datasets lmcache-agentic \
+  --dataset-revision 6e043b9e89865df3aec19fd5679286b683bfd70e \
+  --output artifacts/traces/lmcache-agentic.jsonl
+```
+
+The converter verifies cumulative session histories and writes only HMAC
+identifiers, lengths, opaque 512-token prefix-block hashes, and deterministic
+replay timing. The source is collected agent traffic rather than production
+serving telemetry. The completed
+[four-domain evolution](docs/results/mooncake_synthetic_wildchat_lmcache_evolution_20260907.md)
+added a 16-session LMCache panel to synthetic, Mooncake, and WildChat traffic.
+Its policy recovered the seed's agent-session under-admission, but
+TinyLFU-LRU won the frozen hidden objective by `19.679` points, so no incumbent
+was promoted.
+
+The subsequent [replay audit](docs/results/replay_audit_20260907.md) corrected
+missing-session handling, LMCache tenant metadata and invalid-row timing,
+WildChat model separation and prompt serialization, and missing train metrics.
+The figures above retain their historical replay semantics. Corrected bundles
+and a rebuilt container are pinned in
+`configs/prefix_kv_cache_replay_audited.yaml`; the audit did not start evolution.
+
+The [full corrected reassessment](docs/results/replay_reassessment_20260908.md)
+evaluated 15 policies across 1,815 trials. The newer four-domain policy scores
+`54.680`, versus `25.445` for the older joint policy and `61.060` for TinyLFU-LRU.
+Before the AST charge, the newer policy leads at `62.844`. Its aggregate
+Mooncake regression disappears; synthetic churn remains a weakness.
+
+The [behavior and policy-cost workflow](docs/policy_costs.md) implements the
+complexity review's recommendations: raw-score exploration from the newer seed,
+retained smaller alternatives, a separate simplification stage with exact
+visible-behavior checks, and container-based callback/state profiling. Use
+`configs/prefix_kv_cache_replay_exploration.yaml` for the next exploratory run.
 
 Untrusted candidate source must be evaluated in a separate OS sandbox. The
 repository includes a locked, non-root Docker profile:

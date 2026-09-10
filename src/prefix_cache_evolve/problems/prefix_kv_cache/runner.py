@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -11,9 +13,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import click
+import yaml
 
 from prefix_cache_evolve.evaluators.baseline_suite import BASELINE_SUITE_EVALUATOR
 from prefix_cache_evolve.evaluators.baselines import BASELINES, REPORTING_BASELINES
+from prefix_cache_evolve.evaluators.complexity import scoring_fn_complexity
 from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
 from prefix_cache_evolve.evaluators.prefix_kv_cache import PrefixKVCacheEvaluator
 from prefix_cache_evolve.evaluators.results import EvaluationResult
@@ -25,8 +29,11 @@ from prefix_cache_evolve.workflow.config import (
     ConfigLoader,
     ConfigProvider,
     MinimalConfigProvider,
+    WorkflowFileConfig,
     YamlConfigProvider,
+    load_yaml_document,
 )
+from prefix_cache_evolve.workflow.power import prevent_idle_sleep
 from prefix_cache_evolve.workflow.program import ProgramSource
 from prefix_cache_evolve.workflow.reporting import EvolutionReporter
 
@@ -58,6 +65,7 @@ from .reproducibility import (
     request_stream_sha256,
     stable_workload_manifest_payload,
 )
+from .sandbox import docker_evaluation_scope
 from .specialist import (
     compose_eviction_specialist_source,
 )
@@ -219,6 +227,23 @@ def _load_seed_program_source(path: Path) -> ProgramSource:
     return ProgramSource(candidate_path.read_text(encoding="utf-8"))
 
 
+def _resolve_search_seed(config_file: str, override: Path | None = None) -> Path:
+    """Resolve CLI, YAML-relative, then policy-surface default seed precedence."""
+    if override is not None:
+        return override
+    workflow = _CONFIG_LOADER.load(Path(config_file))
+    configured = workflow.raw.get("search", {}).get("seed_program")
+    if configured:
+        return (Path(config_file).parent / configured).resolve()
+    evaluator = load_evaluator_config(Path(config_file))
+    return (
+        _EVICTION_SPECIALIST_SEED_PATH
+        if evaluator.candidate_policy_surface == "eviction_only"
+        else _DEFAULT_SEED_PATH
+    )
+
+
+@prevent_idle_sleep()
 def demo_run_evolution(
     iterations: int = 25,
     config_file: str = _DEFAULT_CONFIG_FILE,
@@ -232,17 +257,27 @@ def demo_run_evolution(
     search_seed: int | None = None,
     api_base: str | None = None,
     api_key_env: str | None = None,
+    baseline_names: tuple[str, ...] = (),
 ) -> object:
     """Run one Levi evolution session and optionally persist its artifacts."""
     evaluator_config = load_evaluator_config(Path(config_file))
+    if not evaluator_config.workload_configs(("train", "validation")) and not any(
+        trace.split in {"train", "validation"} for trace in evaluator_config.trace_workloads
+    ):
+        raise ValueError(
+            "evolution requires a nonempty train or validation panel; prepare traces first"
+        )
+    _selected_baselines(REPORTING_BASELINES, baseline_names)
+    if evaluator_config.trace_workloads:
+        if quick:
+            evaluator_config = evaluator_config.with_updates(
+                request_count=36, seeds=(3,), family_request_multipliers={}
+            )
+        # Reject missing or changed search inputs before contacting a model.
+        build_workload_manifest(evaluator_config, splits=("train", "validation", "probe"))
     base_workflow_config = _CONFIG_LOADER.load(Path(config_file))
-    default_seed_path = (
-        _EVICTION_SPECIALIST_SEED_PATH
-        if evaluator_config.candidate_policy_surface == "eviction_only"
-        else _DEFAULT_SEED_PATH
-    )
-    effective_seed_program = seed_program or default_seed_path
-    if quick:
+    effective_seed_program = _resolve_search_seed(config_file, seed_program)
+    if quick and not evaluator_config.sandbox_image:
         quick_model = (
             model
             or primary_model
@@ -271,7 +306,10 @@ def demo_run_evolution(
         )
     program_source = _load_seed_program_source(effective_seed_program)
     workflow = _build_workflow(provider, program_source=program_source)
-    with prefix_kv_config_environment(Path(config_file), quick=quick):
+    with (
+        prefix_kv_config_environment(Path(config_file), quick=quick),
+        docker_evaluation_scope(evaluator_config.sandbox_image),
+    ):
         result = workflow.execute(iterations)
     if artifact_output is not None:
         artifact_dir = save_run_artifacts(
@@ -284,6 +322,7 @@ def demo_run_evolution(
             report_config=evaluator_config,
             report_config_file=config_file,
             config_snapshot=Path(config_file) if not quick else None,
+            baseline_names=baseline_names,
         )
         print(f"saved_run_artifacts={artifact_dir}")
         print(f"baseline_comparison={artifact_dir / 'baseline_comparison.md'}")
@@ -298,6 +337,7 @@ def compare_baselines(
     block_size_tokens: int | None = None,
     candidate_program: Path | None = None,
     config_file: str = _DEFAULT_CONFIG_FILE,
+    baseline_names: tuple[str, ...] = (),
 ) -> None:
     """Evaluate and print the candidate and registered baselines."""
     config = _config_from_args(
@@ -310,13 +350,15 @@ def compare_baselines(
     if quick:
         print(_QUICK_REPORT_WARNING)
     if candidate_program is None:
-        results = _evaluate_baselines(config, include_reporting=True)
+        results = _evaluate_baselines(config, include_reporting=True, baseline_names=baseline_names)
     else:
         candidate_path = _resolve_candidate_program(candidate_program)
         results = _candidate_panel_builder().build_comparison(
             config,
             candidate_path,
-            lambda: _evaluate_baselines(config, include_reporting=True),
+            lambda: _evaluate_baselines(
+                config, include_reporting=True, baseline_names=baseline_names
+            ),
         )
         report_path = _baseline_comparison_output_path(candidate_path)
         report_path.parent.mkdir(parents=True, exist_ok=True)
@@ -329,6 +371,7 @@ def compare_baselines(
                 capacity_sweep_blocks=capacity_sweep_blocks,
                 candidate_program=candidate_program,
                 config_file=config_file,
+                baseline_names=baseline_names,
             ),
             quick=quick,
             config=config,
@@ -405,6 +448,7 @@ def save_run_artifacts(
     report_config_file: str = _DEFAULT_CONFIG_FILE,
     config_snapshot: Path | None = None,
     timestamp: datetime | None = None,
+    baseline_names: tuple[str, ...] = (),
 ) -> Path:
     """Persist the best evolved program and evaluation metadata."""
     timestamp = timestamp or datetime.now(UTC)
@@ -419,6 +463,8 @@ def save_run_artifacts(
         or ""
     )
     (run_dir / "best_program.py").write_text(str(best_program), encoding="utf-8")
+    if seed_source is not None:
+        (run_dir / "seed_program.py").write_text(seed_source, encoding="utf-8")
 
     metrics = getattr(result, "metrics", {}) or {}
     artifacts = getattr(result, "artifacts", {}) or {}
@@ -438,9 +484,30 @@ def save_run_artifacts(
     )
     agentic_gate = tripwire_suite["channels"]["agentic_branching"]
     config_snapshot_name = None
-    if config_snapshot is not None and config_snapshot.is_file():
+    if resolved_report_config.trace_workloads:
+        snapshot = _snapshot_trace_inputs(
+            run_dir,
+            resolved_report_config,
+            config_snapshot or Path(report_config_file),
+        )
+        config_snapshot_name = snapshot.name
+        resolved_report_config = load_evaluator_config(snapshot)
+        report_config_file = str(snapshot)
+    elif config_snapshot is not None and config_snapshot.is_file():
         config_snapshot_name = "config_snapshot.yaml"
         shutil.copyfile(config_snapshot, run_dir / config_snapshot_name)
+    if config_snapshot_name is not None and seed_source is not None:
+        # Both synthetic and trace snapshots must resolve the actual archived
+        # seed, including a CLI override, after the original inputs are removed.
+        snapshot = run_dir / config_snapshot_name
+        source_config = run_dir / "source_config.yaml"
+        if not source_config.exists():
+            shutil.copyfile(snapshot, source_config)
+        document = WorkflowFileConfig.model_validate(load_yaml_document(snapshot)).model_dump(
+            exclude_none=True, exclude_unset=True
+        )
+        document.setdefault("search", {})["seed_program"] = "seed_program.py"
+        snapshot.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
     summary = {
         "verifier_version": identity.verifier_version,
         "evaluation_context_sha256": identity.evaluation_context_sha256,
@@ -455,6 +522,7 @@ def save_run_artifacts(
         "total_cost": getattr(result, "total_cost", None),
         "archive_size": getattr(result, "archive_size", None),
         "runtime_seconds": getattr(result, "runtime_seconds", None),
+        "report_baselines": list(_selected_baselines(REPORTING_BASELINES, baseline_names)),
         "repository": _repository_state(),
         "agentic_surrogate_probe_gate": {
             key: agentic_gate[key]
@@ -493,7 +561,9 @@ def save_run_artifacts(
         run_dir / "surrogate_probe_tripwires.md",
         tripwire_suite,
     )
-    workload_manifest = build_workload_manifest(resolved_report_config)
+    workload_manifest = build_workload_manifest(
+        resolved_report_config, splits=_artifact_manifest_splits(resolved_report_config)
+    )
     _write_json(run_dir / "workload_manifest.json", workload_manifest)
     summary["workload_manifest"] = {
         "path": "workload_manifest.json",
@@ -504,6 +574,7 @@ def save_run_artifacts(
     _write_json(run_dir / "run_summary.json", summary)
 
     _persist_paradigm_candidates(run_dir, metadata=metadata)
+    _persist_behavior_size_frontier(run_dir, metadata=metadata, config=resolved_report_config)
     _persist_best_generated_mutation(
         run_dir,
         metadata=metadata,
@@ -522,12 +593,14 @@ def save_run_artifacts(
         _write_json(run_dir / "run_summary.json", summary)
 
     try:
-        config = report_config or _artifact_report_config()
+        config = resolved_report_config
         candidate_path = run_dir / "best_program.py"
         report_results = _candidate_panel_builder().build_comparison(
             config,
             candidate_path,
-            lambda: _evaluate_baselines(config, include_reporting=True),
+            lambda: _evaluate_baselines(
+                config, include_reporting=True, baseline_names=baseline_names
+            ),
         )
         write_baseline_comparison_report(
             run_dir / "baseline_comparison.md",
@@ -538,6 +611,7 @@ def save_run_artifacts(
                 capacity_sweep_blocks=config.effective_capacity_blocks(),
                 candidate_program=run_dir,
                 config_file=report_config_file,
+                baseline_names=baseline_names,
             ),
             quick=False,
             config=config,
@@ -554,6 +628,42 @@ def save_run_artifacts(
     output_root.mkdir(parents=True, exist_ok=True)
     (output_root / "latest_run.txt").write_text(str(run_dir), encoding="utf-8")
     return run_dir
+
+
+def _artifact_manifest_splits(config: EvaluatorConfig) -> tuple[str, ...]:
+    """Keep trace artifacts scoped to search while preserving synthetic manifests."""
+    return (
+        ("train", "validation", "probe")
+        if config.trace_workloads
+        else ("train", "validation", "probe", "hidden")
+    )
+
+
+def _snapshot_trace_inputs(run_dir: Path, config: EvaluatorConfig, source_config: Path) -> Path:
+    """Archive search inputs while leaving hidden data in its original panel."""
+    document = WorkflowFileConfig.model_validate(load_yaml_document(source_config)).model_dump(
+        exclude_none=True, exclude_unset=True
+    )
+    shutil.copyfile(source_config, run_dir / "source_config.yaml")
+    trace_dir = run_dir / "traces"
+    trace_dir.mkdir()
+    traces = []
+    for trace in config.trace_workloads:
+        if trace.split == "hidden":
+            # Preserve the declared holdout pin without opening its data. Final
+            # hidden evaluation uses the retained original panel explicitly.
+            traces.append(trace)
+            continue
+        target = trace_dir / f"{trace.split}-{trace.family}.jsonl"
+        shutil.copyfile(trace.path, target)
+        if file_sha256(target) != trace.sha256:
+            raise ValueError(f"{trace.path}: trace SHA-256 changed before artifact snapshot")
+        traces.append(trace.model_copy(update={"path": str(target.relative_to(run_dir))}))
+    snapshot_config = config.with_updates(trace_workloads=traces)
+    document.setdefault("problem", {})["settings"] = snapshot_config.model_dump(mode="json")
+    snapshot = run_dir / "config_snapshot.yaml"
+    snapshot.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+    return snapshot
 
 
 def _repository_state() -> dict[str, Any]:
@@ -584,6 +694,95 @@ def _persist_paradigm_candidates(run_dir: Path, *, metadata: dict[str, Any]) -> 
     source_dir = Path(str(source_value))
     if source_dir.is_dir():
         shutil.copytree(source_dir, run_dir / "paradigm_candidates", dirs_exist_ok=True)
+
+
+def _persist_behavior_size_frontier(
+    run_dir: Path,
+    *,
+    metadata: dict[str, Any],
+    config: EvaluatorConfig,
+) -> None:
+    """Retain nondominated archived sources for a later simplification stage.
+
+    This uses only successful visible-search measurements already in the Levi
+    archive. It does not evaluate candidates, open holdouts, or claim promotion.
+    """
+    snapshot_path = Path(str(metadata.get("levi_snapshot_path", "")))
+    if not snapshot_path.is_file():
+        return
+    try:
+        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        rows = []
+        for elite in snapshot.get("elites", []):
+            scores = elite.get("scores", {})
+            raw = scores.get("selection_raw_score_before_complexity")
+            source = _elite_source(elite)
+            if not scores.get("success") or scores.get("invalid_fraction", 1.0) or not source:
+                continue
+            if not isinstance(raw, (int, float)) or not math.isfinite(raw):
+                continue
+            rows.append(
+                {
+                    "elite": elite,
+                    "source": source,
+                    "raw_before_complexity": raw,
+                    "effective_ast_nodes": scoring_fn_complexity(
+                        source, form_aware=config.form_aware_complexity
+                    ),
+                    "source_sha256": hashlib.sha256(source.encode()).hexdigest(),
+                }
+            )
+        if not rows:
+            return
+        identity = require_single_score_identity(
+            (row["elite"] for row in rows), context="behavior/source-size archive"
+        )
+        summary_path = run_dir / "run_summary.json"
+        if summary_path.is_file():
+            require_single_score_identity(
+                (identity, json.loads(summary_path.read_text(encoding="utf-8"))),
+                context="archive and saved run",
+            )
+        if identity.verifier_version != config.verifier_version:
+            raise ValueError("archive verifier differs from the run config")
+        frontier = [
+            row
+            for row in rows
+            if not any(
+                other["raw_before_complexity"] >= row["raw_before_complexity"]
+                and other["effective_ast_nodes"] <= row["effective_ast_nodes"]
+                and (
+                    other["raw_before_complexity"] > row["raw_before_complexity"]
+                    or other["effective_ast_nodes"] < row["effective_ast_nodes"]
+                )
+                for other in rows
+            )
+        ]
+        directory = run_dir / "behavior_size_frontier"
+        directory.mkdir(exist_ok=True)
+        for row in frontier:
+            (directory / f"{row['source_sha256']}.py").write_text(row["source"], encoding="utf-8")
+        _write_json(
+            directory / "manifest.json",
+            {
+                "schema": "prefix-kv-cache-behavior-size-frontier-v1",
+                "evaluation_context_sha256": identity.evaluation_context_sha256,
+                "panel_sha256": identity.panel_sha256,
+                "verifier_version": identity.verifier_version,
+                "candidates": [
+                    {key: value for key, value in row.items() if key not in {"source", "elite"}}
+                    for row in frontier
+                ],
+            },
+        )
+    except (ValueError, OSError, TypeError) as exc:
+        _write_json(
+            run_dir / "behavior_size_frontier_error.json",
+            {
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
 
 
 def _persist_best_generated_mutation(
@@ -629,6 +828,10 @@ def _persist_best_generated_mutation(
         )
         if snapshot_identity.verifier_version != config.verifier_version:
             raise ValueError("generated mutation snapshot verifier version does not match config")
+        if config.trace_workloads:
+            # Cross-panel decomposition includes hidden evaluation. Archive the
+            # mutation above, but defer that evaluation to explicit adjudication.
+            return
         decomposition = {
             "schema": "prefix-kv-cache-generated-mutation-decomposition-v1",
             "verifier_version": config.verifier_version,
@@ -668,7 +871,7 @@ def _persist_specialist_promotion_adjudication(
     config: EvaluatorConfig,
 ) -> dict[str, Any] | None:
     """Re-evaluate a specialist winner as a complete policy before promotion."""
-    if config.fixed_admission_policy is None:
+    if config.fixed_admission_policy is None or config.trace_workloads:
         return None
     promotion_limit = (
         config.promotion_max_candidate_complexity
@@ -838,6 +1041,7 @@ def hidden_report(
     block_size_tokens: int | None = None,
     candidate_program: Path | None = None,
     config_file: str = _DEFAULT_CONFIG_FILE,
+    baseline_names: tuple[str, ...] = (),
 ) -> None:
     """Evaluate a candidate and baselines on the hidden split."""
     config = _config_from_args(
@@ -864,6 +1068,7 @@ def hidden_report(
         config,
         include_reporting=True,
         splits=HIDDEN_PANEL.splits,
+        baseline_names=baseline_names,
     )
     for name, result in results.items():
         print(f"{name}: combined_score={result.combined_score:.3f}")
@@ -878,6 +1083,7 @@ def probe_report(
     block_size_tokens: int | None = None,
     candidate_program: Path | None = None,
     config_file: str = _DEFAULT_CONFIG_FILE,
+    baseline_names: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Evaluate and report the quarantined structure-generalization probe."""
     config = _config_from_args(
@@ -895,6 +1101,7 @@ def probe_report(
             config,
             include_reporting=True,
             splits=PROBE_PANEL.splits,
+            baseline_names=baseline_names,
         ),
         panel=PROBE_PANEL,
     )
@@ -962,8 +1169,13 @@ def replay_trace_report(
     capacity_blocks: int | None = None,
     capacity_sweep_blocks: tuple[int, ...] = (),
     block_size_tokens: int | None = None,
+    baseline_names: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Replay an anonymized metadata trace through deployable policies."""
+    selected_names = tuple(dict.fromkeys(baseline_names or tuple(BASELINES)))
+    unknown = sorted(set(selected_names) - BASELINES.keys())
+    if unknown:
+        raise ValueError("unknown deployable trace baselines: " + ", ".join(unknown))
     config = _config_from_args(
         quick=False,
         capacity_blocks=capacity_blocks,
@@ -971,15 +1183,26 @@ def replay_trace_report(
         block_size_tokens=block_size_tokens,
         config_file=config_file,
     )
+    if candidate_program is not None and config.sandbox_image:
+        raise ValueError(
+            "sandboxed source evaluation requires a configured panel; "
+            "prepare trace_workloads and use --baseline-report"
+        )
     requests = load_anonymized_trace(
         trace_path,
         block_size_tokens=config.block_size_tokens,
         arrival_bucket_ms=arrival_bucket_ms,
         request_limit=request_limit,
     )
-    results = BASELINE_SUITE_EVALUATOR.evaluate_requests(config, BASELINES, requests)
+    results = {}
+    for name in selected_names:
+        print(f"replaying_policy={name} requests={len(requests)}", flush=True)
+        results.update(
+            BASELINE_SUITE_EVALUATOR.evaluate_requests(config, {name: BASELINES[name]}, requests)
+        )
     if candidate_program is not None:
         candidate_path = _resolve_candidate_program(candidate_program)
+        print(f"replaying_policy=candidate requests={len(requests)}", flush=True)
         results = {
             "candidate": _evaluate_replay_candidate_program(
                 config,
@@ -1032,7 +1255,7 @@ def write_workload_manifest_report(
     block_size_tokens: int | None = None,
     config_file: str = _DEFAULT_CONFIG_FILE,
 ) -> dict[str, object]:
-    """Write fingerprints and summaries for every generated synthetic stream."""
+    """Write workload fingerprints, matching a reference's split set when supplied."""
     config = _config_from_args(
         quick=quick,
         capacity_blocks=capacity_blocks,
@@ -1040,16 +1263,36 @@ def write_workload_manifest_report(
         block_size_tokens=block_size_tokens,
         config_file=config_file,
     )
-    payload = build_workload_manifest(config)
+    splits = _artifact_manifest_splits(config)
+    stable_reference = None
+    if reference_path is not None:
+        reference = json.loads(reference_path.read_text(encoding="utf-8"))
+        if not isinstance(reference, dict):
+            raise click.ClickException("workload manifest reference must be a JSON object")
+        stable_reference = stable_workload_manifest_payload(reference)
+        reference_splits = stable_reference["evaluation"].get("splits")
+        if (
+            not isinstance(reference_splits, list)
+            or any(
+                split not in ("train", "validation", "probe", "hidden")
+                for split in reference_splits
+            )
+            or len(set(reference_splits)) != len(reference_splits)
+        ):
+            raise click.ClickException(
+                "workload manifest reference must declare distinct known splits"
+            )
+        splits = tuple(reference_splits)
+    payload = build_workload_manifest(config, splits=splits)
+    if stable_reference is not None:
+        if stable_workload_manifest_payload(payload) != stable_reference:
+            raise click.ClickException(
+                f"workload manifest differs from stable reference fields in {reference_path}"
+            )
     _write_json(output_path, payload)
     print(f"workload_manifest={output_path}")
     print(f"panel_sha256={payload['panel_sha256']}")
     if reference_path is not None:
-        reference = json.loads(reference_path.read_text(encoding="utf-8"))
-        if stable_workload_manifest_payload(payload) != stable_workload_manifest_payload(reference):
-            raise click.ClickException(
-                f"workload manifest differs from stable reference fields in {reference_path}"
-            )
         print(f"workload_manifest_reference=verified:{reference_path}")
     return payload
 
@@ -1351,6 +1594,13 @@ def _score_weight_sensitivity_rows(
 @click.option("--block-size-tokens", type=click.IntRange(min=1))
 @click.option("--baseline-report", is_flag=True)
 @click.option(
+    "--report-baseline",
+    "report_baselines",
+    type=click.Choice(tuple(REPORTING_BASELINES)),
+    multiple=True,
+    help="Select baselines for comparison, hidden/probe reports, or saved artifacts; repeatable.",
+)
+@click.option(
     "--candidate-program",
     type=click.Path(path_type=Path, exists=True, readable=True),
     help="Candidate .py file or run directory to compare in --baseline-report.",
@@ -1443,12 +1693,12 @@ def _score_weight_sensitivity_rows(
 @click.option(
     "--calibrate-trace",
     type=click.Path(path_type=Path, exists=True, dir_okay=False, readable=True),
-    help="Summarize an anonymized metadata-only JSONL production trace.",
+    help="Summarize an anonymized metadata-only JSONL trace.",
 )
 @click.option(
     "--replay-trace",
     type=click.Path(path_type=Path, exists=True, dir_okay=False, readable=True),
-    help="Replay an anonymized metadata-only JSONL production trace.",
+    help="Replay an anonymized metadata-only JSONL trace.",
 )
 @click.option(
     "--trace-output",
@@ -1470,9 +1720,16 @@ def _score_weight_sensitivity_rows(
     help="Optional prefix request count for trace calibration or replay.",
 )
 @click.option(
+    "--trace-baseline",
+    "trace_baselines",
+    type=click.Choice(tuple(BASELINES)),
+    multiple=True,
+    help="Deployable baseline for --replay-trace; repeat to select several. Default: all.",
+)
+@click.option(
     "--workload-manifest",
     is_flag=True,
-    help="Write deterministic fingerprints and summaries for all synthetic streams.",
+    help="Write deterministic workload fingerprints; trace panels default to search splits.",
 )
 @click.option(
     "--workload-manifest-output",
@@ -1485,8 +1742,8 @@ def _score_weight_sensitivity_rows(
     "--workload-manifest-reference",
     type=click.Path(path_type=Path, exists=True, dir_okay=False),
     help=(
-        "Verify panel SHA, evaluation settings, and ordered streams against a committed "
-        "manifest while ignoring environment metadata."
+        "Verify the reference's split set, score identity, settings, and streams while "
+        "ignoring environment metadata."
     ),
 )
 @click.option(
@@ -1540,11 +1797,16 @@ def _show_resolved_config(
     search_seed: int | None,
     api_base: str | None,
     api_key_env: str | None,
+    seed_program: Path | None = None,
 ) -> None:
     """Print the effective workflow and evaluator configuration."""
     evaluator = load_evaluator_config(Path(config_file))
-    base_workflow = _CONFIG_LOADER.load(Path(config_file))
     if quick:
+        evaluator = evaluator.with_updates(
+            request_count=36, seeds=(3,), family_request_multipliers={}
+        )
+    base_workflow = _CONFIG_LOADER.load(Path(config_file))
+    if quick and not evaluator.sandbox_image:
         provider: ConfigProvider = MinimalConfigProvider(
             model=(
                 model
@@ -1573,12 +1835,18 @@ def _show_resolved_config(
         "config": str(Path(config_file)),
         "quick": quick,
         "iterations": iterations,
+        "budgets": {
+            "evaluations": workflow.max_iterations,
+            "dollars": workflow.budget_dollars,
+            "seconds": workflow.budget_seconds,
+        },
         "models": {
             "model": workflow.model,
             "mutation_model": workflow.mutation_model,
             "paradigm_model": workflow.paradigm_model,
         },
         "search_seed": workflow.search_seed,
+        "seed_program": str(_resolve_search_seed(config_file, seed_program)),
         "api_base": workflow.api_base,
         "api_key_env": workflow.api_key_env,
         "api_key_env_set": bool(workflow.api_key_env and os.environ.get(workflow.api_key_env)),
@@ -1590,12 +1858,18 @@ def _show_resolved_config(
         },
         "pipeline": workflow.pipeline,
         "evaluator": {
+            "search_score_mode": evaluator.search_score_mode,
+            "max_candidate_complexity": evaluator.max_candidate_complexity,
+            "promotion_max_candidate_complexity": evaluator.promotion_max_candidate_complexity,
             "workload_seeds": list(evaluator.seeds),
             "policy_seed": evaluator.policy_seed,
             "request_count": evaluator.request_count,
             "block_size_tokens": evaluator.block_size_tokens,
             "capacity_blocks": list(evaluator.effective_capacity_blocks()),
             "workload_token_granularity": evaluator.workload_token_granularity,
+            "trace_workloads": [
+                trace.model_dump(mode="json") for trace in evaluator.trace_workloads
+            ],
         },
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
@@ -1640,9 +1914,19 @@ def _evaluate_baselines(
     *,
     include_reporting: bool = False,
     splits: tuple[str, ...] = SELECTION_PANEL.splits,
+    baseline_names: tuple[str, ...] = (),
 ) -> dict[str, EvaluationResult]:
     baselines = REPORTING_BASELINES if include_reporting else BASELINES
-    return BASELINE_SUITE_EVALUATOR.evaluate(config, baselines, splits=splits)
+    selected = _selected_baselines(baselines, baseline_names)
+    return BASELINE_SUITE_EVALUATOR.evaluate(config, selected, splits=splits)
+
+
+def _selected_baselines(baselines: dict, names: tuple[str, ...]) -> dict:
+    """Select each requested baseline once and reject unknown programmatic names."""
+    unknown = sorted(set(names) - baselines.keys())
+    if unknown:
+        raise ValueError("unknown report baselines: " + ", ".join(unknown))
+    return {name: baselines[name] for name in dict.fromkeys(names or tuple(baselines))}
 
 
 def _candidate_panel_builder() -> CandidatePanelBuilder:
@@ -1670,6 +1954,7 @@ def _baseline_report_command(
     capacity_sweep_blocks: tuple[int, ...],
     candidate_program: Path,
     config_file: str = _DEFAULT_CONFIG_FILE,
+    baseline_names: tuple[str, ...] = (),
 ) -> str:
     parts = [
         ".venv/bin/python -m prefix_cache_evolve.problems.prefix_kv_cache.runner",
@@ -1683,6 +1968,7 @@ def _baseline_report_command(
         )
     parts.append(f"--candidate-program {candidate_program}")
     parts.append(f"--config {config_file}")
+    parts.extend(f"--report-baseline {name}" for name in dict.fromkeys(baseline_names))
     return " ".join(parts)
 
 

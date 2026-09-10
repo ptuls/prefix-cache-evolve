@@ -1,0 +1,200 @@
+# Prepare hash-pinned temporal trace windows with datasets temporal-trace-panel
+# before running this workflow. These budgets cover search; final reports are extra.
+max_iterations: 32
+budget_dollars: 20
+budget_seconds: 43200
+
+llm:
+  default_provider: openai
+  primary_model: gpt-5.6-luna
+  secondary_model: gpt-5.6-sol
+  max_tokens: 6000
+
+prompt:
+  system_message: >
+    Evolve a compact online prefix KV-cache policy on real production tool-and-agent
+    traffic from the Mooncake release. The source provides arrival timestamps,
+    prompt/output lengths, and cumulative prefix block identities at 512 tokens.
+    The evaluator uses 512-token physical blocks and 128/512/2048-block capacities.
+    It does not provide actual tenants, sessions, priorities, model identities, or
+    a tool DAG. The constant tenant/session values are unknown placeholders.
+    Do not infer task or session identity from them or hard-code prefix hashes,
+    request IDs, timestamps, cache capacities, or dataset-specific constants.
+    Separate time windows start with fresh policy and cache state. Validation
+    windows are visible to search; hidden windows are final reporting only.
+    The now argument is an arrival step in 100 ms buckets and may repeat.
+    Output length controls simulated pin duration at 64 tokens per step; this
+    and the latency score are proxies, not production GPU timing measurements.
+
+    Expose build_candidate(capacity_blocks, block_size_tokens, seed=None) or
+    candidate_factory with that signature. Return an object with score_admission,
+    score_eviction, on_request_start, on_cache_hit, and on_cache_miss. The three
+    lifecycle callbacks must exist but may be no-ops. No other callback fires.
+    Admission happens iff score_admission(block, now) > 0. Eviction selects the
+    highest score among inactive resident leaves. The simulator owns residency,
+    reference counts, and the prefix tree. Interior or active blocks cannot be
+    evicted. A rejected prefix blocks admission of its suffix for that request.
+
+    PrefixBlockInfo is a frozen value object, not persistent mutable cache state.
+    Use block.prefix_hash (equivalently block.block_id) as the stable state key.
+    Available fields are block_id, prefix_hash, parent_hash, depth, start_token,
+    end_token, token_count, tenant_id, created_at, last_accessed_at, hit_count,
+    descendant_count, active_ref_count, estimated_recompute_cost,
+    prev_last_accessed_at, last_access_gap, access_gap_mean, access_gap_var,
+    subtree_hit_rate, and subtree_active_ref_count. These are online observations
+    available at or before the current request; future-reuse fields are unavailable.
+    Do not probe guessed attributes or use object identity. RequestInfo has
+    request_id, tenant_id, session_id, prompt_length, priority,
+    predicted_output_length, recent_admission_pressure, and recent_miss_rate.
+    request_id is an opaque per-trial identifier. request_type and prompt_tokens
+    are scrubbed and must not be read. There are no output-length predictions
+    in this source, and priority is always zero.
+
+    Optimize the charged validation combined score with unchanged verifier 1.0.0
+    weights. The score rewards token/block hits, weakest-window service, tail
+    hits, and useful admissions, and charges latency proxies, admission waste,
+    avoidable evictions, churn, underfill, and code complexity. Candidate source
+    always pays its effective AST complexity charge. Baselines have zero source
+    charge, so beating them is a conservative target. Churn is evictions per
+    1000 requests with weight 0.015 and penalty cap 25. Reducing churn while
+    remaining above 1666.67 yields no churn-score benefit; preserve useful hits
+    and reduce waste and unnecessary admission. Low churn alone is not success.
+    Long contexts and 512-token blocks may need different online reuse economics
+    from the supplied parent, which was trained on 16-token synthetic traffic.
+    Its historical score is not comparable to this panel.
+
+    Make one focused semantic change per mutation. Prefer compact recurrence,
+    reuse distance, pressure, depth, and recomputation tradeoffs. Preserve useful
+    trunks without protecting abandoned suffixes. Keep bounded state, and prefer
+    simplifying the supplied parent's existing state over adding a subsystem.
+    Imports are limited to math and the documented primitives module
+    prefix_cache_evolve.problems.prefix_kv_cache.primitives, which exports
+    MultiTimescaleDecay, decay_vector, and threshold_excess. MultiTimescaleDecay
+    exposes observe, observe_vector, values, and combine, with one to eight
+    bounded decayed channels per key. Canonical forms receive the configured
+    bounded form-aware complexity subsidy. Production eligibility requires at
+    most 650 effective AST nodes. No introspection, dynamic execution, guessed
+    schema fallbacks, broad exception handlers, unsupported lifecycle hooks,
+    future information, decorators, or speculative state. Keep executable code
+    in top-level function/class definitions. Only uppercase literal constants,
+    __all__, and a direct candidate_factory alias are valid top-level assignments.
+  objectives:
+    - Improve the charged score over the seed on both validation windows.
+    - Retain token hits while avoiding admission waste, underfill, and excessive churn.
+    - Prefer compact online evidence over dataset-specific hard-coding.
+    - Treat hidden windows and the separate synthetic regression suite as final evaluation only.
+
+evaluator:
+  timeout: 900
+  cascade_evaluation: false
+  parallel_evaluations: 2
+
+init:
+  n_diverse_seeds: 2
+  n_variants_per_seed: 1
+  diversity_llm_kwargs:
+    reasoning_effort: medium
+    max_tokens: 6000
+
+cvt:
+  n_centroids: 6
+  data_driven_centroids: true
+
+behavior:
+  ast_features: [cyclomatic_complexity, subscript_count]
+  score_keys:
+    - validation_token_hit_rate
+    - validation_admission_rate
+    - validation_policy_underfill_rate
+    - validation_cache_churn_per_1k
+    - validation_wasted_admission_token_rate
+
+meta_advice:
+  enabled: true
+  interval: 12
+  max_tokens: 400
+
+pipeline:
+  n_llm_workers: 2
+  n_parents: 1
+  n_inspirations: 0
+  output_mode: diff
+
+punctuated_equilibrium:
+  enabled: true
+  interval: 10
+  n_clusters: 2
+  n_variants: 1
+  reasoning_effort: medium
+  max_tokens: 6000
+
+prompt_overrides:
+  paradigm_shift: >
+    Produce one compact online policy with a different core admission or eviction
+    idea. Target at most 550 effective AST nodes, one policy class, and one bounded
+    state table or documented primitive. Implement only the required interface.
+    Use observed recurrence and request pressure to decide which long prefixes
+    justify their cache slots. Delete unnecessary logic. Do not memorize trace
+    identifiers or assume a particular depth, session, or arrival regime.
+
+problem:
+  description: Evolve prefix cache admission and eviction for sampled production agent traffic.
+  settings:
+    verifier_version: "1.0.0"
+    capacity_blocks: 512
+    capacity_sweep_blocks: [128, 512, 2048]
+    block_size_tokens: 512
+    workload_token_granularity: 8
+    request_count: 96
+    seeds: [11]
+    policy_seed: 0
+    train_families: []
+    validation_families: []
+    probe_families: []
+    hidden_families: []
+    family_request_multipliers: {}
+    prefill_cost_per_token: 1
+    lookup_cost_per_block: 0.035
+    eviction_cost_per_block: 0.2
+    active_tokens_per_step: 64
+    kv_capacity_mode: prefix_only
+    latency_norm: 0
+    max_memory_bytes: 2147483648
+    sandbox_image: prefix-cache-evolve-sandbox
+    form_aware_complexity: true
+    max_candidate_complexity: 750
+    promotion_max_candidate_complexity: 650
+    reject_unsupported_source_patterns: true
+    scoring:
+      w_avg_tok: 80
+      w_avg_blk: 60
+      min_workload_weight: 0.5
+      min_seed_weight: 0.15
+      request_tail_weight: 12
+      worst_window_weight: 12
+      priority_hit_weight: 8
+      wasted_admission_weight: 6
+      admission_utility_weight: 1
+      avoidable_eviction_weight: 8
+      latency_weight: 35
+      latency_cap: 40
+      churn_weight: 0.015
+      churn_cap: 25
+      underfill_weight: 12
+      underfill_cap: 15
+      fairness_weight: 80
+      fairness_cap: 30
+      k_complex: 0.065
+      complexity_exponent: 0.75
+      v_min: -1000
+      invalid_surcharge: 1000
+
+search:
+  seed: 20260905
+  notes: >
+    This is a bounded exploratory search on fixed production time windows.
+    Freeze the panel and score weights before model calls. Select one eligible
+    candidate using validation, then compare it against the unchanged parent,
+    LRU, TinyLFU-LRU, and vLLM-style APC on the untouched later windows. Also run
+    the original 16-token synthetic panel as a separate transfer/regression
+    check. Do not promote automatically or adapt further after reading hidden.

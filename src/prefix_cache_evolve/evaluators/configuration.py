@@ -52,6 +52,50 @@ class WorkloadConfig:
     seed_offset: int = 0
 
 
+class TraceTimeWindow(BaseModel):
+    """A half-open chronological window in one hash-pinned source capture.
+
+    This establishes time separation, not session or tenant independence.
+    Timestamps retain the source clock; each simulator trial starts cold.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, validate_default=True)
+
+    source_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    start_ms: float = Field(ge=0, allow_inf_nan=False)
+    end_ms: float = Field(gt=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def _validate_bounds(self) -> TraceTimeWindow:
+        if self.end_ms <= self.start_ms:
+            raise ValueError("trace time window must have start_ms < end_ms")
+        return self
+
+
+class TraceWorkloadConfig(BaseModel):
+    """Pin one complete metadata-only trace to an evaluation split."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, validate_default=True)
+
+    path: str = Field(min_length=1)
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    family: str = Field(pattern=r"^[a-z][a-z0-9_-]*$")
+    split: Literal["train", "validation", "probe", "hidden"]
+    block_size_tokens: PositiveInt
+    capacity_sweep_blocks: tuple[PositiveInt, ...] = ()
+    request_count: PositiveInt
+    arrival_bucket_ms: PositiveInt = 100
+    time_window: TraceTimeWindow | None = None
+
+    def effective_capacity_blocks(
+        self,
+        default_capacity_blocks: tuple[int, ...],
+    ) -> tuple[int, ...]:
+        """Return trace-specific capacities or the evaluator defaults."""
+        values = self.capacity_sweep_blocks or default_capacity_blocks
+        return tuple(dict.fromkeys(int(value) for value in values))
+
+
 class EvaluatorConfig(BaseModel):
     """Configuration for prefix KV-cache evaluation and scoring."""
 
@@ -99,6 +143,7 @@ class EvaluatorConfig(BaseModel):
         "priority_one_off_noise_shifted",
         "tenant_phase_shift_cycles_shifted",
     )
+    trace_workloads: tuple[TraceWorkloadConfig, ...] = ()
     request_count: PositiveInt = 96
     family_request_multipliers: dict[str, PositiveInt] = Field(
         default_factory=lambda: {
@@ -136,6 +181,7 @@ class EvaluatorConfig(BaseModel):
     invalid_surcharge: NonNegativeFloat = 1_000.0
     timeout_s: PositiveFloat = 30.0
     max_memory_bytes: PositiveInt = 64 * 1024 * 1024
+    sandbox_image: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._:/@-]*$")
     form_aware_complexity: bool = False
     max_candidate_complexity: PositiveInt | None = None
     promotion_max_candidate_complexity: PositiveInt | None = None
@@ -193,7 +239,8 @@ class EvaluatorConfig(BaseModel):
             return self
         if not guidance:
             raise ValueError("robust_min search requires at least one search guidance family")
-        unknown = guidance - set(self.train_families)
+        trace_train = {trace.family for trace in self.trace_workloads if trace.split == "train"}
+        unknown = guidance - (set(self.train_families) | trace_train)
         if unknown:
             raise ValueError(
                 "search guidance families must be configured train families: "
@@ -205,6 +252,47 @@ class EvaluatorConfig(BaseModel):
                 "search guidance families must not be probe or hidden families: "
                 + ", ".join(sorted(quarantined))
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_trace_workloads(self) -> EvaluatorConfig:
+        """Reject ambiguous streams and attempts to reinterpret opaque blocks."""
+        names = {
+            (workload.split, workload.family)
+            for workload in self.workload_configs(("train", "validation", "probe", "hidden"))
+        }
+        content_splits: dict[str, str] = {}
+        for trace in self.trace_workloads:
+            if (
+                trace.block_size_tokens != self.block_size_tokens
+                and not trace.capacity_sweep_blocks
+            ):
+                raise ValueError(
+                    "trace block_size_tokens must match the evaluator; reconvert the "
+                    "source or define its own capacity_sweep_blocks for mixed geometry"
+                )
+            name = (trace.split, trace.family)
+            if name in names:
+                raise ValueError(f"duplicate workload {trace.split}/{trace.family}")
+            names.add(name)
+            previous_split = content_splits.setdefault(trace.sha256, trace.split)
+            if previous_split != trace.split:
+                raise ValueError("the same trace content must not appear in different splits")
+        by_source: dict[str, list[TraceWorkloadConfig]] = {}
+        for trace in self.trace_workloads:
+            if trace.time_window is not None:
+                by_source.setdefault(trace.time_window.source_sha256, []).append(trace)
+        split_order = {"train": 0, "validation": 1, "probe": 2, "hidden": 3}
+        for traces in by_source.values():
+            ordered = sorted(traces, key=lambda trace: trace.time_window.start_ms)  # type: ignore[union-attr]
+            for left, right in zip(ordered, ordered[1:]):
+                assert left.time_window is not None and right.time_window is not None
+                if left.time_window.end_ms > right.time_window.start_ms:
+                    raise ValueError("trace time windows from the same source must not overlap")
+                if split_order[left.split] > split_order[right.split]:
+                    raise ValueError(
+                        "trace time splits must follow train/validation/probe/hidden order"
+                    )
         return self
 
     def with_updates(self, **updates: object) -> EvaluatorConfig:

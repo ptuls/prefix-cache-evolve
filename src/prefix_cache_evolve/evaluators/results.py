@@ -156,6 +156,7 @@ class TrialMetrics:
     workload: str
     seed: int
     capacity_blocks: int = 0
+    block_size_tokens: int = 0
     panel_sha256: str = ""
     block_hit_rate: float = 0.0
     token_hit_rate: float = 0.0

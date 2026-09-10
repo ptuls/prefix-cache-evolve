@@ -183,7 +183,7 @@ def _install_code_feedback_adapter() -> None:
 
 
 def _install_degenerate_centroid_adapter() -> None:
-    """Keep a usable CVT archive when initialization behaviors are duplicates."""
+    """Preserve CVT capacity for sparse or duplicate initialization behaviors."""
     import numpy as np
     from levi.pool.cvt_map_elites import CVTMAPElitesPool
 
@@ -195,8 +195,8 @@ def _install_degenerate_centroid_adapter() -> None:
         if _ACTIVE_RUNTIME.get() is None:
             return original(self, behavior_vectors, n_centroids)
         data = np.asarray(behavior_vectors, dtype=float)
-        actual_n_centroids = min(n_centroids, len(data))
-        if not len(data) or len(np.unique(data, axis=0)) >= actual_n_centroids:
+        # Sparse initialization must not permanently collapse the archive to one cell.
+        if not len(data) or len(np.unique(data, axis=0)) >= n_centroids:
             return original(self, behavior_vectors, n_centroids)
 
         self._n_centroids = n_centroids

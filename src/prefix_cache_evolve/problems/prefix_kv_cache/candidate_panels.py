@@ -15,6 +15,7 @@ from prefix_cache_evolve.evaluators.results import EvaluationResult
 from prefix_cache_evolve.evaluators.workloads import WorkloadRequest
 
 from .candidate_validation import validate_candidate_source
+from .sandbox import evaluate_in_docker
 from .specialist import candidate_evaluator, candidate_exported_names
 
 
@@ -168,6 +169,8 @@ def evaluate_candidate_program(
     """Evaluate a candidate program in an isolated worker."""
     source = candidate_path.read_text(encoding="utf-8")
     complexity = _validated_candidate_complexity(source, config)
+    if config.sandbox_image:
+        return evaluate_in_docker(source, config, splits=splits)
     return run_with_timeout(
         _evaluate_candidate_program_in_worker,
         config,
@@ -206,6 +209,8 @@ def evaluate_replay_candidate_program(
     requests: tuple[WorkloadRequest, ...],
 ) -> EvaluationResult:
     """Evaluate a candidate against a fixed replay request panel."""
+    if config.sandbox_image:
+        raise ValueError("sandboxed source evaluation requires a configured trace panel")
     source = candidate_path.read_text(encoding="utf-8")
     complexity = _validated_candidate_complexity(source, config)
     return run_with_timeout(

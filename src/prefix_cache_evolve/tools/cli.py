@@ -14,6 +14,10 @@ from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.registry import (
 from prefix_cache_evolve.tools.lazy_group import LazyCommand, LazyGroup
 
 _ANALYZE_COMMANDS = {
+    "policy-costs": LazyCommand(
+        "prefix_cache_evolve.tools.analyze_policy_costs:main",
+        "Measure policy behavior, complexity, callback time, and state.",
+    ),
     "eviction": LazyCommand(
         "prefix_cache_evolve.tools.analyze_eviction:main",
         "Analyze eviction choice, regret, and specialist distillations.",
@@ -50,6 +54,34 @@ _TUNE_COMMANDS = {
     ),
 }
 _DATASET_COMMANDS = {
+    "lmcache-agentic": LazyCommand(
+        "prefix_cache_evolve.tools.prepare_lmcache_agentic:main",
+        "Prepare deterministic LMCache agent-session replay data.",
+    ),
+    "mooncake": LazyCommand(
+        "prefix_cache_evolve.tools.prepare_mooncake:main",
+        "Convert native Mooncake prefix hashes to replay data.",
+    ),
+    "qwen": LazyCommand(
+        "prefix_cache_evolve.tools.prepare_qwen:main",
+        "Convert native Qwen-Bailian block traces to replay data.",
+    ),
+    "agentx": LazyCommand(
+        "prefix_cache_evolve.tools.prepare_agentx:main",
+        "Convert complete AgentX sessions to replay data.",
+    ),
+    "attach-holdout": LazyCommand(
+        "prefix_cache_evolve.tools.attach_holdout:main",
+        "Attach an independent hidden trace to a search panel.",
+    ),
+    "trace-panel": LazyCommand(
+        "prefix_cache_evolve.tools.prepare_trace_panel:main",
+        "Build reproducible grouped trace panels for evolution.",
+    ),
+    "temporal-trace-panel": LazyCommand(
+        "prefix_cache_evolve.tools.prepare_temporal_trace_panel:main",
+        "Build chronological trace panels for evolution.",
+    ),
     "wildchat": LazyCommand(
         "prefix_cache_evolve.tools.prepare_wildchat:main",
         "Prepare deterministic WildChat trace-replay data.",

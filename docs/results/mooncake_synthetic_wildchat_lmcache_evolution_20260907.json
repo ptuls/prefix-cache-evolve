@@ -1,0 +1,113 @@
+{
+  "candidate": {
+    "generated_effective_complexity": 691,
+    "generated_sha256": "ea2e46980ada6b51d2c8fa436cb74853fac2c5e3a15fa6276e7383abd9573fec",
+    "mechanism": [
+      "two-timescale request-session recurrence",
+      "pressure-gated admission using block reuse, gaps, recomputation value, fullness, and descendants",
+      "eviction protection from hits, descendants, subtree hit rate, recomputation value, and access gaps"
+    ],
+    "simplification": "factored duplicated block features and removed guards around simulator fields that are nonnegative by construction",
+    "simplified_effective_complexity": 629,
+    "simplified_sha256": "fb42fd8dae5097fefd8d352fd0244442e9971dd5926aac49ac4ccbc36aa5aa35",
+    "tracked_seed": "src/prefix_cache_evolve/problems/prefix_kv_cache/seeds/joint_mooncake_synthetic_wildchat_lmcache_20260907.py",
+    "visible_behavior_metrics_equal": true
+  },
+  "data": {
+    "block_size_tokens": 512,
+    "converted_trace_sha256": "a1d4847b5d6dc099f560ffa32ee17cbb3c1e69dcc0c1b4f7a4622b214eb7ec84",
+    "dataset": "sammshen/lmcache-agentic-traces",
+    "hidden": {
+      "requests": 97,
+      "sessions": 3,
+      "sha256": "83e730bfb3fbdfc234d8e79a2f682161fc6b9ff88bcb3b16300b622934bdfc75"
+    },
+    "license": "cc-by-4.0",
+    "requests": 329,
+    "resolved_revision": "6e043b9e89865df3aec19fd5679286b683bfd70e",
+    "sessions": 16,
+    "source_families": [
+      "swebench",
+      "gaia",
+      "wildclaw"
+    ],
+    "train": {
+      "requests": 133,
+      "sessions": 10,
+      "sha256": "fd84cc1a34112b6b82af2521fb1d60a9344d823beefbfa8fe75fe6d94de75071"
+    },
+    "validation": {
+      "requests": 99,
+      "sessions": 3,
+      "sha256": "6d43e4d3fc882748a0736a8f19cc7baf759c2743a3eecab21dea1e5098dcd7e0"
+    }
+  },
+  "date": "2026-09-07",
+  "decision": {
+    "promote": false,
+    "reason": "TinyLFU-LRU wins the frozen hidden objective by 19.679 points and the agentic surrogate-to-probe gate remains flagged",
+    "retain_as_seed": true
+  },
+  "hidden": {
+    "candidate": {
+      "block_hit_rate": 0.4249439805829892,
+      "cache_churn_per_1k": 1277.2831459254464,
+      "combined_score": -7.974484202937675,
+      "lmcache_token_hit_rate": 0.9393323943806146,
+      "mooncake_1_token_hit_rate": 0.33991707639400026,
+      "mooncake_2_token_hit_rate": 0.34272385701828234,
+      "policy_underfill_rate": 0.1187742758295169,
+      "token_hit_rate": 0.46393485835031245,
+      "wasted_admission_token_rate": 0.6841949939554828
+    },
+    "lru_score": -2.6368038036755514,
+    "opened_after_candidate_freeze": true,
+    "tinylfu_lru": {
+      "combined_score": 11.704603270214742,
+      "lmcache_token_hit_rate": 0.9024070783448562,
+      "mooncake_1_token_hit_rate": 0.35356593689781235,
+      "mooncake_2_token_hit_rate": 0.35677087039494804
+    },
+    "vllm_apc": {
+      "combined_score": -0.729166809352067,
+      "lmcache_token_hit_rate": 0.944017542006657
+    }
+  },
+  "identities": {
+    "evaluation_context_sha256": "1fcac0b85b8b001746195a5206d9733d8ae80a89e31d158eda22f50cc1be5d66",
+    "panel_sha256": "6d38c40899eb5500ae61339f7d91c83eac04dd2d5f74775b771b351ff730e16a",
+    "sandbox_image": "sha256:8e6ce5586d4b6dd68f5bad1cd70dd83dc05c9f444ac930eec173e297898621b3"
+  },
+  "models": {
+    "mutation": "gpt-5.6-luna",
+    "paradigm": "gpt-5.6-sol"
+  },
+  "promotion_gate": {
+    "failed_metrics": [
+      "token_hit_rate",
+      "wasted_admission_token_rate"
+    ],
+    "flagged": true
+  },
+  "schema": "prefix-cache-four-domain-evolution-v1",
+  "search": {
+    "completed_evaluator_results": 46,
+    "configured_evaluations": 48,
+    "configured_run_cap_usd": 17.5,
+    "generated_best_score": 39.05005028266766,
+    "model_cost_usd": 0.9187704799999997,
+    "recorded_chain_cost_usd": 3.1141411,
+    "runtime_seconds": 4537.183073043823,
+    "seed_score": 25.85372423310332,
+    "simplified_best_score": 39.64644016232098
+  },
+  "status": "completed_not_promoted",
+  "visible": {
+    "candidate_lmcache_train_token_hit_rate": 0.8045936606321541,
+    "candidate_lmcache_validation_token_hit_rate": 0.9467892641832194,
+    "candidate_wildchat_validation_token_hit_rate": 0.49990081333068836,
+    "lru_score": 47.321,
+    "tinylfu_lru_score": 62.491,
+    "vllm_apc_score": 36.183
+  }
+}

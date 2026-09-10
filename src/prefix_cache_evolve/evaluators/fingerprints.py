@@ -101,11 +101,28 @@ def evaluation_context_sha256(
     panel_sha: str,
 ) -> str:
     """Return the identity of one verifier, config, and request-panel contract."""
+    settings = dict(evaluator_config)
+    if settings.get("sandbox_image") is None:
+        settings.pop("sandbox_image", None)
+    traces = settings.pop("trace_workloads", ())
+    # Preserve historical synthetic identities and allow pinned datasets to move
+    # between workspaces without changing the scoring contract.
+    if traces:
+        settings["trace_workloads"] = [
+            {
+                key: value
+                for key, value in trace.items()
+                if key != "path"
+                and not (key == "time_window" and value is None)
+                and not (key == "capacity_sweep_blocks" and not value)
+            }
+            for trace in traces
+        ]
     return canonical_sha256(
         {
             "schema": "prefix-kv-cache-evaluation-context-v1",
             "verifier_version": verifier_version,
-            "evaluator_config": dict(evaluator_config),
+            "evaluator_config": settings,
             "panel_sha256": panel_sha,
         }
     )

@@ -1,0 +1,46 @@
+{
+  "block_size_tokens": 64,
+  "input_tokens": 19681280,
+  "limitations": [
+    "Native input lengths are block-count proxies, not exact provider tokenizer counts.",
+    "64-token hashes are session/model scoped; cross-session sharing is unknown.",
+    "Subagent t values already use the session clock; wrapper times are not added again.",
+    "Cross-session arrivals are unknown; starts use modeled spacing in source order.",
+    "Recorded offsets are preserved; completion-dependent spawn/join is not modeled.",
+    "Provider templates are approximated upstream; decode timing is modeled.",
+    "This cache-policy replay is not the official AgentX serving benchmark.",
+    "Sampling uses no policy scores; small session samples have high variance."
+  ],
+  "output_sha256": "71c9e0586491258803b697231f05f1c3d6104d57ac3dfd824f357726ae8e7edb",
+  "output_tokens": 121168,
+  "publisher": "https://inferencex.semianalysis.com/agentx/methodology",
+  "recommended_split": "hidden",
+  "request_count": 165,
+  "sampling": {
+    "algorithm": "agentx-session-sample-v1",
+    "max_input_tokens": 20000000,
+    "seed": 20260908,
+    "selected_session_count": 4,
+    "selected_session_ids": [
+      "1493faffdc8942e99daa22277f44871a40b8",
+      "5d69b5bc9f47a348d1bcea4e584466876ba1",
+      "7e370a371b3de565f62dd133bd9e496947ac",
+      "d37958997a7ccf024d5345c300612b7cd8af"
+    ],
+    "source_session_count": 393
+  },
+  "schema": "prefix-kv-cache-agentx-conversion-v1",
+  "session_count": 4,
+  "session_spacing_ms": 0,
+  "source": {
+    "path": ".cache/public-traces/agentx-256k.jsonl",
+    "sha256": "e39cd2ff3eba21d4a3664be51da743ac3d2149a1933898cafc7bfeac8147eeef"
+  },
+  "subagent_group_count": 2,
+  "subagent_request_count": 40,
+  "tenant_count": null,
+  "timestamp_ms": {
+    "first": 0.0,
+    "last": 61231001.0
+  }
+}

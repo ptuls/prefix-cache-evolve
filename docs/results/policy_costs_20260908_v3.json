@@ -1,0 +1,158 @@
+{
+  "schema": "prefix-kv-cache-policy-cost-comparison-v1",
+  "config": "configs/prefix_kv_cache_replay_exploration.yaml",
+  "sandbox_image": "sha256:55d1c0455c9fe355353bfdcd03a654da1666f69a5180db993ff1da3a15e9e383",
+  "splits": [
+    "train",
+    "validation"
+  ],
+  "repeats": 1,
+  "simplification_rule": "exact visible-trial behavior; smaller effective AST; promotion size limit",
+  "declared_budgets": {
+    "callback_p99_us": null,
+    "scan_p99_us": null,
+    "state_budget_bytes": null
+  },
+  "policies": {
+    "candidate_0": {
+      "source_path": "src/prefix_cache_evolve/problems/prefix_kv_cache/seeds/joint_four_domain_simplified_20260908.py",
+      "source_sha256": "6d09294e8f3a6dca3a324b6375d3c00fda1a53dbd4095bc4a19dc96ad71ab448",
+      "implementation_ast_nodes": 628,
+      "effective_ast_nodes": 617,
+      "combined_score": 54.796788668271645,
+      "raw_before_complexity": 62.84366319783909,
+      "budgets": {
+        "status": "unassessed",
+        "limits": {
+          "callback_p99_us": null,
+          "scan_p99_us": null,
+          "sampled_retained_bytes": null
+        },
+        "measured": {
+          "callback_p99_us": 76.542,
+          "scan_p99_us": 298.662,
+          "sampled_retained_bytes": 14988
+        },
+        "failed": [],
+        "deployment_approved": false
+      },
+      "profile_trial_counts": [
+        109
+      ]
+    },
+    "candidate_1": {
+      "source_path": "src/prefix_cache_evolve/problems/prefix_kv_cache/seeds/joint_mooncake_synthetic_wildchat_lmcache_20260907.py",
+      "source_sha256": "fb42fd8dae5097fefd8d352fd0244442e9971dd5926aac49ac4ccbc36aa5aa35",
+      "implementation_ast_nodes": 640,
+      "effective_ast_nodes": 629,
+      "combined_score": 54.679694314937365,
+      "raw_before_complexity": 62.843663197839085,
+      "budgets": {
+        "status": "unassessed",
+        "limits": {
+          "callback_p99_us": null,
+          "scan_p99_us": null,
+          "sampled_retained_bytes": null
+        },
+        "measured": {
+          "callback_p99_us": 84.709,
+          "scan_p99_us": 434.955,
+          "sampled_retained_bytes": 14988
+        },
+        "failed": [],
+        "deployment_approved": false
+      },
+      "profile_trial_counts": [
+        109
+      ]
+    },
+    "tinylfu_lru": {
+      "source_path": null,
+      "source_sha256": "cd915d5361e03d319b4c65be19cebd7b801e60391a5238ed152a51cb54645ddd",
+      "implementation_ast_nodes": 227,
+      "effective_ast_nodes": 227,
+      "combined_score": 61.05975479349711,
+      "raw_before_complexity": 61.05975479349711,
+      "budgets": {
+        "status": "unassessed",
+        "limits": {
+          "callback_p99_us": null,
+          "scan_p99_us": null,
+          "sampled_retained_bytes": null
+        },
+        "measured": {
+          "callback_p99_us": 5.209,
+          "scan_p99_us": 30.59,
+          "sampled_retained_bytes": 547384
+        },
+        "failed": [],
+        "deployment_approved": false
+      },
+      "profile_trial_counts": [
+        109
+      ]
+    },
+    "lru": {
+      "source_path": null,
+      "source_sha256": "d256608e9cf6b2b2e1dc696f9d6769a66c9759700fdaccc07646aa3ad710583c",
+      "implementation_ast_nodes": 82,
+      "effective_ast_nodes": 82,
+      "combined_score": 46.95023617830695,
+      "raw_before_complexity": 46.95023617830695,
+      "budgets": {
+        "status": "unassessed",
+        "limits": {
+          "callback_p99_us": null,
+          "scan_p99_us": null,
+          "sampled_retained_bytes": null
+        },
+        "measured": {
+          "callback_p99_us": 10.291,
+          "scan_p99_us": 24.822,
+          "sampled_retained_bytes": 24
+        },
+        "failed": [],
+        "deployment_approved": false
+      },
+      "profile_trial_counts": [
+        109
+      ]
+    }
+  },
+  "identity": {
+    "verifier_version": "1.0.0",
+    "evaluation_context_sha256": "cf2d5ce8dbc1daf36bcf65323e578439bc9bda39c75c42ab0b683f33ce9fb8d8",
+    "panel_sha256": "c5c844a7bb4a3be5d022f8d95650c8938ae95862c7652de6b2c96fb7cedb01e6"
+  },
+  "pareto_policies": [
+    "candidate_0",
+    "lru",
+    "tinylfu_lru"
+  ],
+  "simplification": {
+    "reference": "candidate_1",
+    "eligible": [
+      "candidate_0"
+    ],
+    "promotion_size_limit": 650,
+    "promoted": false
+  },
+  "profile_runtime": {
+    "contract": "prefix-kv-cache-policy-costs-v3",
+    "python": "3.11.16 (main, Aug 31 2026, 23:54:33) [GCC 14.2.0]",
+    "platform": "Linux-6.12.13-200.fc41.aarch64-aarch64-with-glibc2.41",
+    "machine": "aarch64"
+  },
+  "artifacts": "artifacts/policy-costs-20260908/full-visible-v3",
+  "validation": {
+    "successful_profile_trials": 436,
+    "deterministic_trial_fields_match_v1_except_panel_identity": true,
+    "exact_reference_behavior_trial_count": 109,
+    "pytest_passed": 535,
+    "coverage_percent": 85.91,
+    "ruff_format_and_check": "passed",
+    "mypy_source_files": 39,
+    "validated_incumbent_bundles": 4,
+    "preexisting_seed_and_incumbent_files_unchanged": 30
+  }
+}

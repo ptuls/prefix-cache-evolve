@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import ctypes
 import importlib.util
 import math
@@ -10,6 +11,7 @@ import os
 import sys
 import time
 import traceback
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -288,9 +290,30 @@ def load_candidate_factory(
 def load_candidate_factory_from_source(
     source: str,
     exported_names: Sequence[str] = ("candidate_factory", "build_candidate"),
+    *,
+    import_overrides: Mapping[str, object] | None = None,
 ) -> Callable[..., object]:
     """Loads a candidate factory from Python source text."""
     module = ModuleType("candidate_module")
+    if import_overrides is not None:
+        candidate_builtins = vars(builtins).copy()
+
+        def import_candidate_module(
+            name: str,
+            globals_: dict[str, object] | None = None,
+            locals_: dict[str, object] | None = None,
+            fromlist: tuple[str, ...] = (),
+            level: int = 0,
+        ) -> object:
+            del globals_, locals_
+            if level == 0 and name in import_overrides:
+                return import_overrides[name]
+            if level == 0 and name == "__future__" and fromlist == ("annotations",):
+                return builtins.__import__(name, fromlist=fromlist)
+            raise ImportError(f"candidate import is unavailable: {name}")
+
+        candidate_builtins["__import__"] = import_candidate_module
+        module.__dict__["__builtins__"] = candidate_builtins
     _exec_registered_module(
         module,
         lambda: exec(compile(source, "<candidate_source>", "exec"), module.__dict__),

@@ -21,3 +21,4 @@ def test_all_bundled_configs_are_resolvable() -> None:
 
     assert all(path.is_file() for path in paths)
     assert bundled_config_path("prefix_kv_cache_rediscovery.yaml") == REDISCOVERY_CONFIG_PATH
+    assert bundled_config_path("prefix_kv_cache_mooncake.yaml").is_file()

@@ -61,6 +61,7 @@ class SearchConfig(_StrictConfigModel):
     """Search notes accepted by the workflow YAML."""
 
     seed: NonNegativeInt = 0
+    seed_program: str | None = None
     notes: str | None = None
 
 
@@ -212,6 +213,12 @@ class ConfigLoader:
             pipeline["n_eval_processes"] = evaluator["parallel_evaluations"]
         if evaluator.get("timeout") is not None:
             pipeline["eval_timeout"] = evaluator["timeout"]
+        sandbox_settings = (data.get("problem", {}) or {}).get("settings", {}) or {}
+        if sandbox_settings.get("sandbox_image"):
+            # Allow the container deadline plus client shutdown and cleanup.
+            pipeline["eval_timeout"] = (
+                float(evaluator.get("timeout") or sandbox_settings.get("timeout_s", 30)) + 30
+            )
         cascade: dict[str, Any] = dict(data.get("cascade", {}) or {})
         if evaluator.get("cascade_evaluation") is not None:
             cascade["enabled"] = evaluator["cascade_evaluation"]

@@ -269,3 +269,89 @@ def test_eviction_specialist_seed_passes_static_source_contract() -> None:
         )
         == ()
     )
+
+
+def _source_violations(source: str) -> tuple[str, ...]:
+    return candidate_source_violations(
+        source,
+        complexity=scoring_fn_complexity(source),
+        config=EvaluatorConfig(reject_unsupported_source_patterns=True),
+    )
+
+
+@pytest.mark.parametrize(
+    "import_statement", ["import sys", "from pathlib import Path", "import math"]
+)
+def test_static_policy_checks_reject_imports_inside_definitions(import_statement) -> None:
+    source = (
+        "def build_candidate(capacity_blocks, block_size_tokens, seed=None):\n"
+        f"    {import_statement}\n"
+        "    return None\n"
+    )
+    violations = _source_violations(source)
+    assert "nested imports are not allowed in candidate code" in violations
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "math.log1p = lambda value: 1e12",
+        "del math.log1p",
+        "MultiTimescaleDecay.observe = lambda self, key, now, weight=1.0: None",
+        "block.hit_count = 1000000000",
+    ],
+)
+def test_static_policy_checks_reject_shared_attribute_mutation(statement) -> None:
+    source = f"""
+import math
+from prefix_cache_evolve.problems.prefix_kv_cache.primitives import MultiTimescaleDecay
+
+class Policy:
+    def score_admission(self, block, now):
+        {statement}
+        return 1
+
+def build_candidate(capacity_blocks, block_size_tokens, seed=None):
+    return Policy()
+"""
+    violations = _source_violations(source)
+    assert "attribute writes must target candidate-owned self state" in violations
+
+
+def test_static_policy_checks_allow_candidate_owned_attribute_state() -> None:
+    source = """
+class Policy:
+    def __init__(self):
+        self.hits = 0
+
+    def score_admission(self, block, now):
+        self.hits += 1
+        return self.hits
+
+def build_candidate(capacity_blocks, block_size_tokens, seed=None):
+    return Policy()
+"""
+    assert _source_violations(source) == ()
+
+
+def test_static_policy_checks_reject_aliased_self_and_shared_runtime_types() -> None:
+    source = """
+def shared(self):
+    self.seen = 1
+
+class Policy:
+    def poison(self):
+        self.seen = 1
+
+    def score_admission(self, block, now):
+        shared(type(block))
+        Policy.poison(type(block))
+        return 1
+
+def build_candidate(capacity_blocks, block_size_tokens, seed=None):
+    return Policy()
+"""
+    violations = _source_violations(source)
+    assert "attribute writes must target candidate-owned self state" in violations
+    assert "type() is not allowed in candidate code" in violations
+    assert "candidate classes may only be referenced as direct constructors" in violations

@@ -88,6 +88,11 @@ from prefix_cache_evolve.evaluators.fingerprints import (
     panel_sha256,
     request_stream_fingerprint_record,
 )
+from prefix_cache_evolve.evaluators.panels import (
+    PreparedWorkload,
+    prepare_workloads,
+    trace_geometry_overrides,
+)
 from prefix_cache_evolve.evaluators.scoring import (
     aggregate_by as _aggregate_by,
 )
@@ -127,6 +132,7 @@ from prefix_cache_evolve.evaluators.utilities import (
     window_token_hit_rates as _window_token_hit_rates,
 )
 from prefix_cache_evolve.evaluators.workloads import WorkloadRequest, build_workload
+from prefix_cache_evolve.problems.prefix_kv_cache.trace_replay import TRACE_REPLAY_CONTRACT
 
 _HIGH_DESCENDANT_MIN_COUNT = 2
 _COLD_DEEP_MIN_DEPTH = 5
@@ -187,6 +193,7 @@ class TrialMetrics:
     workload: str
     seed: int
     capacity_blocks: int = 0
+    block_size_tokens: int = 0
     panel_sha256: str = ""
     block_hit_rate: float = 0.0
     token_hit_rate: float = 0.0
@@ -1183,6 +1190,7 @@ class PrefixKVCacheSimulator:
                 workload=workload,
                 seed=seed,
                 capacity_blocks=self.capacity_blocks,
+                block_size_tokens=self.block_size_tokens,
                 scoring_fn_complexity=scoring_fn_complexity,
                 invalid=True,
                 invalid_reason=str(exc),
@@ -1258,6 +1266,7 @@ class PrefixKVCacheSimulator:
             workload=workload,
             seed=seed,
             capacity_blocks=self.capacity_blocks,
+            block_size_tokens=self.block_size_tokens,
             block_hit_rate=hit_blocks / total_blocks if total_blocks else 0.0,
             token_hit_rate=hit_tokens / total_tokens if total_tokens else 0.0,
             priority_weighted_token_hit_rate=(
@@ -1884,12 +1893,11 @@ class PrefixKVCacheSimulator:
         now: int,
     ) -> list[_BlockState]:
         blocks: list[_BlockState] = []
-        prefix_tokens: list[int] = []
         tokens = request.prompt_tokens or request.info.prompt_tokens
-        for depth, start in enumerate(range(0, len(tokens), self.block_size_tokens), start=1):
+        hashes = _request_prefix_hashes(request, self.block_size_tokens)
+        for depth, prefix_hash in enumerate(hashes, start=1):
+            start = (depth - 1) * self.block_size_tokens
             chunk = tokens[start : start + self.block_size_tokens]
-            prefix_tokens.extend(chunk)
-            prefix_hash = _stable_hash((request.info.tenant_id, tuple(prefix_tokens)))
             parent_hash = blocks[-1].prefix_hash if blocks else None
             if prefix_hash not in self.blocks:
                 self.blocks[prefix_hash] = _BlockState(
@@ -2149,50 +2157,34 @@ class PrefixKVCacheEvaluator:
         """Evaluate a policy factory across configured workloads."""
         factory = factory or baseline_lru_blocks
         trials: list[TrialMetrics] = []
-        capacity_blocks_values = self.config.effective_capacity_blocks()
-        prepared_streams = {}
-        stream_records = []
-        for workload in self.config.workload_configs(self.splits):
-            for seed in self.config.seeds:
-                actual_seed = seed + workload.seed_offset
-                requests = self._workload_builder(
-                    workload.family,
-                    request_count=workload.request_count,
-                    block_size_tokens=self.config.effective_workload_token_granularity(),
-                    seed=actual_seed,
-                )
-                prepared_streams[(workload.split, workload.family, seed)] = (
-                    actual_seed,
-                    requests,
-                )
-                stream_records.append(
-                    request_stream_fingerprint_record(
-                        requests,
-                        split=workload.split,
-                        family=workload.family,
-                        base_seed=seed,
-                        seed_offset=workload.seed_offset,
-                        actual_seed=actual_seed,
-                    )
-                )
-        panel_sha = self._synthetic_panel_sha(
-            capacity_blocks_values,
-            stream_records,
+        prepared = prepare_workloads(
+            self.config,
+            splits=self.splits,
+            workload_builder=self._workload_builder,
         )
-        for workload in self.config.workload_configs(self.splits):
+        workload_streams: dict[tuple[str, str], list[PreparedWorkload]] = {}
+        for stream in prepared:
+            workload_streams.setdefault((stream.split, stream.family), []).append(stream)
+        panel_sha = self._workload_panel_sha(
+            self.config.effective_capacity_blocks(),
+            [stream.fingerprint() for stream in prepared],
+        )
+        for streams in workload_streams.values():
+            geometries = {(stream.block_size_tokens, stream.capacity_blocks) for stream in streams}
+            if len(geometries) != 1:
+                raise ValueError("one workload family must use one evaluation geometry")
+            block_size_tokens, capacity_blocks_values = next(iter(geometries))
             for capacity_blocks in capacity_blocks_values:
-                for seed in self.config.seeds:
-                    actual_seed, requests = prepared_streams[
-                        (workload.split, workload.family, seed)
-                    ]
+                for stream in streams:
                     trials.append(
                         self._run_trial(
                             factory,
-                            requests,
-                            split=workload.split,
-                            workload=workload.family,
-                            seed=actual_seed,
+                            stream.requests,
+                            split=stream.split,
+                            workload=stream.family,
+                            seed=stream.actual_seed,
                             capacity_blocks=capacity_blocks,
+                            block_size_tokens=block_size_tokens,
                             scoring_fn_complexity=scoring_fn_complexity,
                         )
                     )
@@ -2243,6 +2235,7 @@ class PrefixKVCacheEvaluator:
                 workload=workload,
                 seed=seed,
                 capacity_blocks=capacity_blocks,
+                block_size_tokens=self.config.block_size_tokens,
                 scoring_fn_complexity=scoring_fn_complexity,
             )
             for capacity_blocks in self.config.effective_capacity_blocks()
@@ -2270,12 +2263,12 @@ class PrefixKVCacheEvaluator:
             panel_sha=next(iter(panel_shas)),
         )
 
-    def _synthetic_panel_sha(
+    def _workload_panel_sha(
         self,
         capacity_blocks: tuple[int, ...],
         streams: list[dict[str, object]],
     ) -> str:
-        """Return the manifest-compatible hash for this synthetic panel."""
+        """Return the manifest-compatible hash for the configured workload panel."""
         return panel_sha256(
             evaluation=self._panel_evaluation_metadata(
                 capacity_blocks,
@@ -2301,7 +2294,7 @@ class PrefixKVCacheEvaluator:
         stream_count: int,
     ) -> dict[str, object]:
         """Return the canonical panel configuration used by workload manifests."""
-        return {
+        metadata = {
             "splits": list(splits),
             "capacity_blocks": list(capacity_blocks),
             "capacity_tokens": [
@@ -2314,6 +2307,10 @@ class PrefixKVCacheEvaluator:
             "family_request_multipliers": family_request_multipliers,
             "stream_count": stream_count,
         }
+        geometry_overrides = trace_geometry_overrides(self.config, splits=splits)
+        if geometry_overrides:
+            metadata["trace_geometry_overrides"] = geometry_overrides
+        return metadata
 
     def _run_trial(
         self,
@@ -2324,11 +2321,12 @@ class PrefixKVCacheEvaluator:
         workload: str,
         seed: int,
         capacity_blocks: int,
+        block_size_tokens: int,
         scoring_fn_complexity: int,
     ) -> TrialMetrics:
         simulator = self._simulator_factory(
             capacity_blocks=capacity_blocks,
-            block_size_tokens=self.config.block_size_tokens,
+            block_size_tokens=block_size_tokens,
             prefill_cost_per_token=self.config.prefill_cost_per_token,
             lookup_cost_per_block=self.config.lookup_cost_per_block,
             eviction_cost_per_block=self.config.eviction_cost_per_block,
@@ -2350,14 +2348,14 @@ class PrefixKVCacheEvaluator:
                 policy = _build_policy(
                     factory,
                     capacity_blocks,
-                    self.config.block_size_tokens,
+                    block_size_tokens,
                     self.config.policy_seed,
                 )
                 if self._fixed_admission_factory is not None:
                     admission_policy = _build_policy(
                         self._fixed_admission_factory,
                         capacity_blocks,
-                        self.config.block_size_tokens,
+                        block_size_tokens,
                         self.config.policy_seed,
                     )
                     policy = _FixedAdmissionPolicy(
@@ -2370,6 +2368,7 @@ class PrefixKVCacheEvaluator:
                     workload=workload,
                     seed=seed,
                     capacity_blocks=capacity_blocks,
+                    block_size_tokens=block_size_tokens,
                     scoring_fn_complexity=scoring_fn_complexity,
                     invalid=True,
                     invalid_reason=f"factory raised {type(exc).__name__}",
@@ -2389,6 +2388,7 @@ class PrefixKVCacheEvaluator:
                     workload=workload,
                     seed=seed,
                     capacity_blocks=capacity_blocks,
+                    block_size_tokens=block_size_tokens,
                     scoring_fn_complexity=scoring_fn_complexity,
                     invalid=True,
                     invalid_reason=(
@@ -2430,8 +2430,17 @@ class PrefixKVCacheEvaluator:
         workload_metrics = _aggregate_by(
             (f"{trial.split}/{trial.workload}" for trial in trials), trials
         )
+        block_sizes = {trial.block_size_tokens for trial in trials}
         capacity_metrics = _aggregate_by(
-            (f"capacity_{trial.capacity_blocks}" for trial in trials), trials
+            (
+                (
+                    f"block_{trial.block_size_tokens}_capacity_{trial.capacity_blocks}"
+                    if len(block_sizes) > 1
+                    else f"capacity_{trial.capacity_blocks}"
+                )
+                for trial in trials
+            ),
+            trials,
         )
         score_breakdown = self._score_breakdown(
             trials,
@@ -2449,6 +2458,11 @@ class PrefixKVCacheEvaluator:
             workload_metrics=workload_metrics,
             capacity_metrics=capacity_metrics,
             candidate_metadata={
+                **(
+                    {"trace_replay_contract": TRACE_REPLAY_CONTRACT}
+                    if self.config.trace_workloads
+                    else {}
+                ),
                 "verifier_version": self.config.verifier_version,
                 "evaluation_context_sha256": context_sha,
                 "panel_sha256": panel_sha,
@@ -2531,11 +2545,12 @@ class PrefixKVCacheEvaluator:
             validation = [trial for trial in trials if trial.split == "hidden"]
         if not validation:
             validation = [trial for trial in trials if trial.split == "probe"]
-        by_workload_capacity: dict[tuple[str, int], list[TrialMetrics]] = {}
+        by_workload_capacity: dict[tuple[str, int, int], list[TrialMetrics]] = {}
         for trial in validation:
-            by_workload_capacity.setdefault((trial.workload, trial.capacity_blocks), []).append(
-                trial
-            )
+            by_workload_capacity.setdefault(
+                (trial.workload, trial.block_size_tokens, trial.capacity_blocks),
+                [],
+            ).append(trial)
         workload_scores = []
         min_seed_weight = min(1.0, max(0.0, self.config.min_seed_weight))
         for workload_trials in by_workload_capacity.values():
@@ -2575,8 +2590,23 @@ class PrefixKVCacheEvaluator:
             )
         mean_score = mean(workload_scores) if workload_scores else 0.0
         min_workload_score = min(workload_scores) if workload_scores else 0.0
-        churn = mean(trial.cache_churn_per_1k for trial in validation) if validation else 0.0
-        underfill = mean(trial.policy_underfill_rate for trial in validation) if validation else 0.0
+        workload_capacity_groups = tuple(by_workload_capacity.values())
+        churn = (
+            mean(
+                mean(trial.cache_churn_per_1k for trial in workload_trials)
+                for workload_trials in workload_capacity_groups
+            )
+            if workload_capacity_groups
+            else 0.0
+        )
+        underfill = (
+            mean(
+                mean(trial.policy_underfill_rate for trial in workload_trials)
+                for workload_trials in workload_capacity_groups
+            )
+            if workload_capacity_groups
+            else 0.0
+        )
         fairness = (
             mean(
                 trial.tenant_fairness_penalty

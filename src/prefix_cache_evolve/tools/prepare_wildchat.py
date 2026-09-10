@@ -50,11 +50,18 @@ _DEFAULT_HASH_KEY_ENV = "PREFIX_CACHE_TRACE_HASH_KEY"
 )
 @click.option("--block-size-tokens", type=click.IntRange(min=1), default=16, show_default=True)
 @click.option(
+    "--timestamp-mode",
+    type=click.Choice(("message", "synthetic")),
+    default="message",
+    show_default=True,
+    help="Use recorded response timestamps as timing proxies, or synthesize all spacing.",
+)
+@click.option(
     "--turn-spacing-ms",
     type=click.IntRange(min=0),
     default=1_000,
     show_default=True,
-    help="Synthetic spacing between assistant requests in one conversation.",
+    help="Maximum inferred spacing, bounded by recorded response timestamps.",
 )
 @click.option(
     "--conversation-limit",
@@ -94,6 +101,7 @@ def main(
     output_path: Path,
     manifest_output: Path | None,
     block_size_tokens: int,
+    timestamp_mode: str,
     turn_spacing_ms: int,
     conversation_limit: int | None,
     minimum_requests_per_conversation: int,
@@ -112,15 +120,20 @@ def main(
         raise click.ClickException(f"{hash_key_env} must contain at least 32 bytes")
 
     try:
+        effective_manifest_output = manifest_output or output_path.with_suffix(
+            output_path.suffix + ".manifest.json"
+        )
+        if input_path is not None and input_path.resolve() in {
+            output_path.resolve(),
+            effective_manifest_output.resolve(),
+        }:
+            raise ValueError("output and manifest paths must not overwrite the source input")
         encode = _build_encoder(encoding_name)
         rows, source = _load_source(
             input_path=input_path,
             dataset_id=dataset_id,
             dataset_revision=dataset_revision,
             split=split,
-        )
-        effective_manifest_output = manifest_output or output_path.with_suffix(
-            output_path.suffix + ".manifest.json"
         )
         manifest = convert_wildchat_rows(
             rows,
@@ -136,6 +149,7 @@ def main(
                 minimum_requests_per_conversation=minimum_requests_per_conversation,
                 skip_invalid=skip_invalid,
                 tokenizer_name=encoding_name,
+                timestamp_mode=timestamp_mode,
             ),
         )
     except (ImportError, OSError, RuntimeError, ValueError) as exc:
@@ -195,21 +209,15 @@ def _load_source(
                 "sha256": _file_sha256(input_path),
             }
         if suffix == ".parquet":
-            load_dataset = _datasets_loader()
-            rows = load_dataset(
-                "parquet",
-                data_files=str(input_path),
-                split="train",
-                streaming=True,
-            )
-            return rows, {
+            return _iter_parquet((str(input_path),)), {
                 "kind": "local_parquet",
                 "path": str(input_path),
                 "sha256": _file_sha256(input_path),
+                "reader": "synchronous_parquet_v1",
             }
         raise ValueError("local WildChat input must be JSON, JSONL, NDJSON, or Parquet")
 
-    load_dataset = _datasets_loader()
+    load_dataset_builder = _datasets_builder_loader()
     try:
         from huggingface_hub import HfApi
     except ImportError as exc:
@@ -226,12 +234,7 @@ def _load_source(
     )
     if not resolved_revision:
         raise RuntimeError(f"unable to resolve Hugging Face revision {dataset_revision!r}")
-    rows = load_dataset(
-        dataset_id,
-        split=split,
-        revision=resolved_revision,
-        streaming=True,
-    )
+    builder = load_dataset_builder(dataset_id, revision=resolved_revision)
     source: dict[str, object] = {
         "kind": "huggingface",
         "dataset_id": dataset_id,
@@ -242,18 +245,48 @@ def _load_source(
     }
     if dataset_id == _DEFAULT_DATASET_ID:
         source["license"] = "odc-by"
+    if builder.info.builder_name == "parquet":
+        data_files = builder.config.data_files
+        if not data_files or split not in data_files:
+            raise ValueError(f"Parquet dataset has no files for split {split!r}")
+        rows = _iter_parquet(data_files[split])
+        source["reader"] = "synchronous_parquet_v1"
+    else:
+        rows = builder.as_streaming_dataset(split=split)
     return rows, source
 
 
-def _datasets_loader():
+def _datasets_builder_loader():
     try:
-        from datasets import load_dataset
+        from datasets import load_dataset_builder
     except ImportError as exc:
         raise ImportError(
             "Parquet and Hugging Face streaming require the `wildchat` extra: "
             "uv sync --extra wildchat"
         ) from exc
-    return load_dataset
+    return load_dataset_builder
+
+
+def _iter_parquet(paths: Iterable[str]) -> Iterable[Mapping[str, Any]]:
+    """Stream only conversion fields without Arrow's asynchronous dataset scanner."""
+    try:
+        import fsspec
+        import pyarrow.parquet as parquet
+    except ImportError as exc:
+        raise ImportError(
+            "Parquet streaming requires the `wildchat` extra: uv sync --extra wildchat"
+        ) from exc
+    for path in paths:
+        with fsspec.open(path, "rb") as handle, parquet.ParquetFile(handle) as source:
+            columns = [
+                name
+                for name in ("conversation_hash", "hashed_ip", "timestamp", "conversation", "model")
+                if name in source.schema_arrow.names
+            ]
+            # Capped asynchronous scans can deadlock at interpreter shutdown.
+            # https://github.com/apache/arrow/issues/50482
+            for batch in source.iter_batches(batch_size=128, columns=columns, use_threads=False):
+                yield from batch.to_pylist()
 
 
 def _iter_jsonl(path: Path) -> Iterable[Mapping[str, Any]]:

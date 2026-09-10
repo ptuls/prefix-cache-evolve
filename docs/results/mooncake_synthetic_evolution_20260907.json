@@ -1,0 +1,254 @@
+{
+  "agentic_gate": {
+    "checked_metric_count": 7,
+    "checks": {
+      "cache_churn_per_1k": {
+        "absolute_gap": 156.25,
+        "comparison": "normalized_absolute_gap",
+        "comparison_value": 0.15625,
+        "flag_reason": null,
+        "flagged": false,
+        "probe_value": 843.75,
+        "scale_floor": 100.0,
+        "status": "pass",
+        "surrogate_minus_probe": 156.25,
+        "surrogate_value": 1000.0,
+        "threshold": 0.75
+      },
+      "policy_underfill_rate": {
+        "absolute_gap": 0.016455678956748685,
+        "comparison": "absolute_gap",
+        "comparison_value": 0.016455678956748685,
+        "flag_reason": null,
+        "flagged": false,
+        "probe_value": 0.04154770759941605,
+        "status": "pass",
+        "surrogate_minus_probe": -0.016455678956748685,
+        "surrogate_value": 0.025092028642667363,
+        "threshold": 0.16
+      },
+      "request_token_hit_rate_p10": {
+        "absolute_gap": 0.16453248926285538,
+        "comparison": "absolute_gap",
+        "comparison_value": 0.16453248926285538,
+        "flag_reason": "gap_exceeds_threshold",
+        "flagged": true,
+        "probe_value": 0.06821681083172032,
+        "status": "flagged",
+        "surrogate_minus_probe": 0.16453248926285538,
+        "surrogate_value": 0.2327493000945757,
+        "threshold": 0.15
+      },
+      "short_reuse_after_eviction_missed_token_rate": {
+        "absolute_gap": 0.029172407909971942,
+        "comparison": "absolute_gap",
+        "comparison_value": 0.029172407909971942,
+        "flag_reason": null,
+        "flagged": false,
+        "probe_value": 0.1381111416264143,
+        "status": "pass",
+        "surrogate_minus_probe": 0.029172407909971942,
+        "surrogate_value": 0.16728354953638624,
+        "threshold": 0.1
+      },
+      "token_hit_rate": {
+        "absolute_gap": 0.09911753713043903,
+        "comparison": "absolute_gap",
+        "comparison_value": 0.09911753713043903,
+        "flag_reason": null,
+        "flagged": false,
+        "probe_value": 0.4427534990002856,
+        "status": "pass",
+        "surrogate_minus_probe": 0.09911753713043903,
+        "surrogate_value": 0.5418710361307246,
+        "threshold": 0.12
+      },
+      "wasted_admission_token_rate": {
+        "absolute_gap": 0.1894000315751278,
+        "comparison": "absolute_gap",
+        "comparison_value": 0.1894000315751278,
+        "flag_reason": null,
+        "flagged": false,
+        "probe_value": 0.2517299196356,
+        "status": "pass",
+        "surrogate_minus_probe": 0.1894000315751278,
+        "surrogate_value": 0.4411299512107278,
+        "threshold": 0.2
+      },
+      "worst_quarter_token_hit_rate": {
+        "absolute_gap": 0.15227331405798772,
+        "comparison": "absolute_gap",
+        "comparison_value": 0.15227331405798772,
+        "flag_reason": null,
+        "flagged": false,
+        "probe_value": 0.33416817802343324,
+        "status": "pass",
+        "surrogate_minus_probe": 0.15227331405798772,
+        "surrogate_value": 0.48644149208142096,
+        "threshold": 0.2
+      }
+    },
+    "failed_metric_count": 1,
+    "failed_metrics": [
+      "request_token_hit_rate_p10"
+    ],
+    "flag_reason": "one_or_more_metric_gaps_exceed_threshold",
+    "flagged": true,
+    "max_threshold_ratio": 1.0968832617523692,
+    "missing_metrics": [],
+    "name": "agentic_branching",
+    "probe_workload": "probe/agent_trace_branching",
+    "schema": "prefix-kv-cache-agentic-surrogate-probe-gate-v1",
+    "selection_score_excludes_probe": true,
+    "status": "flagged",
+    "surrogate_workload": "train/agentic_tool_workflows"
+  },
+  "candidate": {
+    "generated_effective_complexity": 627,
+    "mechanism": [
+      "normalize recompute cost by six times the supplied block size",
+      "attenuate deep-block admission penalty after decayed frequency exceeds one"
+    ],
+    "simplification": "removed one unused capacity_blocks assignment; behavior unchanged",
+    "simplified_effective_complexity": 613,
+    "tracked_seed_path": "src/prefix_cache_evolve/problems/prefix_kv_cache/seeds/joint_mooncake_synthetic_20260907.py",
+    "tracked_seed_rerun": {
+      "hidden_combined_score": 6.129092156616778,
+      "visible_combined_score": 62.07828959152213,
+      "visible_mooncake_score": 57.96954069341128,
+      "visible_synthetic_score": 65.42212130697426
+    },
+    "tracked_seed_sha256": "ea310f1ec3139452e93eb560e57220c5477fc0ebe7ae6609575c92af21edb22f"
+  },
+  "date": "2026-09-07",
+  "decision": {
+    "general_incumbent": "retain existing incumbent",
+    "joint_candidate": "strongest tested joint candidate; requires independent trace or online shadow validation",
+    "reason": "visible and hidden gains with one fail-closed request-tail agentic gate failure"
+  },
+  "hidden_combined": {
+    "candidate": {
+      "admission_token_utility": 4.078737231198192,
+      "avoidable_eviction_rate": 0.11201889736660423,
+      "block_hit_rate": 0.41135406438777733,
+      "cache_churn_per_1k": 199.9874321922933,
+      "charged_score": 6.129092156616778,
+      "policy_underfill_rate": 0.07913370267144218,
+      "request_token_hit_rate_p10": 0.1535059869653638,
+      "token_hit_rate": 0.4478095148357627,
+      "wasted_admission_token_rate": 0.5827102505519376,
+      "worst_quarter_token_hit_rate": 0.31981065817832044
+    },
+    "candidate_workload_token_hit_rates": {
+      "hidden/adversarial_unique_prompts": 0.0,
+      "hidden/cross_family_mixture": 0.35743737335326115,
+      "hidden/cyclic_working_set_pressure_shifted": 0.8035041992470315,
+      "hidden/heavy_tailed_prefix_lengths_shifted": 0.44664202255159646,
+      "hidden/mooncake_toolagent_1": 0.35120559724120237,
+      "hidden/mooncake_toolagent_2": 0.35447297426003577,
+      "hidden/priority_burst_recovery_shifted": 0.37469861362266427,
+      "hidden/priority_one_off_noise_shifted": 0.2411099691675231,
+      "hidden/rolling_template_versions_shifted": 0.7566320645905421,
+      "hidden/stochastic_serving_mix_shifted": 0.5135797742749478,
+      "hidden/tenant_phase_shift_cycles_shifted": 0.40575694604787194,
+      "hidden/tenant_session_reentry": 0.6737044145873321
+    },
+    "lru_score": -14.557197750359972,
+    "tinylfu_lru_score": -0.23025065400403943,
+    "vllm_apc_score": -12.789140211083364
+  },
+  "identities": {
+    "evaluation_context_sha256": "c22962b345b7f11ae4547edf0ec55873252634140125a8791d4eee1a812ccb19",
+    "generated_candidate_sha256": "a115477d847ea2f47aa7913c8c3a8068af85ff3df150e3bf5d463626414f1eac",
+    "joint_config_sha256": "6ce94912e66ea2144b3c8ea4f0bb9304f364287d33ff5da2b607424771d13017",
+    "panel_sha256": "dc7d97c2870a835cd68ad0179950026e11f40a35e0155ba34974917baa442da9",
+    "sandbox_image": "sha256:8e6ce5586d4b6dd68f5bad1cd70dd83dc05c9f444ac930eec173e297898621b3",
+    "simplified_candidate_sha256": "94c8b8ca5c3267d7f9a5b6269fbaec9cec6755da6fcbc87923e748fa96c34015"
+  },
+  "models": {
+    "mutation": "openai/gpt-5.6-luna",
+    "paradigm": "openai/gpt-5.6-sol",
+    "paradigm_reasoning_effort": "medium"
+  },
+  "schema": "prefix-cache-mooncake-synthetic-evolution-v1",
+  "search": {
+    "aborted_temperature_incompatible_run_cost_usd": 0.4975066,
+    "configured_total_dollar_cap": 20.0,
+    "general_incumbent_seeded_run": {
+      "archive_size": 2,
+      "completed_evaluator_results": 46,
+      "configured_evaluations": 48,
+      "generated_best_score": 61.941514310172735,
+      "model_cost_usd": 1.05862514,
+      "runtime_seconds": 3256.145588159561
+    },
+    "mooncake_seeded_run": {
+      "best_score": 60.23467476020462,
+      "completed_evaluator_results": 30,
+      "configured_evaluations": 32,
+      "improved_seed": false,
+      "model_cost_usd": 0.6392388800000002
+    },
+    "recorded_total_model_cost_usd": 2.19537062
+  },
+  "status": "completed_joint_improvement_promotion_blocked_by_agentic_tail_gate",
+  "traffic": {
+    "hidden_opened_only_after_selection": true,
+    "mooncake_production_tool_agent_in_search": true,
+    "native_geometry": {
+      "mooncake": {
+        "block_size_tokens": 512,
+        "capacity_blocks": [
+          128,
+          512,
+          2048
+        ]
+      },
+      "synthetic": {
+        "block_size_tokens": 16,
+        "capacity_blocks": [
+          24,
+          48
+        ]
+      }
+    },
+    "synthetic_in_search": true,
+    "visible_validation_trials": {
+      "mooncake": 6,
+      "synthetic": 60
+    },
+    "wildchat_in_search": false
+  },
+  "visible_combined": {
+    "general_parent_score": 58.52296882188172,
+    "generated_candidate_score": 61.941514310172735,
+    "lru_score": 37.32506093124111,
+    "mooncake_seed_score": 60.23467476020462,
+    "simplified_candidate": {
+      "admission_token_utility": 5.2290615658898885,
+      "avoidable_eviction_rate": 0.13470058887310335,
+      "block_hit_rate": 0.5364086628524082,
+      "cache_churn_per_1k": 159.29080894938255,
+      "charged_score": 62.07828959152213,
+      "policy_underfill_rate": 0.0631265129790465,
+      "request_token_hit_rate_p10": 0.2342534616927791,
+      "token_hit_rate": 0.5752890965848895,
+      "wasted_admission_token_rate": 0.6762007883308854,
+      "worst_quarter_token_hit_rate": 0.44726321526993884
+    },
+    "tinylfu_lru_score": 61.61508998927127,
+    "vllm_apc_score": 25.30741081318125
+  },
+  "visible_domains": {
+    "mooncake": {
+      "candidate_score": 57.96954069341128,
+      "general_parent_score": 40.46454312924343,
+      "mooncake_seed_score": 63.15785429813017
+    },
+    "synthetic": {
+      "candidate_score": 65.42212130697426,
+      "general_parent_score": 65.64900232645326,
+      "mooncake_seed_score": 61.36783686125039
+    }
+  }
+}

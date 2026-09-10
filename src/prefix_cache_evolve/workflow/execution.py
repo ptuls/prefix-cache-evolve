@@ -85,6 +85,20 @@ class LeviScoreFunction:
             result = self._evaluate_source(source)
         else:
             result = self._evaluate_factory(factory)
+        return self._metrics(result)
+
+    @property
+    def source_aware(self) -> bool:
+        """Return whether candidate source must be checked before execution."""
+        return self._evaluate_source is not None
+
+    def score_source(self, source: str) -> dict[str, Any]:
+        """Evaluate source without executing it through Levi's generic loader."""
+        if self._evaluate_source is None:
+            raise ValueError("this evaluator does not support source-aware scoring")
+        return self._metrics(self._evaluate_source(source))
+
+    def _metrics(self, result: EvaluatorResult) -> dict[str, Any]:
         metrics = result.metrics or {}
         success = metrics.get("success")
         if success is not None and not bool(success):
@@ -164,6 +178,7 @@ class LeviRunner:
             kwargs["output_dir"] = output_dir
 
         _enable_levi_code_feedback_support()
+        _enable_levi_source_evaluation()
         _enable_levi_degenerate_centroid_fallback()
         paradigm_max_tokens = _configured_paradigm_max_tokens(config)
         paradigm_model_names = _configured_paradigm_model_names(config)
@@ -327,6 +342,29 @@ def _candidate_source(factory: Callable[..., object], inputs: Any) -> str | None
     return None
 
 
+def _evaluate_levi_code(
+    source: str, score_fn: Callable[..., dict], inputs: Any, fn_name: str
+) -> dict[str, Any]:
+    """Dispatch source-aware scoring before any candidate module executes.
+
+    Levi's generic loader executes the module before calling its score function.
+    Our source evaluator owns static validation and isolated candidate loading.
+    The top-level adapter is picklable for Levi's process pool.
+    """
+    if isinstance(score_fn, LeviScoreFunction) and score_fn.source_aware:
+        return score_fn.score_source(source)
+    from levi.utils.evaluation import evaluate_code
+
+    return evaluate_code(source, score_fn, inputs, fn_name)
+
+
+def _enable_levi_source_evaluation() -> None:
+    """Route every CodeAdapter evaluation through the source-aware dispatcher."""
+    from levi.artifacts import code
+
+    code.evaluate_code = _evaluate_levi_code
+
+
 def _enable_levi_code_feedback_support() -> None:
     """Make older Levi code adapters accept producer-supplied failure feedback."""
     from levi.artifacts.code import CodeAdapter
@@ -385,7 +423,7 @@ def _enable_levi_code_feedback_support() -> None:
 
 
 def _enable_levi_degenerate_centroid_fallback() -> None:
-    """Keep a usable CVT archive when valid initialization behaviors are duplicates."""
+    """Preserve CVT capacity when initialization is sparse or has duplicate behaviors."""
     from levi.pool.cvt_map_elites import CVTMAPElitesPool
 
     original = CVTMAPElitesPool.set_centroids_from_data
@@ -394,8 +432,9 @@ def _enable_levi_degenerate_centroid_fallback() -> None:
 
     def set_centroids_with_fallback(self, behavior_vectors, n_centroids=50):
         data = np.asarray(behavior_vectors, dtype=float)
-        actual_n_centroids = min(n_centroids, len(data))
-        if not len(data) or len(np.unique(data, axis=0)) >= actual_n_centroids:
+        # Comparing against the sample count lets one valid seed collapse the archive
+        # to one cell, permanently preventing diverse alternatives from coexisting.
+        if not len(data) or len(np.unique(data, axis=0)) >= n_centroids:
             return original(self, behavior_vectors, n_centroids)
 
         self._n_centroids = n_centroids

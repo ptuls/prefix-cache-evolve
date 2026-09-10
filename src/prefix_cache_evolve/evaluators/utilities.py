@@ -72,14 +72,23 @@ def request_prefix_hashes(
     request: Any,
     block_size_tokens: int,
 ) -> list[int]:
-    """Return stable prefix hashes for a workload request."""
+    """Hash growing prefixes without repeatedly formatting all preceding tokens.
+
+    The digest input exactly matches ``repr((tenant_id, tuple(prefix_tokens)))``
+    so identifiers and deterministic policy tie breaks retain their old values.
+    """
     prefix_hashes: list[int] = []
-    prefix_tokens: list[int] = []
     tokens = request.prompt_tokens or request.info.prompt_tokens
+    digest = hashlib.blake2b(f"({request.info.tenant_id!r}, (".encode("utf-8"), digest_size=8)
     for start in range(0, len(tokens), block_size_tokens):
         chunk = tokens[start : start + block_size_tokens]
-        prefix_tokens.extend(chunk)
-        prefix_hashes.append(stable_hash((request.info.tenant_id, tuple(prefix_tokens))))
+        if start:
+            digest.update(b", ")
+        digest.update(", ".join(repr(token) for token in chunk).encode("utf-8"))
+        prefix_digest = digest.copy()
+        # A singleton tuple has a trailing comma in its repr.
+        prefix_digest.update(b",))" if start + len(chunk) == 1 else b"))")
+        prefix_hashes.append(int.from_bytes(prefix_digest.digest(), byteorder="big", signed=False))
     return prefix_hashes
 
 

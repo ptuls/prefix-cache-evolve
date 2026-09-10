@@ -12,6 +12,8 @@ def dispatch(args: SimpleNamespace) -> None:
     """Dispatch one validated runner command."""
     from prefix_cache_evolve.problems.prefix_kv_cache import runner
 
+    if args.trace_baselines and args.replay_trace is None:
+        raise click.UsageError("--trace-baseline requires --replay-trace")
     if args.model and (args.primary_model or args.secondary_model):
         raise click.UsageError(
             "--model cannot be combined with --primary-model or --secondary-model"
@@ -33,6 +35,7 @@ def dispatch(args: SimpleNamespace) -> None:
             search_seed=args.search_seed,
             api_base=args.api_base,
             api_key_env=args.api_key_env,
+            seed_program=args.seed_program,
         )
         return
     if args.calibrate_trace is not None:
@@ -54,6 +57,7 @@ def dispatch(args: SimpleNamespace) -> None:
             capacity_blocks=args.capacity_blocks,
             capacity_sweep_blocks=capacity_sweep_blocks,
             block_size_tokens=args.block_size_tokens,
+            baseline_names=args.trace_baselines,
         )
         return
     if args.workload_manifest:
@@ -96,6 +100,7 @@ def dispatch(args: SimpleNamespace) -> None:
             block_size_tokens=args.block_size_tokens,
             candidate_program=args.candidate_program,
             config_file=args.config,
+            baseline_names=args.report_baselines,
         )
         return
     if args.hidden_report:
@@ -106,6 +111,7 @@ def dispatch(args: SimpleNamespace) -> None:
             block_size_tokens=args.block_size_tokens,
             candidate_program=args.candidate_program,
             config_file=args.config,
+            baseline_names=args.report_baselines,
         )
         return
     if args.probe_report:
@@ -117,6 +123,7 @@ def dispatch(args: SimpleNamespace) -> None:
             block_size_tokens=args.block_size_tokens,
             candidate_program=args.candidate_program,
             config_file=args.config,
+            baseline_names=args.report_baselines,
         )
         return
     if args.plot_report:
@@ -143,4 +150,5 @@ def dispatch(args: SimpleNamespace) -> None:
         search_seed=args.search_seed,
         api_base=args.api_base,
         api_key_env=args.api_key_env,
+        baseline_names=args.report_baselines,
     )

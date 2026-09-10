@@ -41,6 +41,13 @@ def load_evaluator_config(path: Path = DEFAULT_CONFIG_PATH) -> EvaluatorConfig:
     if "verifier_version" not in document.problem.settings:
         raise ValueError(f"{path} must explicitly declare problem.settings.verifier_version")
     config = evaluator_config_from_settings(document.problem.settings)
+    if config.trace_workloads:
+        config = config.with_updates(
+            trace_workloads=tuple(
+                trace.model_copy(update={"path": str((path.parent / trace.path).resolve())})
+                for trace in config.trace_workloads
+            )
+        )
     if document.evaluator.timeout is not None:
         config = config.with_updates(timeout_s=document.evaluator.timeout)
     return config

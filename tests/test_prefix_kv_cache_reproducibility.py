@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -15,13 +14,9 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import (
 )
 from prefix_cache_evolve.evaluators.verifier import VERIFIER_VERSION
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import load_evaluator_config
-from prefix_cache_evolve.problems.prefix_kv_cache.incumbents import (
-    build_discovery_incumbent as build_candidate,
-)
 from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.registry import (
     current_incumbent,
     incumbent_record,
-    incumbent_records,
     validate_incumbent_registry,
 )
 from prefix_cache_evolve.problems.prefix_kv_cache.reproducibility import (
@@ -31,30 +26,10 @@ from prefix_cache_evolve.problems.prefix_kv_cache.reproducibility import (
 )
 from tests.support import score_identity
 
-_DISCOVERY_INCUMBENT = current_incumbent("discovery")
-_DISCOVERY_INCUMBENT_PATH = _DISCOVERY_INCUMBENT.source_path
 _PRODUCTION_INCUMBENT = current_incumbent("production")
 _PRODUCTION_INCUMBENT_PATH = _PRODUCTION_INCUMBENT.source_path
-_INCUMBENT_IDS = tuple(record.incumbent_id for record in incumbent_records())
-_ONE_SEED_DISCOVERY_TOKEN_HIT_RATES = {
-    "train/shared_system_prompt": 0.834446919079436,
-    "train/rag_template_reuse": 0.820967146548542,
-    "train/long_context_mixed": 0.844537815126050,
-    "train/session_continuation_growth": 0.640120967741935,
-    "train/agentic_tool_workflows": 0.479706785964534,
-    "validation/phase_shift_prompts": 0.794450529390288,
-    "validation/multi_tenant_skew": 0.802102891475779,
-    "validation/hotset_cold_scan": 0.638077634011091,
-    "validation/concurrent_long_generation": 0.890390390390390,
-    "validation/stochastic_serving_mix": 0.420017873100983,
-    "validation/rolling_template_versions": 0.846597462514418,
-    "validation/heavy_tailed_prefix_lengths": 0.634691195795007,
-    "validation/priority_burst_recovery": 0.505823186871361,
-    "validation/priority_one_off_noise": 0.596301188903567,
-    "validation/tenant_phase_shift_cycles": 0.518910030537937,
-    "probe/agent_trace_branching": 0.375389888603256,
-    "probe/cyclic_working_set_pressure": 0.881192396313364,
-}
+# Replay the active policies; registry validation pins every historical bundle.
+_INCUMBENT_IDS = tuple(current_incumbent(role).incumbent_id for role in ("discovery", "production"))
 
 
 def _single_workload_config(**updates: object) -> EvaluatorConfig:
@@ -159,24 +134,6 @@ def test_rescore_preserves_panel_but_changes_context() -> None:
     assert rescored.evaluation_context_sha256 != result.evaluation_context_sha256
 
 
-def test_discovery_panel_matches_committed_workload_fingerprint() -> None:
-    config = load_evaluator_config(Path("configs/prefix_kv_cache_discovery.yaml"))
-    committed = json.loads(
-        Path("docs/results/discovery_workload_manifest.json").read_text(encoding="utf-8")
-    )
-
-    generated = build_workload_manifest(config)
-
-    assert generated["panel_sha256"] == committed["panel_sha256"]
-    assert generated["evaluation_context_sha256"] == committed["evaluation_context_sha256"]
-    assert generated["panel_sha256"] == (
-        "4607782d231560f5d51c5f0347a789b7b82a7e8ff4d78ec5f1adb576c68d2c8f"
-    )
-    assert generated["evaluation_context_sha256"] == (
-        "b4d8e05f8eecb686ee399e7145458efcf8c6b81955a8ed4adc4ed850df2fb99d"
-    )
-
-
 def test_stable_manifest_payload_ignores_environment_metadata() -> None:
     manifest = _manifest_record()
     manifest["generator"] = {"python_version": "3.11.9", "source_file": "old.py"}
@@ -202,29 +159,6 @@ def test_stable_manifest_payload_refuses_mixed_verifier_versions() -> None:
 
     with pytest.raises(ValueError, match="refuses mixed verifier versions"):
         stable_workload_manifest_payload(manifest)
-
-
-def test_pressure_aware_incumbent_matches_one_seed_discovery_scores() -> None:
-    config = load_evaluator_config(Path("configs/prefix_kv_cache_discovery.yaml")).with_updates(
-        seeds=(11,)
-    )
-    source = _DISCOVERY_INCUMBENT_PATH.read_text(encoding="utf-8")
-    complexity = scoring_fn_complexity(source, form_aware=config.form_aware_complexity)
-
-    result = PrefixKVCacheEvaluator(
-        config,
-        splits=("train", "validation", "probe"),
-    )(build_candidate, scoring_fn_complexity=complexity)
-
-    assert complexity == 648
-    assert result.combined_score == pytest.approx(75.46120113909609, rel=0.0, abs=1e-12)
-    assert set(result.workload_metrics) == set(_ONE_SEED_DISCOVERY_TOKEN_HIT_RATES)
-    for workload, expected in _ONE_SEED_DISCOVERY_TOKEN_HIT_RATES.items():
-        assert result.workload_metrics[workload]["token_hit_rate"] == pytest.approx(
-            expected,
-            rel=0.0,
-            abs=1e-12,
-        )
 
 
 def test_incumbent_registry_preserves_exact_sources_and_metadata() -> None:

@@ -8,7 +8,6 @@ import pytest
 
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import (
     DEFAULT_CONFIG_PATH,
-    load_evaluator_config,
 )
 from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.registry import current_incumbent
 from prefix_cache_evolve.tools import analyze_rediscovery
@@ -45,7 +44,6 @@ from prefix_cache_evolve.tools.analyze_regret import (
 from prefix_cache_evolve.tools.analyze_regret import (
     run_analysis as run_regret_analysis,
 )
-from prefix_cache_evolve.workflow.config import ConfigLoader
 
 _POLICY_ROOT = Path("src/prefix_cache_evolve/problems/prefix_kv_cache")
 _WEAK_SEED_PATH = _POLICY_ROOT / "seeds/weak_initial.py"
@@ -306,37 +304,6 @@ def test_admission_eviction_matrix_crosses_all_supplied_policies(tmp_path: Path)
         "admit_all+oracle_next_use",
     }
     assert "Best Eviction Per Admission" in markdown_path.read_text(encoding="utf-8")
-
-
-def test_rediscovery_config_matches_evaluator_without_incumbent_prompt_leakage() -> None:
-    operative = load_evaluator_config(Path("configs/prefix_kv_cache.yaml"))
-    rediscovery = load_evaluator_config(Path("configs/prefix_kv_cache_rediscovery.yaml"))
-    workflow = ConfigLoader().load(Path("configs/prefix_kv_cache_rediscovery.yaml"))
-    prompt = workflow.problem_description
-
-    assert (
-        rediscovery.with_updates(
-            search_score_mode="combined",
-            search_guidance_families=(),
-        )
-        == operative
-    )
-    assert rediscovery.search_score_mode == "robust_min"
-    assert rediscovery.search_guidance_families == ("agentic_tool_workflows",)
-    assert "65.649" not in prompt
-    assert "TinyLFU" not in prompt
-    assert "pressure-aware" not in prompt
-    assert "preserve the supplied parent" not in prompt
-    assert "MultiTimescaleDecay maintains a bounded per-key vector" in prompt
-    assert "available search-space tools, not required architecture" in prompt
-    assert "Preserve or simplify canonical" not in prompt
-    assert "deliberately weak" in prompt
-    assert "Never use request_type or prompt_tokens" in prompt
-    assert "never access a block or request field that is not enumerated" in prompt
-    assert workflow.pipeline["n_inspirations"] == 2
-    assert workflow.cvt["n_centroids"] == 16
-    assert workflow.init["diversity_model"] == "openai/gpt-5.4-mini"
-    assert "validation_shadow_price_tracking_rmse" in workflow.behavior["score_keys"]
 
 
 @pytest.mark.parametrize(

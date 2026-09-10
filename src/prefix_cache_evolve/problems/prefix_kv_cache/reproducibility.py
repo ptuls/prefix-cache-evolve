@@ -11,10 +11,13 @@ from typing import Any, Mapping
 from prefix_cache_evolve.evaluators.fingerprints import (
     evaluation_context_sha256,
     panel_sha256,
-    request_stream_fingerprint_record,
 )
 from prefix_cache_evolve.evaluators.fingerprints import (
     request_stream_sha256 as request_stream_sha256,
+)
+from prefix_cache_evolve.evaluators.panels import (
+    prepare_workloads,
+    trace_geometry_overrides,
 )
 from prefix_cache_evolve.evaluators.prefix_kv_cache import (
     EvaluatorConfig,
@@ -28,27 +31,8 @@ def build_workload_manifest(
     *,
     splits: tuple[str, ...] = ("train", "validation", "probe", "hidden"),
 ) -> dict[str, object]:
-    """Describe and fingerprint every synthetic request stream in an evaluation panel."""
-    streams = []
-    for workload in config.workload_configs(splits):
-        for base_seed in config.seeds:
-            actual_seed = base_seed + workload.seed_offset
-            requests = build_workload(
-                workload.family,
-                request_count=workload.request_count,
-                block_size_tokens=config.effective_workload_token_granularity(),
-                seed=actual_seed,
-            )
-            streams.append(
-                request_stream_fingerprint_record(
-                    requests,
-                    split=workload.split,
-                    family=workload.family,
-                    base_seed=base_seed,
-                    seed_offset=workload.seed_offset,
-                    actual_seed=actual_seed,
-                )
-            )
+    """Fingerprint synthetic and pinned trace streams in an evaluation panel."""
+    streams = [stream.fingerprint() for stream in prepare_workloads(config, splits=splits)]
 
     evaluation = {
         "verifier_version": config.verifier_version,
@@ -62,6 +46,9 @@ def build_workload_manifest(
         "family_request_multipliers": dict(sorted(config.family_request_multipliers.items())),
         "stream_count": len(streams),
     }
+    geometry_overrides = trace_geometry_overrides(config, splits=splits)
+    if geometry_overrides:
+        evaluation["trace_geometry_overrides"] = geometry_overrides
     panel_sha = panel_sha256(
         evaluation={key: value for key, value in evaluation.items() if key != "verifier_version"},
         streams=streams,

@@ -1,0 +1,494 @@
+{
+  "budget": {
+    "approved_total_usd": 20,
+    "audit_model_cost_usd": 0,
+    "recorded_chain_cost_usd": 3.1141411,
+    "remaining_config_cap_usd": 16.8858589
+  },
+  "configuration": {
+    "path": "configs/prefix_kv_cache_replay_audited.yaml",
+    "sha256": "1eae6a2d7c4afeaefff50b60a348b416fd0caeb9c089dbd2a3189c5624a650d1"
+  },
+  "date": "2026-09-07",
+  "findings_fixed": [
+    "missing Mooncake sessions falsely presented as shared recurrence",
+    "WildChat cross-model prefix collisions and omitted Parquet model field",
+    "WildChat role delimiter content collisions",
+    "LMCache invalid rows spliced relative timing and cumulative histories",
+    "LMCache fabricated per-session tenants",
+    "LMCache zero-output decode duration and nonfinite timing validation",
+    "missing visible train workload feedback",
+    "stale container replay semantics and unchanged trace identities"
+  ],
+  "frozen_policy_checks": {
+    "path": "artifacts/replay-audit-20260907/frozen_policy_checks.json",
+    "results": [
+      {
+        "case": "shared_session_control",
+        "evaluation_context_sha256": "d57bc17bf2bda9fa563114df80e831fb323807066118caf4fd747f228e846885",
+        "metrics": {
+          "train/mooncake_toolagent_1": {
+            "cache_churn_per_1k": 0.0,
+            "policy_underfill_rate": 0.41786591509744336,
+            "token_hit_rate": 0.25760959506863584
+          }
+        },
+        "panel_sha256": "e0118bbd2d25cf85c0831a1de6cb1aacadc7adcc5b468d9be96d2be056639daf",
+        "policy": "previous_joint",
+        "source_path": "src/prefix_cache_evolve/problems/prefix_kv_cache/seeds/joint_mooncake_synthetic_20260907.py",
+        "source_sha256": "ea310f1ec3139452e93eb560e57220c5477fc0ebe7ae6609575c92af21edb22f",
+        "trial_count": 1
+      },
+      {
+        "case": "corrected_mooncake",
+        "evaluation_context_sha256": "a8bdf68a5f57c1be6eacb29681ed5988d28c1986acd4cfbd854a0d03fd23b258",
+        "metrics": {
+          "train/mooncake_toolagent_1": {
+            "cache_churn_per_1k": 0.0,
+            "policy_underfill_rate": 0.41786591509744336,
+            "token_hit_rate": 0.25760959506863584
+          }
+        },
+        "panel_sha256": "98c3a9619db90777571afc401c841fca3673788189964d7ab21790af8e9e056a",
+        "policy": "previous_joint",
+        "source_path": "src/prefix_cache_evolve/problems/prefix_kv_cache/seeds/joint_mooncake_synthetic_20260907.py",
+        "source_sha256": "ea310f1ec3139452e93eb560e57220c5477fc0ebe7ae6609575c92af21edb22f",
+        "trial_count": 1
+      },
+      {
+        "case": "corrected_conversations",
+        "evaluation_context_sha256": "d99b8609f2bf12fd7b54e75b5b040f4de1612a87540a14b427db8b5c9add0309",
+        "metrics": {
+          "train/lmcache_agentic": {
+            "cache_churn_per_1k": 0.0,
+            "policy_underfill_rate": 0.6525958479015429,
+            "token_hit_rate": 0.10979598029657293
+          },
+          "train/wildchat": {
+            "cache_churn_per_1k": 0.0,
+            "policy_underfill_rate": 0.8063626807593459,
+            "token_hit_rate": 0.01728153373611908
+          },
+          "validation/lmcache_agentic": {
+            "cache_churn_per_1k": 282.82828282828285,
+            "policy_underfill_rate": 0.04347921143493967,
+            "token_hit_rate": 0.8385290057618252
+          },
+          "validation/wildchat": {
+            "cache_churn_per_1k": 0.0,
+            "policy_underfill_rate": 0.897119073774994,
+            "token_hit_rate": 0.03607178284786726
+          }
+        },
+        "panel_sha256": "e1d2f8eb0bc09f18fe3fac445bfca3ae796a3b5f85a2b9c415ea001c468f607d",
+        "policy": "previous_joint",
+        "source_path": "src/prefix_cache_evolve/problems/prefix_kv_cache/seeds/joint_mooncake_synthetic_20260907.py",
+        "source_sha256": "ea310f1ec3139452e93eb560e57220c5477fc0ebe7ae6609575c92af21edb22f",
+        "trial_count": 4
+      },
+      {
+        "case": "shared_session_control",
+        "evaluation_context_sha256": "d57bc17bf2bda9fa563114df80e831fb323807066118caf4fd747f228e846885",
+        "metrics": {
+          "train/mooncake_toolagent_1": {
+            "cache_churn_per_1k": 6302.277432712215,
+            "policy_underfill_rate": 2.1924748415290995e-07,
+            "token_hit_rate": 0.25695326489011705
+          }
+        },
+        "panel_sha256": "e0118bbd2d25cf85c0831a1de6cb1aacadc7adcc5b468d9be96d2be056639daf",
+        "policy": "four_domain",
+        "source_path": "src/prefix_cache_evolve/problems/prefix_kv_cache/seeds/joint_mooncake_synthetic_wildchat_lmcache_20260907.py",
+        "source_sha256": "fb42fd8dae5097fefd8d352fd0244442e9971dd5926aac49ac4ccbc36aa5aa35",
+        "trial_count": 1
+      },
+      {
+        "case": "corrected_mooncake",
+        "evaluation_context_sha256": "a8bdf68a5f57c1be6eacb29681ed5988d28c1986acd4cfbd854a0d03fd23b258",
+        "metrics": {
+          "train/mooncake_toolagent_1": {
+            "cache_churn_per_1k": 420.28985507246375,
+            "policy_underfill_rate": 0.008574411734309248,
+            "token_hit_rate": 0.2873632298281556
+          }
+        },
+        "panel_sha256": "98c3a9619db90777571afc401c841fca3673788189964d7ab21790af8e9e056a",
+        "policy": "four_domain",
+        "source_path": "src/prefix_cache_evolve/problems/prefix_kv_cache/seeds/joint_mooncake_synthetic_wildchat_lmcache_20260907.py",
+        "source_sha256": "fb42fd8dae5097fefd8d352fd0244442e9971dd5926aac49ac4ccbc36aa5aa35",
+        "trial_count": 1
+      },
+      {
+        "case": "corrected_conversations",
+        "evaluation_context_sha256": "d99b8609f2bf12fd7b54e75b5b040f4de1612a87540a14b427db8b5c9add0309",
+        "metrics": {
+          "train/lmcache_agentic": {
+            "cache_churn_per_1k": 7345.8646616541355,
+            "policy_underfill_rate": 0.0013154212898731199,
+            "token_hit_rate": 0.686849810191521
+          },
+          "train/wildchat": {
+            "cache_churn_per_1k": 12428.57142857143,
+            "policy_underfill_rate": 0.01061420205507523,
+            "token_hit_rate": 0.21709926755999595
+          },
+          "validation/lmcache_agentic": {
+            "cache_churn_per_1k": 1494.949494949495,
+            "policy_underfill_rate": 0.001051797042946287,
+            "token_hit_rate": 0.9416840647569679
+          },
+          "validation/wildchat": {
+            "cache_churn_per_1k": 1818.1818181818182,
+            "policy_underfill_rate": 0.04723277162462391,
+            "token_hit_rate": 0.5742627829380467
+          }
+        },
+        "panel_sha256": "e1d2f8eb0bc09f18fe3fac445bfca3ae796a3b5f85a2b9c415ea001c468f607d",
+        "policy": "four_domain",
+        "source_path": "src/prefix_cache_evolve/problems/prefix_kv_cache/seeds/joint_mooncake_synthetic_wildchat_lmcache_20260907.py",
+        "source_sha256": "fb42fd8dae5097fefd8d352fd0244442e9971dd5926aac49ac4ccbc36aa5aa35",
+        "trial_count": 4
+      }
+    ],
+    "sha256": "fd4b751a446fdd3887e4cbf3e68e973887996f29793ec8c91860ebc6f829b7f4"
+  },
+  "implementation": [
+    {
+      "path": "src/prefix_cache_evolve/evaluators/contracts.py",
+      "sha256": "f106f598f31f7e0ebcca461f6903373dc0c00b1707496db6296f75124f3c63df"
+    },
+    {
+      "path": "src/prefix_cache_evolve/evaluators/panels.py",
+      "sha256": "87a6f053b8c374a2b00f45f7060fa78909e634fca60e3b51913add4e57c2ffe5"
+    },
+    {
+      "path": "src/prefix_cache_evolve/evaluators/prefix_kv_cache.py",
+      "sha256": "2374cb5c20f2cf9d2a6d62dda7a64ba3dd096e5fb33869753f089a8e763df715"
+    },
+    {
+      "path": "src/prefix_cache_evolve/problems/prefix_kv_cache/trace_replay.py",
+      "sha256": "cf7649b61171782f27555e4e6012681f82590e022fcfe818cf8bf045d8e62b5d"
+    },
+    {
+      "path": "src/prefix_cache_evolve/problems/prefix_kv_cache/lmcache_agentic.py",
+      "sha256": "2cfbb374b2b3874d9daab049b13301f45ba069e9ce1261129880720c02ad741e"
+    },
+    {
+      "path": "src/prefix_cache_evolve/problems/prefix_kv_cache/wildchat.py",
+      "sha256": "58c931293d8299b7123849e16062b301b5b504add09440c5f03f06701c5b9ea5"
+    },
+    {
+      "path": "src/prefix_cache_evolve/problems/prefix_kv_cache/evaluator.py",
+      "sha256": "684e58ad91b26392a14f6b7f16bf5244461b64f36be926700f9c42fbaf124d88"
+    },
+    {
+      "path": "src/prefix_cache_evolve/problems/prefix_kv_cache/sandbox.py",
+      "sha256": "6826b5d75030b06aa4739c14b5a3b40db894e4b832a9327c341d83ab7df86b1a"
+    },
+    {
+      "path": "src/prefix_cache_evolve/tools/prepare_wildchat.py",
+      "sha256": "15021626df8ddc1c3f09543f2b990ee2a7bb6486e79375f0bc3fa5b1b4b93250"
+    },
+    {
+      "path": "src/prefix_cache_evolve/tools/prepare_mooncake.py",
+      "sha256": "c3543ecbfa1d894a02d9cd2ae47fb962d63fa863f1dcbf33c8115d4890251815"
+    },
+    {
+      "path": "src/prefix_cache_evolve/tools/prepare_trace_panel.py",
+      "sha256": "9d501cff9ce1370d43a5057c7e14e2c6337eb744b0604ecf3adaef2ca46a2d84"
+    },
+    {
+      "path": "configs/prefix_kv_trace_schema.json",
+      "sha256": "0843d26eecd37007c65e7ca76e5aad6166775efa7e90ed15f6080a0df7c65d47"
+    }
+  ],
+  "limitations": [
+    "All retained hidden samples have been inspected previously and are diagnostic only.",
+    "LMCache bundle is a tenant metadata migration; original raw rows and private HMAC key were unavailable for reconversion.",
+    "No new full-suite policy ranking or baseline comparison was performed.",
+    "Conversation timing, model-specific prompt templates, and pooled cache capacity remain simulator approximations."
+  ],
+  "old_sandbox_image": "sha256:8e6ce5586d4b6dd68f5bad1cd70dd83dc05c9f444ac930eec173e297898621b3",
+  "panels": {
+    "lmcache": {
+      "details": {
+        "arrival_bucket_ms": 100,
+        "base_config_sha256": "0c9f018c7ad9b47d8cdebaff5e2653bfb9fafd35323f0bf5d81beac8e6787030",
+        "block_size_tokens": 512,
+        "family": "lmcache_agentic",
+        "keep_synthetic": false,
+        "limitations": [
+          "Random group holdouts do not establish transfer to later time periods.",
+          "Validation is visible to evolution; only hidden is held out from search.",
+          "Filtering groups changes the arrival mix; replay timings are simulator proxies."
+        ],
+        "partition": {
+          "algorithm": "sorted-sha256-groups-v1",
+          "group_by": "session",
+          "group_count": 16,
+          "hidden_fraction": 0.2,
+          "seed": 52751,
+          "split_group_counts": {
+            "hidden": 3,
+            "train": 10,
+            "validation": 3
+          },
+          "validation_fraction": 0.2
+        },
+        "schema": "prefix-kv-cache-trace-panel-v1",
+        "source": {
+          "path": "artifacts/replay-audit-20260907/lmcache/source.jsonl",
+          "sha256": "8d9e0f2aae8f31079d5ee3a2d06b31ceb9cf37da669c9d5c935c09e8a179f167"
+        },
+        "source_manifest_sha256": "5c6bc6c3a4c2170445b235e77931b3a1170341b607b0e1b396adac7020359e8c",
+        "traces": [
+          {
+            "path": "train.jsonl",
+            "request_count": 133,
+            "session_count": 10,
+            "sha256": "800719d4cb7b56ad8fd912686812a878e06b6fb52fc4bebb81ad1e2dfd449ba3",
+            "split": "train",
+            "tenant_count": 1,
+            "total_prompt_tokens": 2662684
+          },
+          {
+            "path": "validation.jsonl",
+            "request_count": 99,
+            "session_count": 3,
+            "sha256": "68508ec2f0d17be3228579676e667a0a86a350e773c48e9221c640748e07b3b6",
+            "split": "validation",
+            "tenant_count": 1,
+            "total_prompt_tokens": 2273238
+          },
+          {
+            "path": "hidden.jsonl",
+            "request_count": 97,
+            "session_count": 3,
+            "sha256": "01afb36ed57588197baea942c88d590ebda20b0b64a596201bb7543f5e653f63",
+            "split": "hidden",
+            "tenant_count": 1,
+            "total_prompt_tokens": 2149203
+          }
+        ]
+      },
+      "manifest": {
+        "path": "artifacts/replay-audit-20260907/lmcache/panel/manifest.json",
+        "sha256": "81aaecfb592e8aeb35dccf3355c41b801239d27681314444e6ab521e15e4d1a0"
+      },
+      "source_manifest": {
+        "path": "artifacts/replay-audit-20260907/lmcache/source.jsonl.manifest.json",
+        "sha256": "5c6bc6c3a4c2170445b235e77931b3a1170341b607b0e1b396adac7020359e8c"
+      }
+    },
+    "mooncake": {
+      "details": {
+        "arrival_bucket_ms": 100,
+        "base_config_sha256": "0c9f018c7ad9b47d8cdebaff5e2653bfb9fafd35323f0bf5d81beac8e6787030",
+        "block_size_tokens": 512,
+        "excluded_request_count": 19274,
+        "limitations": [
+          "Chronological separation does not establish session or tenant independence.",
+          "Prefixes and sessions can recur across windows; policy/cache state resets.",
+          "Validation is visible to evolution; hidden is reserved for final evaluation.",
+          "Omitted gaps and cold starts change the serving state of the original capture.",
+          "Arrival buckets and output-length pinning are proxies, not measured latency."
+        ],
+        "partition": {
+          "algorithm": "half-open-time-windows-v1",
+          "cold_start_per_window": true
+        },
+        "schema": "prefix-kv-cache-temporal-trace-panel-v1",
+        "source": {
+          "path": "artifacts/replay-audit-20260907/mooncake/source.jsonl",
+          "request_count": 23608,
+          "sha256": "2235d6ea76d730aa28ec3c427fe9e38c4baefa09f8f139f9c64aab0e92be3515"
+        },
+        "source_manifest_sha256": "0d7f64d92cd634da33b37ff2e419d700b0219c4c5cd97a7bd062465445dd72a4",
+        "traces": [
+          {
+            "family": "mooncake_toolagent_1",
+            "first_timestamp_ms": 0.0,
+            "last_timestamp_ms": 86999.0,
+            "path": "train-1.jsonl",
+            "request_count": 483,
+            "sha256": "b1fc6e622dd461083baad7786fdf132fdd43eeece0e6cbdd4304dc987b03d7d6",
+            "source_record_start": 0,
+            "source_record_stop": 483,
+            "split": "train",
+            "time_window": {
+              "end_ms": 90000.0,
+              "source_sha256": "2235d6ea76d730aa28ec3c427fe9e38c4baefa09f8f139f9c64aab0e92be3515",
+              "start_ms": 0.0
+            },
+            "total_prompt_tokens": 4680571
+          },
+          {
+            "family": "mooncake_toolagent_1",
+            "first_timestamp_ms": 1203000.0,
+            "last_timestamp_ms": 1286999.0,
+            "path": "validation-1.jsonl",
+            "request_count": 600,
+            "sha256": "7dfccca9f5d192d33fed51dacb69931f86a083131430c19edead21b64a511993",
+            "source_record_start": 7291,
+            "source_record_stop": 7891,
+            "split": "validation",
+            "time_window": {
+              "end_ms": 1290000.0,
+              "source_sha256": "2235d6ea76d730aa28ec3c427fe9e38c4baefa09f8f139f9c64aab0e92be3515",
+              "start_ms": 1200000.0
+            },
+            "total_prompt_tokens": 5191348
+          },
+          {
+            "family": "mooncake_toolagent_2",
+            "first_timestamp_ms": 2100000.0,
+            "last_timestamp_ms": 2189999.0,
+            "path": "validation-2.jsonl",
+            "request_count": 659,
+            "sha256": "fccf2d8b4ad702a43a5e68ee1607128e25e533989a2a75053ea03fe387a82367",
+            "source_record_start": 13431,
+            "source_record_stop": 14090,
+            "split": "validation",
+            "time_window": {
+              "end_ms": 2190000.0,
+              "source_sha256": "2235d6ea76d730aa28ec3c427fe9e38c4baefa09f8f139f9c64aab0e92be3515",
+              "start_ms": 2100000.0
+            },
+            "total_prompt_tokens": 5638767
+          },
+          {
+            "family": "mooncake_toolagent_1",
+            "first_timestamp_ms": 3003000.0,
+            "last_timestamp_ms": 3176999.0,
+            "path": "hidden-1.jsonl",
+            "request_count": 1296,
+            "sha256": "f925955ccd1c4cacee341f9175fa1a727a4a173ede40eec59486d2c6ab2b68f1",
+            "source_record_start": 19772,
+            "source_record_stop": 21068,
+            "split": "hidden",
+            "time_window": {
+              "end_ms": 3180000.0,
+              "source_sha256": "2235d6ea76d730aa28ec3c427fe9e38c4baefa09f8f139f9c64aab0e92be3515",
+              "start_ms": 3000000.0
+            },
+            "total_prompt_tokens": 11089082
+          },
+          {
+            "family": "mooncake_toolagent_2",
+            "first_timestamp_ms": 3300000.0,
+            "last_timestamp_ms": 3477000.0,
+            "path": "hidden-2.jsonl",
+            "request_count": 1296,
+            "sha256": "5f20443bcd38906cab8a6abccf25f10bb2bb1b17f3d34a9815c8a45fc8f99a1d",
+            "source_record_start": 21902,
+            "source_record_stop": 23198,
+            "split": "hidden",
+            "time_window": {
+              "end_ms": 3480000.0,
+              "source_sha256": "2235d6ea76d730aa28ec3c427fe9e38c4baefa09f8f139f9c64aab0e92be3515",
+              "start_ms": 3300000.0
+            },
+            "total_prompt_tokens": 10961476
+          }
+        ]
+      },
+      "manifest": {
+        "path": "artifacts/replay-audit-20260907/mooncake/panel/manifest.json",
+        "sha256": "36fc243ae43c77d758536a7dcdb2b3219843314e48804c6fb33d8c8990bb7413"
+      },
+      "source_manifest": {
+        "path": "artifacts/replay-audit-20260907/mooncake/source.jsonl.manifest.json",
+        "sha256": "0d7f64d92cd634da33b37ff2e419d700b0219c4c5cd97a7bd062465445dd72a4"
+      }
+    },
+    "wildchat": {
+      "details": {
+        "arrival_bucket_ms": 100,
+        "base_config_sha256": "0c9f018c7ad9b47d8cdebaff5e2653bfb9fafd35323f0bf5d81beac8e6787030",
+        "block_size_tokens": 16,
+        "family": "wildchat",
+        "keep_synthetic": false,
+        "limitations": [
+          "Random group holdouts do not establish transfer to later time periods.",
+          "Validation is visible to evolution; only hidden is held out from search.",
+          "Filtering groups changes the arrival mix; replay timings are simulator proxies."
+        ],
+        "partition": {
+          "algorithm": "sorted-sha256-groups-v1",
+          "group_by": "tenant",
+          "group_count": 18,
+          "hidden_fraction": 0.2,
+          "seed": 0,
+          "split_group_counts": {
+            "hidden": 3,
+            "train": 12,
+            "validation": 3
+          },
+          "validation_fraction": 0.2
+        },
+        "schema": "prefix-kv-cache-trace-panel-v1",
+        "source": {
+          "path": "artifacts/replay-audit-20260907/wildchat/source.jsonl",
+          "sha256": "b56fc09fead2ffc8d9f2c36ad03d2680177f62e27a5b098328c96556ca4268f6"
+        },
+        "source_manifest_sha256": "bda40678a51a86196cf3350180acbe79122b7a3ac9cdd315eed90d7708e41fa3",
+        "traces": [
+          {
+            "path": "train.jsonl",
+            "request_count": 35,
+            "session_count": 12,
+            "sha256": "579ac1968f334264af3f1b38a7a0edde75853e17a7afa03aca59ff21f19aacba",
+            "split": "train",
+            "tenant_count": 12,
+            "total_prompt_tokens": 29627
+          },
+          {
+            "path": "validation.jsonl",
+            "request_count": 11,
+            "session_count": 3,
+            "sha256": "3954dc145fc97d39bf92d3c27dcfc9c0f5e3365640f19fcef9c29dca7966bb22",
+            "split": "validation",
+            "tenant_count": 3,
+            "total_prompt_tokens": 11089
+          },
+          {
+            "path": "hidden.jsonl",
+            "request_count": 19,
+            "session_count": 5,
+            "sha256": "d3cf542fc7d8173c92731b825a02ee397b37d6e35fa2f9e1fcf3cd3466449b14",
+            "split": "hidden",
+            "tenant_count": 3,
+            "total_prompt_tokens": 19481
+          }
+        ]
+      },
+      "manifest": {
+        "path": "artifacts/replay-audit-20260907/wildchat/panel/manifest.json",
+        "sha256": "e02760a4209f8a166a277c50ec93a4337998f610021ec2509d5bd37a70c15a4d"
+      },
+      "source_manifest": {
+        "path": "artifacts/replay-audit-20260907/wildchat/source.jsonl.manifest.json",
+        "sha256": "bda40678a51a86196cf3350180acbe79122b7a3ac9cdd315eed90d7708e41fa3"
+      }
+    }
+  },
+  "replay_contract": "prefix-kv-cache-trace-replay-v2",
+  "sandbox_image": "sha256:cf3219d9c02d0f12ce3077a06b6859c881f6c1bf5fe7c9ea8a8faec0160022e5",
+  "schema": "prefix-kv-cache-replay-audit-v1",
+  "status": "fixes validated; no evolution or promotion",
+  "validation": {
+    "cli_show_config": "passed",
+    "container_evaluations": 6,
+    "container_trials": 12,
+    "mypy_source_files": 37,
+    "pytest_passed": 500,
+    "ruff_check": "passed",
+    "ruff_format": "passed",
+    "visible_trace_streams": 7,
+    "visible_workload_streams": 52
+  },
+  "visible_workload_manifest": {
+    "path": "artifacts/replay-audit-20260907/visible_workloads.json",
+    "sha256": "cbb4d195e7d424564a0b76ec1ff3efddf1bd1351cc44ff610c60f4c3bd111b51"
+  }
+}

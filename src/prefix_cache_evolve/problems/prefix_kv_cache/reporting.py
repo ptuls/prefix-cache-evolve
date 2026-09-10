@@ -14,7 +14,7 @@ from prefix_cache_evolve.evaluators.prefix_kv_cache import (
 from prefix_cache_evolve.evaluators.verifier import require_single_score_identity
 
 QUICK_REPORT_WARNING = (
-    "SMOKE-ONLY: `--quick` uses `request_count=36` and one seed. "
+    "SMOKE-ONLY: `--quick` uses synthetic `request_count=36` and one seed; traces stay complete. "
     "Do not use this table for policy ranking decisions; rerun without `--quick`."
 )
 
@@ -112,6 +112,33 @@ def write_baseline_comparison_report(
     ]
     if quick:
         lines.extend([f"> **{QUICK_REPORT_WARNING}**", ""])
+    lines.extend(
+        [
+            "## Behavior and source complexity",
+            "",
+            "Raw behavior removes only the AST charge; all cache-quality costs remain. "
+            "Registered baselines have no historical AST charge. Measured CPU/state costs "
+            "are separate diagnostics available with `prefix-cache-tools analyze policy-costs`.",
+            "",
+            "| Policy | Raw behavior | Combined score | Charged effective AST | AST charge |",
+            "|---|---:|---:|---:|---:|",
+        ]
+    )
+    for name, result in sorted(
+        results.items(),
+        key=lambda item: (
+            item[1].combined_score + item[1].score_breakdown.get("complexity_cost", 0.0)
+        ),
+        reverse=True,
+    ):
+        cost = result.score_breakdown.get("complexity_cost", 0.0)
+        nodes = result.candidate_metadata.get("scoring_fn_complexity", 0)
+        charged = str(nodes) if name == "candidate" else "Not charged"
+        lines.append(
+            f"| `{name}` | {result.combined_score + cost:.3f} | {result.combined_score:.3f} | "
+            f"{charged} | {cost:.3f} |"
+        )
+    lines.append("")
     capacities = config.effective_capacity_blocks()
     capacity_headers = "".join(f" Capacity {capacity} token hit |" for capacity in capacities)
     lines.extend(
@@ -177,8 +204,12 @@ def _summary_rows(
             for capacity in capacities
         )
         capacity_cells = "".join(f"{float(value):.3f} | " for value in capacity_values)
-        priority = result.workload_metrics["validation/priority_burst_recovery"]
-        priority_noise = result.workload_metrics["validation/priority_one_off_noise"]
+        priority = _workload_metric_cell(
+            result, "validation/priority_burst_recovery", "priority_weighted_token_hit_rate"
+        )
+        priority_noise = _workload_metric_cell(
+            result, "validation/priority_one_off_noise", "token_hit_rate"
+        )
         validation = result.split_metrics["validation"]
         rows.append(
             f"| {rank} | `{name}` | {metadata.group(name)} | "
@@ -189,12 +220,18 @@ def _summary_rows(
             f"{float(validation['wasted_admission_token_rate']):.3f} | "
             f"{float(validation['admission_token_utility']):.3f} | "
             f"{float(validation['avoidable_eviction_rate']):.3f} | "
-            f"{float(priority['priority_weighted_token_hit_rate']):.3f} | "
-            f"{float(priority_noise['token_hit_rate']):.3f} | "
+            f"{priority} | "
+            f"{priority_noise} | "
             f"{float(validation['policy_underfill_rate']):.3f} | "
             f"{float(validation['cache_churn_per_1k']):.1f} |"
         )
     return rows
+
+
+def _workload_metric_cell(result: EvaluationResult, workload: str, metric: str) -> str:
+    """Render an optional synthetic diagnostic without treating absence as zero."""
+    values = result.workload_metrics.get(workload)
+    return "n/a" if values is None else f"{float(values[metric]):.3f}"
 
 
 def _workload_detail(
@@ -213,7 +250,7 @@ def _workload_detail(
         suffix = "Probe"
         introduction = [
             (
-                "These recurrence-heavy families are evaluated and reported but "
+                "These probe workloads are evaluated and reported but "
                 "excluded from the candidate-selection combined score."
             ),
             "",
@@ -306,7 +343,7 @@ def _report_notes(
         (
             "- Priority-burst weighted hit is reported from `priority_burst_recovery`; "
             "priority-noise token hit checks the opposite failure mode, where high "
-            "priority does not imply reuse."
+            "priority does not imply reuse. `n/a` means that workload is absent from this panel."
         ),
         (
             "- Request p10, worst-quarter hit, token-weighted admission waste, "
@@ -314,13 +351,23 @@ def _report_notes(
             "the validation panel."
         ),
         (
-            f"- This report uses `request_count={config.request_count}`, seeds "
+            f"- Synthetic workloads use `request_count={config.request_count}`, seeds "
             f"`{config.seeds}`, block size `{config.block_size_tokens}`, block-capacity "
             f"sweep `{config.effective_capacity_blocks()}`, token-capacity sweep "
             f"`{config.effective_capacity_tokens()}`, and canonical synthetic workload "
             f"token granularity `{config.effective_workload_token_granularity()}`."
         ),
     ]
+    if config.trace_workloads:
+        traces = ", ".join(
+            f"`{trace.split}/{trace.family}` ({trace.request_count} requests)"
+            for trace in config.trace_workloads
+            if f"{trace.split}/{trace.family}" in candidate.workload_metrics
+        )
+        lines.append(
+            f"- Fixed trace streams: {traces}. Each is evaluated once per capacity, "
+            "independently of synthetic seeds. Trace timing is a replay proxy, not serving latency."
+        )
     if quick:
         lines.append("- This is a smoke-only single-seed report, not a policy-ranking report.")
     lines.append("")

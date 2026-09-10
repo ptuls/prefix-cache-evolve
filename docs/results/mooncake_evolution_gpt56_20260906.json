@@ -1,0 +1,183 @@
+{
+  "date": "2026-09-06",
+  "decision": {
+    "general_incumbent": "retain existing incumbent",
+    "production_specialist": "eligible for independent validation",
+    "reason": "strong Mooncake hidden improvement with material synthetic regression"
+  },
+  "identities": {
+    "candidate_sha256": "760b6b8d8bf5e9aa1277cfeb38230a41d3669081384a1a4e5daffd2f1e342e3b",
+    "panel_manifest_sha256": "2901275b6a7c9fd8e56bab609ff53945f009622831485941b34d769475f8f299",
+    "sandbox_image": "sha256:15972abc69f4141ae90ddd06d1b8fdd811ca3c33be56864133b4307a86d7e7f1",
+    "search_config_sha256": "a23bcc7d7662d2aff1c3512b836f0c681bdcac09e2a33cca24a15f8db7a60ce7",
+    "seed_sha256": "0c19deaec83d83f776e837c58822ac4cada611caa0a5504d17816e50e08f0037"
+  },
+  "models": {
+    "mutation": "openai/gpt-5.6-luna",
+    "paradigm": "openai/gpt-5.6-sol",
+    "paradigm_reasoning_effort": "medium"
+  },
+  "production_hidden": {
+    "candidate": {
+      "admission_token_utility": 11.801948,
+      "cache_churn_per_1k": 222.736626,
+      "charged_score": 61.094137,
+      "policy_underfill_rate": 0.096061,
+      "raw_score_before_complexity": 67.092260,
+      "token_hit_rate": 0.356927,
+      "wasted_admission_token_rate": 0.847273
+    },
+    "incumbent": {
+      "admission_token_utility": 1.789739,
+      "cache_churn_per_1k": 2621.013374,
+      "charged_score": 34.899769,
+      "policy_underfill_rate": 0.029238,
+      "raw_score_before_complexity": 42.502338,
+      "token_hit_rate": 0.356725,
+      "wasted_admission_token_rate": 0.959008
+    },
+    "lru_score": 36.379635,
+    "panel_sha256": "0b85e659fe170ef8783239214410b539b9995b28b74e70be9cf32111f9beb8a2",
+    "tinylfu_lru_score": 50.491317,
+    "vllm_apc_score": 37.256416
+  },
+  "schema": "prefix-cache-mooncake-gpt56-evolution-v1",
+  "search": {
+    "archive_size": 3,
+    "completed_evaluator_results": 30,
+    "configured_budget_dollars": 20.0,
+    "configured_budget_evaluations": 32,
+    "configured_budget_seconds": 43200.0,
+    "error_count": 5,
+    "model_cost_usd": 0.4004783,
+    "runtime_seconds": 1717.246908,
+    "selected_visible_score": 63.157854
+  },
+  "status": "completed_production_improvement_no_general_promotion",
+  "synthetic_block_size_sweep": {
+    "capacity_tokens": [
+      384,
+      768
+    ],
+    "scope": "full_validation_10_families_3_seeds_2_capacity_tiers",
+    "rows": [
+      {
+        "block_size_tokens": 8,
+        "capacity_blocks": [
+          48,
+          96
+        ],
+        "candidate_charged_score": 70.615,
+        "candidate_token_hit_rate": 0.679,
+        "candidate_churn_per_1k": 515.4,
+        "incumbent_charged_score": 65.451,
+        "incumbent_token_hit_rate": 0.651,
+        "incumbent_churn_per_1k": 72.7,
+        "score_delta": 5.164
+      },
+      {
+        "block_size_tokens": 16,
+        "capacity_blocks": [
+          24,
+          48
+        ],
+        "candidate_charged_score": 61.368,
+        "candidate_token_hit_rate": 0.594,
+        "candidate_churn_per_1k": 588.6,
+        "incumbent_charged_score": 65.649,
+        "incumbent_token_hit_rate": 0.596,
+        "incumbent_churn_per_1k": 163.9,
+        "score_delta": -4.281
+      },
+      {
+        "block_size_tokens": 32,
+        "capacity_blocks": [
+          12,
+          24
+        ],
+        "candidate_charged_score": -22.67,
+        "candidate_token_hit_rate": 0.363,
+        "candidate_churn_per_1k": 663.6,
+        "incumbent_charged_score": -17.602,
+        "incumbent_token_hit_rate": 0.38,
+        "incumbent_churn_per_1k": 174.0,
+        "score_delta": -5.068
+      },
+      {
+        "block_size_tokens": 64,
+        "capacity_blocks": [
+          6,
+          12
+        ],
+        "candidate_charged_score": -47.066,
+        "candidate_token_hit_rate": 0.191,
+        "candidate_churn_per_1k": 660.4,
+        "incumbent_charged_score": -37.107,
+        "incumbent_token_hit_rate": 0.224,
+        "incumbent_churn_per_1k": 150.2,
+        "score_delta": -9.959
+      },
+      {
+        "block_size_tokens": 128,
+        "capacity_blocks": [
+          3,
+          6
+        ],
+        "candidate_charged_score": -64.655,
+        "candidate_token_hit_rate": 0.092,
+        "candidate_churn_per_1k": 710.2,
+        "incumbent_charged_score": -53.541,
+        "incumbent_token_hit_rate": 0.136,
+        "incumbent_churn_per_1k": 169.8,
+        "score_delta": -11.114
+      }
+    ]
+  },
+  "synthetic_transfer": {
+    "hidden": {
+      "candidate_charged_score": -6.077520,
+      "candidate_token_hit_rate": 0.459894,
+      "incumbent_charged_score": 3.064322,
+      "incumbent_token_hit_rate": 0.455222,
+      "score_delta": -9.141842
+    },
+    "visible": {
+      "candidate_charged_score": 61.367837,
+      "candidate_token_hit_rate": 0.594056,
+      "incumbent_charged_score": 65.649002,
+      "incumbent_token_hit_rate": 0.596410,
+      "score_delta": -4.281165
+    }
+  },
+  "traffic": {
+    "mooncake_production_tool_agent": true,
+    "wildchat_evaluated_post_selection": true,
+    "wildchat_in_search": false
+  },
+  "verifier_version": "1.0.0",
+  "wildchat_smoke_transfer": {
+    "hidden_request_count": 19,
+    "hidden_scores": {
+      "candidate": -8.451609,
+      "incumbent": -68.410996,
+      "lru": 7.927722,
+      "tinylfu_lru": -10.951277,
+      "vllm_apc": 8.859318
+    },
+    "hidden_token_hit_rate": {
+      "candidate": 0.354835,
+      "incumbent": 0.012970,
+      "lru": 0.410423,
+      "tinylfu_lru": 0.295541,
+      "vllm_apc": 0.411349
+    },
+    "validation_request_count": 11,
+    "validation_scores": {
+      "candidate": 30.502283,
+      "incumbent": -65.529560,
+      "lru": 51.717283,
+      "tinylfu_lru": 37.974507,
+      "vllm_apc": 52.030433
+    }
+  }
+}

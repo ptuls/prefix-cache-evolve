@@ -1,0 +1,16 @@
+# Only the build inputs required by docker/sandbox/Dockerfile reach the daemon.
+**
+!pyproject.toml
+!uv.lock
+!README.md
+!LICENSE
+!configs/
+!configs/**
+!src/
+!src/**
+!docker/
+!docker/sandbox/
+!docker/sandbox/Dockerfile
+!docker/sandbox/entrypoint.sh
+**/__pycache__/
+**/*.pyc

@@ -8,9 +8,12 @@ import math
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Iterator, Mapping
 
-from prefix_cache_evolve.evaluators.prefix_kv_cache import RequestInfo, WorkloadRequest
+from prefix_cache_evolve.evaluators.contracts import RequestInfo
+from prefix_cache_evolve.evaluators.workloads import WorkloadRequest
+
+TRACE_REPLAY_CONTRACT = "prefix-kv-cache-trace-replay-v2"
 
 _FORBIDDEN_CONTENT_KEYS = {
     "content",
@@ -40,16 +43,34 @@ _ALLOWED_FIELDS = {
 
 
 @dataclass(frozen=True)
-class _TraceRecord:
+class TraceRecord:
+    """Validated opaque metadata for one request, before token expansion."""
+
     timestamp_ms: float
     tenant_key: str
-    session_key: str
+    session_key: str | None
     request_type: str
     priority: int
     prompt_length: int
     output_length: int
     predicted_output_length: int | None
     prefix_path: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the canonical metadata-only JSONL representation."""
+        record = {
+            "timestamp_ms": self.timestamp_ms,
+            "tenant_hash": self.tenant_key,
+            "session_hash": self.session_key,
+            "request_type": self.request_type,
+            "priority": self.priority,
+            "prompt_length": self.prompt_length,
+            "output_length": self.output_length,
+            "prefix_path": list(self.prefix_path),
+        }
+        if self.predicted_output_length is not None:
+            record["predicted_output_length"] = self.predicted_output_length
+        return record
 
 
 def load_anonymized_trace(
@@ -58,6 +79,8 @@ def load_anonymized_trace(
     block_size_tokens: int,
     arrival_bucket_ms: int = 100,
     request_limit: int | None = None,
+    expected_sha256: str | None = None,
+    timestamp_range_ms: tuple[float, float] | None = None,
 ) -> tuple[WorkloadRequest, ...]:
     """Load metadata-only JSONL into simulator requests.
 
@@ -69,7 +92,15 @@ def load_anonymized_trace(
         raise ValueError("block_size_tokens must be positive")
     if arrival_bucket_ms <= 0:
         raise ValueError("arrival_bucket_ms must be positive")
-    records = _load_trace_records(path, request_limit=request_limit)
+    records = tuple(
+        iter_trace_records(
+            path,
+            request_limit=request_limit,
+            expected_sha256=expected_sha256,
+            block_size_tokens=block_size_tokens,
+            timestamp_range_ms=timestamp_range_ms,
+        )
+    )
     first_timestamp = records[0].timestamp_ms
     requests = []
     for request_id, record in enumerate(records):
@@ -83,7 +114,9 @@ def load_anonymized_trace(
                 info=RequestInfo(
                     request_id=request_id,
                     tenant_id=_stable_int(record.tenant_key),
-                    session_id=_stable_int(record.session_key),
+                    session_id=(
+                        _stable_int(record.session_key) if record.session_key is not None else None
+                    ),
                     prompt_length=record.prompt_length,
                     priority=record.priority,
                     request_type=record.request_type,
@@ -107,7 +140,7 @@ def calibrate_anonymized_trace(
     """Summarize trace-derived workload mix, depth, burst, and length targets."""
     if arrival_bucket_ms <= 0:
         raise ValueError("arrival_bucket_ms must be positive")
-    records = _load_trace_records(path, request_limit=request_limit)
+    records = tuple(iter_trace_records(path, request_limit=request_limit))
     request_types = Counter(record.request_type for record in records)
     timestamps = [record.timestamp_ms for record in records]
     arrival_gaps = [right - left for left, right in zip(timestamps, timestamps[1:], strict=False)]
@@ -124,7 +157,10 @@ def calibrate_anonymized_trace(
         "schema": "prefix-kv-cache-trace-calibration-v1",
         "request_count": len(records),
         "tenant_count": len({record.tenant_key for record in records}),
-        "session_count": len({record.session_key for record in records}),
+        "session_count": len(
+            {record.session_key for record in records if record.session_key is not None}
+        ),
+        "requests_without_session": sum(record.session_key is None for record in records),
         "arrival_bucket_ms": arrival_bucket_ms,
         "workload_mix": {
             request_type: {
@@ -148,18 +184,38 @@ def calibrate_anonymized_trace(
     }
 
 
-def _load_trace_records(
+def iter_trace_records(
     path: Path,
     *,
-    request_limit: int | None,
-) -> tuple[_TraceRecord, ...]:
+    request_limit: int | None = None,
+    expected_sha256: str | None = None,
+    block_size_tokens: int | None = None,
+    timestamp_range_ms: tuple[float, float] | None = None,
+) -> Iterator[TraceRecord]:
+    """Yield validated records and verify the complete file when a hash is supplied.
+
+    Callers must exhaust the iterator to complete checksum verification. Records
+    outside a requested prefix are hashed but not parsed.
+    """
     if request_limit is not None and request_limit <= 0:
         raise ValueError("request_limit must be positive")
-    records: list[_TraceRecord] = []
-    with path.open("r", encoding="utf-8") as handle:
+    if block_size_tokens is not None and block_size_tokens <= 0:
+        raise ValueError("block_size_tokens must be positive")
+    if timestamp_range_ms is not None:
+        start_ms, end_ms = timestamp_range_ms
+        if not (math.isfinite(start_ms) and math.isfinite(end_ms) and 0 <= start_ms < end_ms):
+            raise ValueError("timestamp range must have finite 0 <= start_ms < end_ms")
+    digest = hashlib.sha256()
+    record_count = 0
+    previous_timestamp = 0.0
+    with path.open("rb") as handle:
         for line_number, line in enumerate(handle, start=1):
-            if request_limit is not None and len(records) >= request_limit:
-                break
+            if expected_sha256 is not None:
+                digest.update(line)
+            if request_limit is not None and record_count >= request_limit:
+                if expected_sha256 is None:
+                    break
+                continue
             if not line.strip():
                 continue
             try:
@@ -168,13 +224,26 @@ def _load_trace_records(
                 raise ValueError(f"{path}:{line_number}: invalid JSON: {exc.msg}") from exc
             if not isinstance(payload, Mapping):
                 raise ValueError(f"{path}:{line_number}: record must be an object")
-            records.append(_parse_record(payload, path=path, line_number=line_number))
-    if not records:
+            record = _parse_record(payload, path=path, line_number=line_number)
+            if timestamp_range_ms is not None and not (
+                timestamp_range_ms[0] <= record.timestamp_ms < timestamp_range_ms[1]
+            ):
+                raise ValueError(f"{path}: record lies outside its declared time window")
+            if record.timestamp_ms < previous_timestamp:
+                raise ValueError(f"{path}: timestamp_ms values must be nondecreasing")
+            if block_size_tokens is not None and len(record.prefix_path) != math.ceil(
+                record.prompt_length / block_size_tokens
+            ):
+                raise ValueError(
+                    "prefix_path depth must equal ceil(prompt_length / block_size_tokens)"
+                )
+            previous_timestamp = record.timestamp_ms
+            record_count += 1
+            yield record
+    if expected_sha256 is not None and digest.hexdigest() != expected_sha256:
+        raise ValueError(f"{path}: trace SHA-256 does not match the pinned content")
+    if not record_count:
         raise ValueError(f"{path}: trace contains no requests")
-    for left, right in zip(records, records[1:], strict=False):
-        if right.timestamp_ms < left.timestamp_ms:
-            raise ValueError(f"{path}: timestamp_ms values must be nondecreasing")
-    return tuple(records)
 
 
 def _parse_record(
@@ -182,7 +251,7 @@ def _parse_record(
     *,
     path: Path,
     line_number: int,
-) -> _TraceRecord:
+) -> TraceRecord:
     forbidden = sorted(_find_forbidden_content_keys(payload))
     if forbidden:
         raise ValueError(
@@ -200,12 +269,18 @@ def _parse_record(
         path=path,
         line_number=line_number,
     )
+    assert tenant_key is not None
     session_key = _opaque_key(
         payload,
         ("session_hash", "session_id"),
         path=path,
         line_number=line_number,
+        allow_null=True,
     )
+    # Compatibility for the documented v1 Mooncake converter sentinel. Do not
+    # infer sessions from arbitrary labels, request types, or request order.
+    if session_key == "mooncake:unknown":
+        session_key = None
     prefix_fields = [name for name in ("prefix_path", "prefix_hashes") if name in payload]
     if len(prefix_fields) != 1:
         raise ValueError(
@@ -229,7 +304,7 @@ def _parse_record(
     request_type = payload.get("request_type", "trace_replay")
     if not isinstance(request_type, str) or not request_type:
         raise ValueError(f"{path}:{line_number}: request_type must be a string")
-    return _TraceRecord(
+    return TraceRecord(
         timestamp_ms=timestamp_ms,
         tenant_key=tenant_key,
         session_key=session_key,
@@ -295,16 +370,22 @@ def _opaque_key(
     *,
     path: Path,
     line_number: int,
-) -> str:
+    allow_null: bool = False,
+) -> str | None:
     present = [name for name in names if name in payload]
     if len(present) != 1:
         raise ValueError(f"{path}:{line_number}: provide exactly one of " + " or ".join(names))
-    return _opaque_value(payload[present[0]], path, line_number)
+    value = payload[present[0]]
+    if value is None and allow_null:
+        return None
+    return _opaque_value(value, path, line_number)
 
 
 def _opaque_value(value: Any, path: Path, line_number: int) -> str:
     if isinstance(value, bool) or not isinstance(value, (str, int)):
         raise ValueError(f"{path}:{line_number}: opaque identifiers must be strings or integers")
+    if isinstance(value, str) and not value.strip():
+        raise ValueError(f"{path}:{line_number}: opaque identifiers must not be empty")
     return str(value)
 
 
@@ -317,6 +398,8 @@ def _number(
     value = payload.get(name)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{path}:{line_number}: {name} must be numeric")
+    if not math.isfinite(value):
+        raise ValueError(f"{path}:{line_number}: {name} must be finite")
     return float(value)
 
 

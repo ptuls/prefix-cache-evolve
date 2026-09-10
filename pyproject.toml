@@ -106,6 +106,7 @@ packages = ["src/prefix_cache_evolve"]
 "configs/prefix_kv_cache_discovery.yaml" = "prefix_cache_evolve/configs/prefix_kv_cache_discovery.yaml"
 "configs/prefix_kv_cache_eviction_specialist.yaml" = "prefix_cache_evolve/configs/prefix_kv_cache_eviction_specialist.yaml"
 "configs/prefix_kv_cache_rediscovery.yaml" = "prefix_cache_evolve/configs/prefix_kv_cache_rediscovery.yaml"
+"configs/prefix_kv_cache_mooncake.yaml" = "prefix_cache_evolve/configs/prefix_kv_cache_mooncake.yaml"
 "configs/prefix_kv_trace_schema.json" = "prefix_cache_evolve/configs/prefix_kv_trace_schema.json"
 
 [tool.pytest.ini_options]
@@ -119,13 +120,24 @@ files = [
   "src/prefix_cache_evolve/workflow",
   "src/prefix_cache_evolve/problems/prefix_kv_cache/configuration.py",
   "src/prefix_cache_evolve/problems/prefix_kv_cache/evaluator.py",
+  "src/prefix_cache_evolve/problems/prefix_kv_cache/lmcache_agentic.py",
   "src/prefix_cache_evolve/problems/prefix_kv_cache/reproducibility.py",
   "src/prefix_cache_evolve/problems/prefix_kv_cache/runner.py",
   "src/prefix_cache_evolve/problems/prefix_kv_cache/runner_commands.py",
   "src/prefix_cache_evolve/problems/prefix_kv_cache/specialist.py",
+  "src/prefix_cache_evolve/problems/prefix_kv_cache/sandbox.py",
   "src/prefix_cache_evolve/problems/prefix_kv_cache/trace_replay.py",
   "src/prefix_cache_evolve/problems/prefix_kv_cache/wildchat.py",
   "src/prefix_cache_evolve/tools/prepare_wildchat.py",
+  "src/prefix_cache_evolve/tools/prepare_lmcache_agentic.py",
+  "src/prefix_cache_evolve/tools/prepare_mooncake.py",
+  "src/prefix_cache_evolve/tools/hashed_trace.py",
+  "src/prefix_cache_evolve/tools/prepare_qwen.py",
+  "src/prefix_cache_evolve/tools/prepare_agentx.py",
+  "src/prefix_cache_evolve/tools/attach_holdout.py",
+  "src/prefix_cache_evolve/tools/prepare_trace_panel.py",
+  "src/prefix_cache_evolve/tools/prepare_temporal_trace_panel.py",
+  "src/prefix_cache_evolve/tools/analyze_policy_costs.py",
 ]
 ignore_missing_imports = true
 show_error_codes = true

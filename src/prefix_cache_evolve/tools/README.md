@@ -1,5 +1,11 @@
 # Analysis And Report Tools
 
+`prefix-cache-tools analyze policy-costs` compares raw behavior, implementation
+AST, callback wall/CPU distributions, eviction scans and sampled retained state
+in the same pinned Docker image. Repeat `--candidate` and `--baseline` to compare
+policies; `--reference` checks exact visible-behavior simplifications. See the
+[two-stage search and measurement guide](../../../docs/policy_costs.md).
+
 This directory owns the consolidated `prefix-cache-tools` command tree for
 diagnostic analysis, causal experiments, controlled ablations, and deterministic
 tuning. Run commands from the repository root after installing the development
@@ -27,6 +33,10 @@ prefix-cache-tools
 ├── ablate
 │   └── structured
 ├── datasets
+│   ├── lmcache-agentic
+│   ├── mooncake
+│   ├── trace-panel
+│   ├── temporal-trace-panel
 │   └── wildchat
 ├── incumbents
 │   ├── list
@@ -274,11 +284,106 @@ manifest, or temporary sorting database. Hugging Face and local source caching
 remain governed by the source loader. The same private HMAC key is required to
 reproduce identical prefix hashes.
 
-WildChat supplies one timestamp per conversation rather than one timestamp per
-model request. `--turn-spacing-ms` therefore controls an explicitly synthetic
-intra-conversation interval. The canonical chat serialization also cannot
-reproduce the provider's private system prompt or exact serving template.
+WildChat supplies assistant response-completion timestamps and a timestamp for
+the last response in each conversation. By default these recorded message times
+serve as replay proxies. Missing times use `--turn-spacing-ms`, bounded by
+neighboring recorded responses and anchored at the last response when needed.
+`--timestamp-mode synthetic` ignores message timestamps and spaces every turn.
+The manifest counts recorded and synthetic timestamps. Turn IDs distinguish
+sessions with identical content and deduplicate overlapping snapshots. Recorded
+times override inferred duplicates; inferred times are adjusted when necessary
+to preserve conversation order across snapshots.
+The canonical chat serialization cannot reproduce the provider's private system
+prompt or exact serving template, and completion times are not request arrivals.
 Report this as conversation-derived replay, not production-trace replay.
+
+### LMCache Agentic Conversion
+
+The LMCache Agentic Traces already provide cumulative agent-session inputs,
+output lengths, and measured gaps between tool iterations. Convert a pinned
+Hugging Face revision or a local JSON, JSONL, or Parquet file:
+
+```bash
+export PREFIX_CACHE_TRACE_HASH_KEY="$(openssl rand -hex 32)"
+
+.venv/bin/prefix-cache-tools datasets lmcache-agentic \
+  --dataset-revision 6e043b9e89865df3aec19fd5679286b683bfd70e \
+  --output artifacts/traces/lmcache-agentic.jsonl
+```
+
+The converter validates strict cumulative growth within each session and
+writes content-free HMAC prefix paths. It retains measured `pre_gap` values and
+adds a deterministic proxy for the preceding decode duration. Because the
+source has no absolute cross-session arrival times, sessions are assigned to
+deterministic closed-loop concurrency lanes. Tokenization and canonical prompt
+serialization approximate each provider's private template. Treat the result
+as collected-agent replay rather than production serving telemetry.
+
+### Mooncake Conversion
+
+Convert the native public Mooncake trace format while preserving its 512-token
+cumulative prefix hashes and request-arrival timestamps:
+
+```bash
+.venv/bin/prefix-cache-tools datasets mooncake \
+  --input .cache/mooncake/toolagent_trace.jsonl \
+  --expected-sha256 48a2db1a13d3bc05e6330140c64f604ba366df20d3c9e128b5c35a01c1fa5f71 \
+  --output artifacts/traces/mooncake-toolagent.jsonl
+```
+
+The output path must be new. `OUTPUT.manifest.json` records checksums, geometry,
+counts, and unavailable metadata. Session and tenant identifiers use one unknown
+placeholder, and priority is zero. The converter validates cumulative hash
+relationships and retains the native granularity; it cannot recover session
+holdouts or finer-grained sharing. Use `--replay-trace` with
+`--block-size-tokens 512`, and size capacity in those blocks. The full pinned
+download and replay recipe is in the
+[production replay guide](../../../docs/reproducibility.md#agentic-production-replay-mooncake).
+
+For production sources without session identities, use `datasets temporal-trace-panel`
+with repeated `--window SPLIT START_MS END_MS` arguments. This preserves every
+request within each disjoint time window and keeps identity placeholders unchanged.
+It checks chronological split ordering and writes hash-pinned traces plus a
+manifest and evolution config. Temporal separation does not imply independent
+sessions; each window starts cold. See the [production evolution recipe](
+../../../docs/reproducibility.md#production-trace-evolution-with-chronological-holdouts)
+for the native-block configuration, Docker isolation, budgets, and final holdout.
+For a focused comparison, repeat `--trace-baseline` on `prefix-cache-evolve`,
+for example `--trace-baseline lru --trace-baseline vllm_apc`. The default runs
+all deployable baselines. Size `evaluator.timeout` and the evaluator memory
+limit for the trace; these settings remain recorded in its evaluation context.
+
+### Trace Panels
+
+For Qwen-Bailian and AgentX imports, pinned downloads, and reserving AgentX as
+an independent hidden validation source, see the
+[serving dataset guide](../../../docs/serving_datasets.md). The commands are
+`datasets qwen`, `datasets agentx`, and `datasets attach-holdout`.
+`trace-panel --capacity-tokens` sets trace-specific capacities in token units.
+
+Create a new bundle with train, validation, and hidden traces plus an evolution
+configuration:
+
+```bash
+.venv/bin/prefix-cache-tools datasets trace-panel \
+  --trace artifacts/traces/wildchat.jsonl \
+  --family wildchat \
+  --output-dir artifacts/traces/wildchat-panel
+.venv/bin/prefix-cache-evolve \
+  --config artifacts/traces/wildchat-panel/evolution.yaml --baseline-report
+```
+
+The default 60%/20%/20% partition keeps tenants and their complete sessions in
+one split. `--group-by session` groups by session instead. Validation is visible
+during search; hidden is reserved for final evaluation. Synthetic probes are
+retained; `--keep-synthetic` also retains synthetic selection and hidden families.
+File hashes, request counts, block geometry, and actual partitions are recorded.
+Trace streams are evaluated once per capacity, independently of synthetic seeds.
+
+Size cache capacity and evaluator limits in the generated YAML before a larger
+run. `--quick` leaves traces complete. See
+[Trace Panels For Evolution](../../../docs/reproducibility.md#trace-panels-for-evolution)
+for preparation, model-powered search, and saved-run replay.
 
 ## Standalone Report Scripts
 

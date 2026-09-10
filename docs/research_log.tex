@@ -1763,4 +1763,161 @@ The resulting rule is operational rather than narrative: numbers may share a tab
 when the report declares whether they are exact-context comparisons or explicitly
 indexed cross-context measurements.
 
+\section{WildChat Evolution Pipeline Smoke Check: September 5, 2026}
+
+\blocktag{16} Fixed conversation-derived traces can now supply the normal
+evolution evaluator's train and validation panels.  A pinned WildChat-1M sample
+contained 20 multi-turn conversations and 65 assistant requests from 18 tenants.
+Tenant grouping assigned 35 requests to train, 11 to validation, and 19 to the
+unscored hidden holdout.  The cache sweep used 64 and 128 blocks; two small
+synthetic probes remained outside selection.  Source revisions, geometry,
+partition counts, evaluator settings, and the exact score identity are retained
+in \filepath{docs/results/wildchat_smoke_20260905.json}; the companion Markdown
+record explains the sample and reproduction procedure.
+
+The unchanged production incumbent scored $-65.530$, with a validation token
+hit rate of $3.97\%$, versus $52.030$ and $57.77\%$ for the simulated
+\code{vllm_apc} baseline.  Incumbent underfill was $87.75\%$, with zero churn.
+These observations motivate a larger admission-transfer experiment, but the
+11-request validation sample cannot establish a general policy ranking.  This
+was a pipeline check: no model-powered policy search, hidden evaluation, or
+promotion occurred.  The isolated evolution evaluator reproduced the baseline
+report's incumbent score and identity exactly.
+
+The live conversion exposed an Arrow thread-pool hang after successful output
+generation.  Synchronous Parquet batches avoided that shutdown failure and
+reproduced the same 65-request trace byte for byte.  Conversion also now
+deduplicates overlapping turn identifiers and reconciles missing timestamps
+against recorded response order.  WildChat timestamps are response-completion
+proxies, and the canonical prompt format does not reproduce the provider's
+private serving template.  Neither this sample nor its modeled timing is a
+production serving measurement.
+
+\section{Production Agentic Evolution: September 6, 2026}
+
+\blocktag{512} The Mooncake FAST25 tool-and-agent trace supplied a chronological
+production panel at its native 512-token block geometry.  Search used 483 train
+requests and two visible validation windows containing 600 and 659 requests.
+Two later windows of 1,296 requests each were frozen before search.  The final
+audit repaired eight concrete source-validation, isolation, result-integrity,
+and provenance defects found by external review; the last review was clean with
+0.94 confidence.  The exact image contained all 73 checkout Python files by
+SHA-256, and 470 tests passed at 87.18\% coverage.
+
+The bounded OpenAI search was configured for 32 evaluations, \$8, and one hour,
+but the wall deadline was binding after three evaluator attempts and \$1.1775.
+Initialization produced several non-extractable responses, one proposal failed
+the documented source contract, and the sole scored mutation reached 30.675
+versus 40.465 for the unchanged parent.  The final archive therefore contained
+only the parent.  Validation-only selection froze its exact source before any
+hidden record was opened.
+
+On the untouched production windows, TinyLFU-LRU scored 50.491 versus 34.900 for
+the parent.  Their token-hit rates were close at 35.52\% and 35.67\%, respectively,
+but TinyLFU-LRU reduced churn from 2,621 to 1,032 evictions per thousand requests
+and admission waste from 95.90\% to 89.59\%.  The parent reproduced its 65.649
+score on the original synthetic visible panel and led the tested policies on the
+synthetic hidden panel at 3.064, confirming no incumbent regression because no
+new policy was selected.  The run supports a negative evolution result and a
+stronger production baseline, not a claim that the parent is unimprovable.  No
+incumbent bundle was promoted.  Full identities and limitations are retained in
+\filepath{docs/results/mooncake\_evolution\_20260906.json}.
+
+\section{Full GPT-5.6 Mooncake Evolution: September 6, 2026}
+
+\blocktag{512} A second search retained the same audited Mooncake panel, seed,
+verifier, and sandbox image while replacing the mutation model with
+\code{gpt-5.6-luna} and the diversity/paradigm model with
+\code{gpt-5.6-sol}.  Medium reasoning was explicit for paradigm shifts.  The
+configured limits were 32 concurrent-budget evaluations, \$20, and 12 hours.
+Levi completed 30 evaluator results because two active worker reservations
+filled the 32-evaluation allowance.  It spent \$0.4005 over 1,717 seconds,
+filled three archive cells, and recorded five isolated candidate failures.
+
+The selected 417-node \code{SegmentedGhostPolicy} scored 63.158 on visible
+validation, compared with 40.465 for the incumbent and 63.709 for TinyLFU-LRU.
+Selection was frozen before opening the later windows.  On those untouched
+windows it scored 61.094, ahead of TinyLFU-LRU at 50.491 and the incumbent at
+34.900.  Token hit remained essentially equal to the incumbent at 35.69\%
+versus 35.67\%, while churn fell from 2,621 to 223 evictions per thousand and
+admission waste fell from 95.90\% to 84.73\%.
+
+The production improvement did not transfer to the original 16-token suite.
+The candidate scored 61.368 versus the incumbent's 65.649 on visible synthetic
+traffic and $-6.078$ versus 3.064 on synthetic hidden.  Its source divides
+prompt length by the literal production block size 512 instead of using the
+supplied block-size argument; synthetic hidden also shows much higher churn.
+The general incumbent therefore remains unchanged.  The candidate warrants
+independent evaluation as a 512-token production specialist, but the inspected
+hidden panel must not guide another mutation round.  Full evidence is recorded
+in \filepath{docs/results/mooncake\_evolution\_gpt56\_20260906.json}.
+
+\section{Joint Synthetic and Mooncake Evolution: September 7, 2026}
+
+\blocktag{16/512} A joint evaluator placed the complete 16-token synthetic
+selection suite and the frozen 512-token Mooncake search windows in one run,
+with trace-specific 128/512/2,048-block capacities.  The first 32-evaluation
+search began from the Mooncake specialist and retained it at $60.235$.  The
+opposite 48-evaluation search began from the 572-node general incumbent and
+gave the model the specialist's recurrence-gated admission mechanism as
+crossover guidance.  It completed 46 evaluator results under the concurrent
+reservation budget, spent \$1.0586 over 3,256 seconds, and found a 627-node
+policy scoring $61.942$.
+
+A source audit removed one unused capacity assignment.  This could not change
+cache behavior, but reduced effective complexity to 613; the required full
+rerun scored $62.078$ versus $61.615$ for TinyLFU-LRU.  The policy normalizes
+recompute value by the supplied block size and attenuates its deep-prefix
+admission penalty only after decayed recurrence exceeds one.  It scores
+$65.422$ on synthetic validation versus $65.649$ for its parent, and $57.970$
+on Mooncake validation versus $40.465$ for its parent.  The result is a compact
+cross-domain compromise rather than either domain's specialist optimum.
+
+Selection and source simplification were frozen before hidden adjudication.
+Across ten shifted synthetic families and two later Mooncake windows, the
+simplified candidate scored $6.129$ versus $-0.230$ for TinyLFU-LRU, with
+$44.78\%$ versus $42.9\%$ token hit and 200 versus 832 evictions per thousand
+requests.  Six of seven surrogate-to-probe checks passed.  The agentic
+request-tail absolute gap was $0.1645$ against a $0.1500$ limit, so the
+fail-closed gate blocks promotion despite the visible and hidden wins.  The
+existing immutable incumbent remains unchanged; independent trace replay or an
+online shadow test is required.  Exact results are retained in
+\filepath{docs/results/mooncake\_synthetic\_evolution\_20260907.json}.
+
+\section{Four-Domain Agentic Evolution: September 7, 2026}
+
+\blocktag{16/512} A pinned sample of the LMCache Agentic Traces added 16
+complete SWE-bench, GAIA, and WildClaw sessions to the joint synthetic,
+Mooncake, and WildChat suite.  Conversion retained cumulative prefix structure,
+output length, and measured tool gaps as HMAC-protected metadata, while raw
+messages and source identifiers were discarded.  Ten sessions entered train,
+three validation, and three a frozen hidden split.  This is collected agent
+traffic rather than production serving telemetry; absolute cross-session
+arrival times and provider chat templates remain approximations.
+
+The 48-evaluation GPT-5.6 run used Luna for local mutations and Sol for paradigm
+shifts.  It completed 46 evaluator results in 4,537 seconds and spent
+\$0.9188.  The generated 691-node policy improved the four-domain seed from
+$25.854$ to $39.050$.  A behavior-preserving source audit reduced it to 629
+effective nodes and raised the charged score to $39.646$.  Every comparable
+visible behavior metric remained exact.  The policy uses request-session
+recurrence, online admission pressure, block reuse, access gaps, recomputation
+value, and prefix structure without dataset dispatch.
+
+WildChat validation token hit recovered from $4.0\%$ to $50.0\%$, LMCache
+train reached $80.5\%$, and LMCache validation reached $94.7\%$.  The gain was
+too expensive: visible churn reached 1,098 evictions per thousand requests and
+the score remained below LRU at $47.321$ and TinyLFU-LRU at $62.491$.  The
+agentic surrogate-to-probe gate also failed token-hit and admission-waste gap
+limits.
+
+The simplified source was frozen before hidden evaluation.  It retained
+$93.93\%$ LMCache token hit, but scored $-7.974$ on the combined hidden panel
+versus $11.705$ for TinyLFU-LRU.  TinyLFU-LRU also led both later Mooncake
+windows while reducing overall churn to 804 from 1,277 evictions per thousand.
+The candidate has useful agent-session admission behavior and is retained as a
+seed, but the hidden loss and flagged gate reject promotion.  Exact results and
+data limitations are recorded in
+\filepath{docs/results/mooncake\_synthetic\_wildchat\_lmcache\_evolution\_20260907.json}.
+
 \end{document}

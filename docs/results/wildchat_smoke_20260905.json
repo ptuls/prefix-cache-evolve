@@ -1,0 +1,1053 @@
+{
+  "base_commit": "b4c4fa2e9f8a8067bb861209090230a543b0ba16",
+  "candidate": {
+    "label": "Unchanged production_16tok_20260609 incumbent",
+    "path": "src/prefix_cache_evolve/problems/prefix_kv_cache/incumbents/production_16tok_20260609/policy.py",
+    "sha256": "0c19deaec83d83f776e837c58822ac4cada611caa0a5504d17816e50e08f0037"
+  },
+  "conversion": {
+    "block_size_tokens": 16,
+    "conversation_limit": 20,
+    "conversations_converted": 20,
+    "duplicate_requests_skipped": 0,
+    "hash": {
+      "algorithm": "HMAC-SHA256",
+      "key_fingerprint_sha256": "17ae737186deb2ce455307e5e9657750c13dbcb945b1b856c550b17271f13c18"
+    },
+    "limitations": [
+      "WildChat assistant timestamps mark response completion, not request arrival; replay uses these as timing proxies. Missing timestamps use synthetic spacing anchored at the last response, as does explicit synthetic mode.",
+      "Without turn identifiers, session identity falls back to the content hash, tenant, and last-response timestamp; duplicate detection is then approximate.",
+      "The canonical prompt serialization is deterministic but does not reproduce the original provider's private system prompt or exact chat template.",
+      "This is conversation-derived replay, not a production serving trace."
+    ],
+    "minimum_requests_per_conversation": 2,
+    "output_path": "artifacts/traces/wildchat-smoke.jsonl",
+    "output_sha256": "5b588f463a99f9e4490fb0ba22f2b7eee98321876a5483f3f08977d663ede782",
+    "privacy": {
+      "raw_content_written": false,
+      "raw_identifiers_written": false
+    },
+    "requests_written": 65,
+    "rows_scanned": 51,
+    "schema": "prefix-kv-cache-wildchat-conversion-v2",
+    "session_identity": "first-turn-identifier-or-content-tenant-time-fallback-v2",
+    "skip_invalid": false,
+    "skipped_conversations": 31,
+    "skipped_reasons": {
+      "too few assistant requests": 31
+    },
+    "source": {
+      "dataset_id": "allenai/WildChat-1M",
+      "kind": "huggingface",
+      "license": "odc-by",
+      "requested_revision": "7d6490e462285cf85d91eabea0f9a954fbddcd1f",
+      "resolved_revision": "7d6490e462285cf85d91eabea0f9a954fbddcd1f",
+      "split": "train",
+      "url": "https://huggingface.co/datasets/allenai/WildChat-1M"
+    },
+    "timestamps": {
+      "mode": "message",
+      "source_counts": {
+        "assistant_response": 65
+      },
+      "synthetic_anchor": "last conversation response"
+    },
+    "tokenizer": {
+      "name": "cl100k_base",
+      "prompt_serialization": "prefix-cache-wildchat-chat-v1"
+    },
+    "turn_spacing_ms": 1000
+  },
+  "conversion_verification": {
+    "clean_cli_exit": true,
+    "note": "The synchronous Parquet CLI, including reply-content HMAC validation and timestamp reconciliation, reproduced the original 65-request trace and exited successfully. The original conversion manifest is retained above.",
+    "output_sha256": "5b588f463a99f9e4490fb0ba22f2b7eee98321876a5483f3f08977d663ede782",
+    "reader": "synchronous_parquet_v1",
+    "trace_bytes_unchanged": true
+  },
+  "date": "2026-09-05",
+  "evaluator_settings": {
+    "active_tokens_per_step": 64,
+    "admission_utility_weight": 1.0,
+    "avoidable_eviction_weight": 8.0,
+    "block_size_tokens": 16,
+    "candidate_policy_surface": "full",
+    "capacity_blocks": 64,
+    "capacity_sweep_blocks": [
+      64,
+      128
+    ],
+    "churn_cap": 25.0,
+    "churn_weight": 0.015,
+    "complexity_exponent": 0.75,
+    "eviction_cost_per_block": 0.2,
+    "fairness_cap": 30.0,
+    "fairness_weight": 80.0,
+    "family_request_multipliers": {},
+    "fixed_admission_policy": null,
+    "form_aware_complexity": true,
+    "hidden_families": [],
+    "invalid_surcharge": 1000.0,
+    "k_complex": 0.065,
+    "kv_capacity_mode": "prefix_only",
+    "latency_cap": 40.0,
+    "latency_norm": 0.0,
+    "latency_weight": 35.0,
+    "lookup_cost_per_block": 0.035,
+    "max_candidate_complexity": null,
+    "max_memory_bytes": 67108864,
+    "min_seed_weight": 0.15,
+    "min_workload_weight": 0.5,
+    "policy_seed": 0,
+    "prefill_cost_per_token": 1.0,
+    "priority_hit_weight": 8.0,
+    "probe_families": [
+      "agent_trace_branching",
+      "cyclic_working_set_pressure"
+    ],
+    "promotion_max_candidate_complexity": 650,
+    "reject_unsupported_source_patterns": true,
+    "request_count": 12,
+    "request_tail_weight": 12.0,
+    "search_guidance_families": [],
+    "search_score_mode": "combined",
+    "seeds": [
+      11
+    ],
+    "surrogate_probe_tripwire_thresholds": {
+      "agentic_branching": 0.12,
+      "cyclic_working_set": 0.25
+    },
+    "timeout_s": 90.0,
+    "trace_workloads": [
+      {
+        "arrival_bucket_ms": 100,
+        "block_size_tokens": 16,
+        "family": "wildchat",
+        "path": "train.jsonl",
+        "request_count": 35,
+        "sha256": "c7e451264380bc64200967b80256fd8b7fd7e15d0f704a1b961f92e226dafa39",
+        "split": "train"
+      },
+      {
+        "arrival_bucket_ms": 100,
+        "block_size_tokens": 16,
+        "family": "wildchat",
+        "path": "validation.jsonl",
+        "request_count": 11,
+        "sha256": "4610506cdcdeb5f6bd2392f7a9bc0b29f3b0c11473b7ab725898ebe3675105bf",
+        "split": "validation"
+      },
+      {
+        "arrival_bucket_ms": 100,
+        "block_size_tokens": 16,
+        "family": "wildchat",
+        "path": "hidden.jsonl",
+        "request_count": 19,
+        "sha256": "27123457e31dbcc9c12b786a59a3a144925ac626c70125ce1d93630a0e4740c4",
+        "split": "hidden"
+      }
+    ],
+    "train_families": [],
+    "underfill_cap": 15.0,
+    "underfill_weight": 12.0,
+    "v_min": -1000.0,
+    "validation_families": [],
+    "verifier_version": "1.0.0",
+    "w_avg_blk": 60.0,
+    "w_avg_tok": 80.0,
+    "wasted_admission_weight": 6.0,
+    "workload_token_granularity": 8,
+    "worst_window_weight": 12.0
+  },
+  "hidden_evaluated": false,
+  "implementation_sha256": {
+    "src/prefix_cache_evolve/evaluators/panels.py": "28e4751ab008bf4cd36e1eb3bd76e379f3bca86b95bbdf30b9e0d19d664df073",
+    "src/prefix_cache_evolve/evaluators/prefix_kv_cache.py": "acec0c506fb2818cb500365f8beba38fca702e222f278a91d4e09940366fc0cb",
+    "src/prefix_cache_evolve/problems/prefix_kv_cache/wildchat.py": "7befa254d4b394b4394f14318cc3fd4fb3b52542f4c3d877a8ab41dc128adbff",
+    "src/prefix_cache_evolve/tools/prepare_trace_panel.py": "531dfad62ab926828b3ef0deb631b160b0e02d00d6a91d10906de76cc4eb8196",
+    "src/prefix_cache_evolve/tools/prepare_wildchat.py": "17d6fd7f8f373fec384db8c2efd1861b08d98730e34ed49bbf4bed817ffbc1ee"
+  },
+  "isolated_evolution_evaluator": {
+    "combined_score": -65.5295598344022,
+    "evaluation_context_sha256": "bef3b968b8190f9db763e81b5dbaaef2cd43a710d248d97a778129f21448b9c1",
+    "matches_baseline_report": true,
+    "panel_sha256": "f20ef11d1bfff7e58139725cb20a001c56c8b48309c513d2a8059dfa465d7351",
+    "success": true,
+    "verifier_version": "1.0.0"
+  },
+  "limitations": [
+    "First 20 eligible multi-turn conversations (51 source rows scanned) are a small, filtered sample, not representative of WildChat.",
+    "Validation contains only 11 requests across three tenants and is visible to search; hidden contains 19 unscored requests.",
+    "Assistant response-completion times are arrival proxies; prompt serialization and serving latency are modeled.",
+    "Random tenant partitions change the arrival mix and do not test temporal transfer.",
+    "The same private HMAC key is required for identical trace hashes and split memberships.",
+    "Cache capacities are 64 and 128 blocks of 16 tokens; the synthetic-only headline scores use a different evaluation context."
+  ],
+  "model_powered_policy_search_performed": false,
+  "purpose": "Validate conversation-derived trace preparation and the evolution evaluator; no policy promotion.",
+  "results": {
+    "candidate": {
+      "combined_score": -65.5295598344022,
+      "invalid_fraction": 0.0,
+      "reporting_only": false,
+      "score_breakdown": {
+        "churn_cost": 0.0,
+        "combined_score": -65.5295598344022,
+        "complexity_cost": 7.602569136529197,
+        "fairness_cost": 0.0,
+        "mean_workload_score": -31.598112225210922,
+        "min_workload_contribution": -15.799056112605461,
+        "min_workload_score": -31.598112225210922,
+        "policy_underfill_rate": 0.8774851966713857,
+        "underfill_cost": 10.529822360056627,
+        "validation_trial_count": 2.0
+      },
+      "scoring_fn_complexity": 572,
+      "split_metrics": {
+        "probe": {
+          "admission_rate": 0.8064516129032258,
+          "block_hit_rate": 0.4332655826558266,
+          "cache_churn_per_1k": 0.0,
+          "policy_bypass_token_rate": 0.05133735979292493,
+          "policy_underfill_rate": 0.04341616560612597,
+          "token_hit_rate": 0.5212188029271722,
+          "wasted_admission_token_rate": 0.5740131578947368
+        },
+        "train": {
+          "admission_rate": 0.640625,
+          "block_hit_rate": 0.03319919517102616,
+          "cache_churn_per_1k": 0.0,
+          "policy_bypass_token_rate": 0.9306469123187943,
+          "policy_underfill_rate": 0.697881317396203,
+          "token_hit_rate": 0.033718628264895585,
+          "wasted_admission_token_rate": 0.36917562724014336
+        },
+        "validation": {
+          "admission_rate": 0.6,
+          "block_hit_rate": 0.03937007874015748,
+          "cache_churn_per_1k": 0.0,
+          "policy_bypass_token_rate": 0.9427692918071812,
+          "policy_underfill_rate": 0.8774851966713857,
+          "token_hit_rate": 0.0396746677246578,
+          "wasted_admission_token_rate": 0.5480225988700564
+        }
+      },
+      "success": true
+    },
+    "cost_aware_lru": {
+      "combined_score": 51.71728322668622,
+      "invalid_fraction": 0.0,
+      "reporting_only": false,
+      "score_breakdown": {
+        "churn_cost": 25.0,
+        "combined_score": 51.71728322668622,
+        "complexity_cost": 0.0,
+        "fairness_cost": 0.0,
+        "mean_workload_score": 60.16060050552084,
+        "min_workload_contribution": 16.55668272116538,
+        "min_workload_score": 33.11336544233076,
+        "policy_underfill_rate": 0.0,
+        "underfill_cost": 0.0,
+        "validation_trial_count": 2.0
+      },
+      "scoring_fn_complexity": 0,
+      "split_metrics": {
+        "probe": {
+          "admission_rate": 1.0,
+          "block_hit_rate": 0.44546070460704607,
+          "cache_churn_per_1k": 0.0,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.535023807241236,
+          "wasted_admission_token_rate": 0.6413842710997443
+        },
+        "train": {
+          "admission_rate": 0.9967373572593801,
+          "block_hit_rate": 0.3948692152917505,
+          "cache_churn_per_1k": 13814.285714285714,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.40104732102943996,
+          "wasted_admission_token_rate": 0.5613488850862095
+        },
+        "validation": {
+          "admission_rate": 0.9723942903312686,
+          "block_hit_rate": 0.573228346456693,
+          "cache_churn_per_1k": 2454.5454545454545,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.5776631620710176,
+          "wasted_admission_token_rate": 0.20510785742166668
+        }
+      },
+      "success": true
+    },
+    "depth_prefer_shallow": {
+      "combined_score": 51.71728322668622,
+      "invalid_fraction": 0.0,
+      "reporting_only": false,
+      "score_breakdown": {
+        "churn_cost": 25.0,
+        "combined_score": 51.71728322668622,
+        "complexity_cost": 0.0,
+        "fairness_cost": 0.0,
+        "mean_workload_score": 60.16060050552084,
+        "min_workload_contribution": 16.55668272116538,
+        "min_workload_score": 33.11336544233076,
+        "policy_underfill_rate": 0.0,
+        "underfill_cost": 0.0,
+        "validation_trial_count": 2.0
+      },
+      "scoring_fn_complexity": 0,
+      "split_metrics": {
+        "probe": {
+          "admission_rate": 1.0,
+          "block_hit_rate": 0.44546070460704607,
+          "cache_churn_per_1k": 0.0,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.535023807241236,
+          "wasted_admission_token_rate": 0.6413842710997443
+        },
+        "train": {
+          "admission_rate": 0.9967845659163987,
+          "block_hit_rate": 0.35412474849094566,
+          "cache_churn_per_1k": 14971.428571428572,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.3596653681588863,
+          "wasted_admission_token_rate": 0.6116342016313618
+        },
+        "validation": {
+          "admission_rate": 0.9723942903312686,
+          "block_hit_rate": 0.573228346456693,
+          "cache_churn_per_1k": 2454.5454545454545,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.5776631620710176,
+          "wasted_admission_token_rate": 0.20510785742166668
+        }
+      },
+      "success": true
+    },
+    "future_reuse_heuristic": {
+      "combined_score": 51.71728322668622,
+      "invalid_fraction": 0.0,
+      "reporting_only": true,
+      "score_breakdown": {
+        "churn_cost": 25.0,
+        "combined_score": 51.71728322668622,
+        "complexity_cost": 0.0,
+        "fairness_cost": 0.0,
+        "mean_workload_score": 60.16060050552084,
+        "min_workload_contribution": 16.55668272116538,
+        "min_workload_score": 33.11336544233076,
+        "policy_underfill_rate": 0.0,
+        "underfill_cost": 0.0,
+        "validation_trial_count": 2.0
+      },
+      "scoring_fn_complexity": 0,
+      "split_metrics": {
+        "probe": {
+          "admission_rate": 1.0,
+          "block_hit_rate": 0.44546070460704607,
+          "cache_churn_per_1k": 0.0,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.535023807241236,
+          "wasted_admission_token_rate": 0.6413842710997443
+        },
+        "train": {
+          "admission_rate": 0.9966101694915255,
+          "block_hit_rate": 0.40995975855130784,
+          "cache_churn_per_1k": 13385.714285714286,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.4163739702407561,
+          "wasted_admission_token_rate": 0.5631037707177244
+        },
+        "validation": {
+          "admission_rate": 0.9723942903312686,
+          "block_hit_rate": 0.573228346456693,
+          "cache_churn_per_1k": 2454.5454545454545,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.5776631620710176,
+          "wasted_admission_token_rate": 0.20510785742166668
+        }
+      },
+      "success": true
+    },
+    "lfu": {
+      "combined_score": 51.71728322668622,
+      "invalid_fraction": 0.0,
+      "reporting_only": false,
+      "score_breakdown": {
+        "churn_cost": 25.0,
+        "combined_score": 51.71728322668622,
+        "complexity_cost": 0.0,
+        "fairness_cost": 0.0,
+        "mean_workload_score": 60.16060050552084,
+        "min_workload_contribution": 16.55668272116538,
+        "min_workload_score": 33.11336544233076,
+        "policy_underfill_rate": 0.0,
+        "underfill_cost": 0.0,
+        "validation_trial_count": 2.0
+      },
+      "scoring_fn_complexity": 0,
+      "split_metrics": {
+        "probe": {
+          "admission_rate": 1.0,
+          "block_hit_rate": 0.44546070460704607,
+          "cache_churn_per_1k": 0.0,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.535023807241236,
+          "wasted_admission_token_rate": 0.6413842710997443
+        },
+        "train": {
+          "admission_rate": 0.9966887417218543,
+          "block_hit_rate": 0.3908450704225352,
+          "cache_churn_per_1k": 13928.571428571428,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.39696021457308894,
+          "wasted_admission_token_rate": 0.599053095981884
+        },
+        "validation": {
+          "admission_rate": 0.9723942903312686,
+          "block_hit_rate": 0.573228346456693,
+          "cache_churn_per_1k": 2454.5454545454545,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.5776631620710176,
+          "wasted_admission_token_rate": 0.20510785742166668
+        }
+      },
+      "success": true
+    },
+    "lru": {
+      "combined_score": 51.71728322668622,
+      "invalid_fraction": 0.0,
+      "reporting_only": false,
+      "score_breakdown": {
+        "churn_cost": 25.0,
+        "combined_score": 51.71728322668622,
+        "complexity_cost": 0.0,
+        "fairness_cost": 0.0,
+        "mean_workload_score": 60.16060050552084,
+        "min_workload_contribution": 16.55668272116538,
+        "min_workload_score": 33.11336544233076,
+        "policy_underfill_rate": 0.0,
+        "underfill_cost": 0.0,
+        "validation_trial_count": 2.0
+      },
+      "scoring_fn_complexity": 0,
+      "split_metrics": {
+        "probe": {
+          "admission_rate": 1.0,
+          "block_hit_rate": 0.44546070460704607,
+          "cache_churn_per_1k": 0.0,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.535023807241236,
+          "wasted_admission_token_rate": 0.6413842710997443
+        },
+        "train": {
+          "admission_rate": 0.9967159277504105,
+          "block_hit_rate": 0.39889336016096577,
+          "cache_churn_per_1k": 13700.0,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.4051344274857909,
+          "wasted_admission_token_rate": 0.5563045309140393
+        },
+        "validation": {
+          "admission_rate": 0.9723942903312686,
+          "block_hit_rate": 0.573228346456693,
+          "cache_churn_per_1k": 2454.5454545454545,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.5776631620710176,
+          "wasted_admission_token_rate": 0.20510785742166668
+        }
+      },
+      "success": true
+    },
+    "no_cache": {
+      "combined_score": -64.50000914301921,
+      "invalid_fraction": 0.0,
+      "reporting_only": false,
+      "score_breakdown": {
+        "churn_cost": 0.0,
+        "combined_score": -64.50000914301921,
+        "complexity_cost": 0.0,
+        "fairness_cost": 0.0,
+        "mean_workload_score": -35.000006095346144,
+        "min_workload_contribution": -17.500003047673072,
+        "min_workload_score": -35.000006095346144,
+        "policy_underfill_rate": 1.0,
+        "underfill_cost": 12.0,
+        "validation_trial_count": 2.0
+      },
+      "scoring_fn_complexity": 0,
+      "split_metrics": {
+        "probe": {
+          "admission_rate": 0.0,
+          "block_hit_rate": 0.0,
+          "cache_churn_per_1k": 0.0,
+          "policy_bypass_token_rate": 1.0,
+          "policy_underfill_rate": 1.0,
+          "token_hit_rate": 0.0,
+          "wasted_admission_token_rate": 0.0
+        },
+        "train": {
+          "admission_rate": 0.0,
+          "block_hit_rate": 0.0,
+          "cache_churn_per_1k": 0.0,
+          "policy_bypass_token_rate": 1.0,
+          "policy_underfill_rate": 1.0,
+          "token_hit_rate": 0.0,
+          "wasted_admission_token_rate": 0.0
+        },
+        "validation": {
+          "admission_rate": 0.0,
+          "block_hit_rate": 0.0,
+          "cache_churn_per_1k": 0.0,
+          "policy_bypass_token_rate": 1.0,
+          "policy_underfill_rate": 1.0,
+          "token_hit_rate": 0.0,
+          "wasted_admission_token_rate": 0.0
+        }
+      },
+      "success": true
+    },
+    "oracle_future_reuse": {
+      "combined_score": 77.12613540302367,
+      "invalid_fraction": 0.0,
+      "reporting_only": true,
+      "score_breakdown": {
+        "churn_cost": 1.3636363636363635,
+        "combined_score": 77.12613540302367,
+        "complexity_cost": 0.0,
+        "fairness_cost": 0.0,
+        "mean_workload_score": 61.59125241229321,
+        "min_workload_contribution": 17.459217087500576,
+        "min_workload_score": 34.91843417500115,
+        "policy_underfill_rate": 0.04672481109447982,
+        "underfill_cost": 0.5606977331337578,
+        "validation_trial_count": 2.0
+      },
+      "scoring_fn_complexity": 0,
+      "split_metrics": {
+        "probe": {
+          "admission_rate": 0.32417582417582413,
+          "block_hit_rate": 0.44546070460704607,
+          "cache_churn_per_1k": 0.0,
+          "policy_bypass_token_rate": 0.33601763972773463,
+          "policy_underfill_rate": 0.3241174518862046,
+          "token_hit_rate": 0.535023807241236,
+          "wasted_admission_token_rate": 0.0
+        },
+        "train": {
+          "admission_rate": 0.8985737433287255,
+          "block_hit_rate": 0.43561368209255535,
+          "cache_churn_per_1k": 5757.142857142857,
+          "policy_bypass_token_rate": 0.25001596525959513,
+          "policy_underfill_rate": 0.07098514347066498,
+          "token_hit_rate": 0.44242927389999365,
+          "wasted_admission_token_rate": 0.07757936507936508
+        },
+        "validation": {
+          "admission_rate": 0.8973621103117506,
+          "block_hit_rate": 0.573228346456693,
+          "cache_churn_per_1k": 90.9090909090909,
+          "policy_bypass_token_rate": 0.13439793691727833,
+          "policy_underfill_rate": 0.04672481109447982,
+          "token_hit_rate": 0.5776631620710176,
+          "wasted_admission_token_rate": 0.0
+        }
+      },
+      "success": true
+    },
+    "prefix_anchor": {
+      "combined_score": 51.71728322668622,
+      "invalid_fraction": 0.0,
+      "reporting_only": false,
+      "score_breakdown": {
+        "churn_cost": 25.0,
+        "combined_score": 51.71728322668622,
+        "complexity_cost": 0.0,
+        "fairness_cost": 0.0,
+        "mean_workload_score": 60.16060050552084,
+        "min_workload_contribution": 16.55668272116538,
+        "min_workload_score": 33.11336544233076,
+        "policy_underfill_rate": 0.0,
+        "underfill_cost": 0.0,
+        "validation_trial_count": 2.0
+      },
+      "scoring_fn_complexity": 0,
+      "split_metrics": {
+        "probe": {
+          "admission_rate": 1.0,
+          "block_hit_rate": 0.44546070460704607,
+          "cache_churn_per_1k": 0.0,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.535023807241236,
+          "wasted_admission_token_rate": 0.6413842710997443
+        },
+        "train": {
+          "admission_rate": 0.9967159277504105,
+          "block_hit_rate": 0.39889336016096577,
+          "cache_churn_per_1k": 13700.0,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.4051344274857909,
+          "wasted_admission_token_rate": 0.5563045309140393
+        },
+        "validation": {
+          "admission_rate": 0.9723942903312686,
+          "block_hit_rate": 0.573228346456693,
+          "cache_churn_per_1k": 2454.5454545454545,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.5776631620710176,
+          "wasted_admission_token_rate": 0.20510785742166668
+        }
+      },
+      "success": true
+    },
+    "prefix_fanout": {
+      "combined_score": 51.71728322668622,
+      "invalid_fraction": 0.0,
+      "reporting_only": false,
+      "score_breakdown": {
+        "churn_cost": 25.0,
+        "combined_score": 51.71728322668622,
+        "complexity_cost": 0.0,
+        "fairness_cost": 0.0,
+        "mean_workload_score": 60.16060050552084,
+        "min_workload_contribution": 16.55668272116538,
+        "min_workload_score": 33.11336544233076,
+        "policy_underfill_rate": 0.0,
+        "underfill_cost": 0.0,
+        "validation_trial_count": 2.0
+      },
+      "scoring_fn_complexity": 0,
+      "split_metrics": {
+        "probe": {
+          "admission_rate": 1.0,
+          "block_hit_rate": 0.44546070460704607,
+          "cache_churn_per_1k": 0.0,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.535023807241236,
+          "wasted_admission_token_rate": 0.6413842710997443
+        },
+        "train": {
+          "admission_rate": 0.9968051118210863,
+          "block_hit_rate": 0.3516096579476861,
+          "cache_churn_per_1k": 15042.857142857143,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.3571109266236669,
+          "wasted_admission_token_rate": 0.6189677018744884
+        },
+        "validation": {
+          "admission_rate": 0.9723942903312686,
+          "block_hit_rate": 0.573228346456693,
+          "cache_churn_per_1k": 2454.5454545454545,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.5776631620710176,
+          "wasted_admission_token_rate": 0.20510785742166668
+        }
+      },
+      "success": true
+    },
+    "recompute_greedy": {
+      "combined_score": 51.71728322668622,
+      "invalid_fraction": 0.0,
+      "reporting_only": false,
+      "score_breakdown": {
+        "churn_cost": 25.0,
+        "combined_score": 51.71728322668622,
+        "complexity_cost": 0.0,
+        "fairness_cost": 0.0,
+        "mean_workload_score": 60.16060050552084,
+        "min_workload_contribution": 16.55668272116538,
+        "min_workload_score": 33.11336544233076,
+        "policy_underfill_rate": 0.0,
+        "underfill_cost": 0.0,
+        "validation_trial_count": 2.0
+      },
+      "scoring_fn_complexity": 0,
+      "split_metrics": {
+        "probe": {
+          "admission_rate": 1.0,
+          "block_hit_rate": 0.44546070460704607,
+          "cache_churn_per_1k": 0.0,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.535023807241236,
+          "wasted_admission_token_rate": 0.6413842710997443
+        },
+        "train": {
+          "admission_rate": 0.9968051118210863,
+          "block_hit_rate": 0.3506036217303823,
+          "cache_churn_per_1k": 15071.428571428572,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.3560891500095792,
+          "wasted_admission_token_rate": 0.5908741215020603
+        },
+        "validation": {
+          "admission_rate": 0.9723942903312686,
+          "block_hit_rate": 0.573228346456693,
+          "cache_churn_per_1k": 2454.5454545454545,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.5776631620710176,
+          "wasted_admission_token_rate": 0.20510785742166668
+        }
+      },
+      "success": true
+    },
+    "tenant_fair_lru": {
+      "combined_score": 51.71728322668622,
+      "invalid_fraction": 0.0,
+      "reporting_only": false,
+      "score_breakdown": {
+        "churn_cost": 25.0,
+        "combined_score": 51.71728322668622,
+        "complexity_cost": 0.0,
+        "fairness_cost": 0.0,
+        "mean_workload_score": 60.16060050552084,
+        "min_workload_contribution": 16.55668272116538,
+        "min_workload_score": 33.11336544233076,
+        "policy_underfill_rate": 0.0,
+        "underfill_cost": 0.0,
+        "validation_trial_count": 2.0
+      },
+      "scoring_fn_complexity": 0,
+      "split_metrics": {
+        "probe": {
+          "admission_rate": 1.0,
+          "block_hit_rate": 0.44546070460704607,
+          "cache_churn_per_1k": 0.0,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.535023807241236,
+          "wasted_admission_token_rate": 0.6413842710997443
+        },
+        "train": {
+          "admission_rate": 0.9967159277504105,
+          "block_hit_rate": 0.39889336016096577,
+          "cache_churn_per_1k": 13700.0,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.4051344274857909,
+          "wasted_admission_token_rate": 0.5563045309140393
+        },
+        "validation": {
+          "admission_rate": 0.9723942903312686,
+          "block_hit_rate": 0.573228346456693,
+          "cache_churn_per_1k": 2454.5454545454545,
+          "policy_bypass_token_rate": 0.0,
+          "policy_underfill_rate": 0.0,
+          "token_hit_rate": 0.5776631620710176,
+          "wasted_admission_token_rate": 0.20510785742166668
+        }
+      },
+      "success": true
+    },
+    "tinylfu_lru": {
+      "combined_score": 37.974506575110446,
+      "invalid_fraction": 0.0,
+      "reporting_only": false,
+      "score_breakdown": {
+        "churn_cost": 8.181818181818182,
+        "combined_score": 37.974506575110446,
+        "complexity_cost": 0.0,
+        "fairness_cost": 0.0,
+        "mean_workload_score": 37.00149912617006,
+        "min_workload_contribution": 10.278391087197585,
+        "min_workload_score": 20.55678217439517,
+        "policy_underfill_rate": 0.09363045470325151,
+        "underfill_cost": 1.1235654564390183,
+        "validation_trial_count": 2.0
+      },
+      "scoring_fn_complexity": 0,
+      "split_metrics": {
+        "probe": {
+          "admission_rate": 0.5457142857142857,
+          "block_hit_rate": 0.36009485094850946,
+          "cache_churn_per_1k": 0.0,
+          "policy_bypass_token_rate": 0.21043044770395936,
+          "policy_underfill_rate": 0.19012064399386447,
+          "token_hit_rate": 0.4383887770427891,
+          "wasted_admission_token_rate": 0.6177884615384616
+        },
+        "train": {
+          "admission_rate": 0.9183823529411765,
+          "block_hit_rate": 0.21378269617706236,
+          "cache_churn_per_1k": 6000.0,
+          "policy_bypass_token_rate": 0.46762245354109455,
+          "policy_underfill_rate": 0.14926900493098447,
+          "token_hit_rate": 0.21712753049364583,
+          "wasted_admission_token_rate": 0.6325088926773668
+        },
+        "validation": {
+          "admission_rate": 0.9115694432150128,
+          "block_hit_rate": 0.4251968503937008,
+          "cache_churn_per_1k": 545.4545454545455,
+          "policy_bypass_token_rate": 0.21136679230311445,
+          "policy_underfill_rate": 0.09363045470325151,
+          "token_hit_rate": 0.4284864114263043,
+          "wasted_admission_token_rate": 0.059179141653368454
+        }
+      },
+      "success": true
+    },
+    "vllm_apc": {
+      "combined_score": 52.03043250112589,
+      "invalid_fraction": 0.0,
+      "reporting_only": false,
+      "score_breakdown": {
+        "churn_cost": 25.0,
+        "combined_score": 52.03043250112589,
+        "complexity_cost": 0.0,
+        "fairness_cost": 0.0,
+        "mean_workload_score": 60.373540065421494,
+        "min_workload_contribution": 16.679085171182567,
+        "min_workload_score": 33.358170342365135,
+        "policy_underfill_rate": 0.0018493946231808263,
+        "underfill_cost": 0.022192735478169915,
+        "validation_trial_count": 2.0
+      },
+      "scoring_fn_complexity": 0,
+      "split_metrics": {
+        "probe": {
+          "admission_rate": 0.5835294117647059,
+          "block_hit_rate": 0.44546070460704607,
+          "cache_churn_per_1k": 0.0,
+          "policy_bypass_token_rate": 0.07238040456332087,
+          "policy_underfill_rate": 0.06465511268993865,
+          "token_hit_rate": 0.535023807241236,
+          "wasted_admission_token_rate": 0.5979020979020979
+        },
+        "train": {
+          "admission_rate": 0.9414580220182367,
+          "block_hit_rate": 0.4029175050301811,
+          "cache_churn_per_1k": 12685.714285714286,
+          "policy_bypass_token_rate": 0.016923175170828277,
+          "policy_underfill_rate": 0.0015615876994517072,
+          "token_hit_rate": 0.4092215339421419,
+          "wasted_admission_token_rate": 0.5375156121511566
+        },
+        "validation": {
+          "admission_rate": 0.9151629410180446,
+          "block_hit_rate": 0.573228346456693,
+          "cache_churn_per_1k": 1818.1818181818182,
+          "policy_bypass_token_rate": 0.00614957349732196,
+          "policy_underfill_rate": 0.0018493946231808263,
+          "token_hit_rate": 0.5776631620710176,
+          "wasted_admission_token_rate": 0.17728442728442728
+        }
+      },
+      "success": true
+    }
+  },
+  "runtime": {
+    "datasets": "5.0.0",
+    "fsspec": "2026.4.0",
+    "pyarrow": "24.0.0",
+    "pydantic": "2.12.5",
+    "python": "3.11.9",
+    "tiktoken": "0.13.0"
+  },
+  "schema": "prefix-kv-cache-wildchat-smoke-v1",
+  "trace_panel": {
+    "arrival_bucket_ms": 100,
+    "base_config_sha256": "694edf5166ac101f23a5c9b6da47f79bf5be7be0d25e52ffe7bac63056c9ba1a",
+    "block_size_tokens": 16,
+    "family": "wildchat",
+    "keep_synthetic": false,
+    "limitations": [
+      "Random group holdouts do not establish transfer to later time periods.",
+      "Validation is visible to evolution; only hidden is held out from search.",
+      "Filtering groups changes the arrival mix; replay timings are simulator proxies."
+    ],
+    "partition": {
+      "algorithm": "sorted-sha256-groups-v1",
+      "group_by": "tenant",
+      "group_count": 18,
+      "hidden_fraction": 0.2,
+      "seed": 0,
+      "split_group_counts": {
+        "hidden": 3,
+        "train": 12,
+        "validation": 3
+      },
+      "validation_fraction": 0.2
+    },
+    "schema": "prefix-kv-cache-trace-panel-v1",
+    "source": {
+      "path": "artifacts/traces/wildchat-smoke.jsonl",
+      "sha256": "5b588f463a99f9e4490fb0ba22f2b7eee98321876a5483f3f08977d663ede782"
+    },
+    "source_manifest_sha256": "de1330466124680735d11e992d52fb3bb3cecb4326fa28435aaf12de9688ff68",
+    "traces": [
+      {
+        "path": "train.jsonl",
+        "request_count": 35,
+        "session_count": 12,
+        "sha256": "c7e451264380bc64200967b80256fd8b7fd7e15d0f704a1b961f92e226dafa39",
+        "split": "train",
+        "tenant_count": 12,
+        "total_prompt_tokens": 15659
+      },
+      {
+        "path": "validation.jsonl",
+        "request_count": 11,
+        "session_count": 3,
+        "sha256": "4610506cdcdeb5f6bd2392f7a9bc0b29f3b0c11473b7ab725898ebe3675105bf",
+        "split": "validation",
+        "tenant_count": 3,
+        "total_prompt_tokens": 10082
+      },
+      {
+        "path": "hidden.jsonl",
+        "request_count": 19,
+        "session_count": 5,
+        "sha256": "27123457e31dbcc9c12b786a59a3a144925ac626c70125ce1d93630a0e4740c4",
+        "split": "hidden",
+        "tenant_count": 3,
+        "total_prompt_tokens": 17270
+      }
+    ]
+  },
+  "uncommitted_implementation_changes": true,
+  "workload_manifest": {
+    "determinism_scope": "Deterministic for the same source, Python environment, evaluator config, and deterministic candidate policy.",
+    "evaluation": {
+      "base_seeds": [
+        11
+      ],
+      "capacity_blocks": [
+        64,
+        128
+      ],
+      "capacity_tokens": [
+        1024,
+        2048
+      ],
+      "evaluation_context_sha256": "bef3b968b8190f9db763e81b5dbaaef2cd43a710d248d97a778129f21448b9c1",
+      "family_request_multipliers": {},
+      "panel_sha256": "f20ef11d1bfff7e58139725cb20a001c56c8b48309c513d2a8059dfa465d7351",
+      "physical_block_size_tokens": 16,
+      "request_count": 12,
+      "splits": [
+        "train",
+        "validation",
+        "probe"
+      ],
+      "stream_count": 4,
+      "verifier_version": "1.0.0",
+      "workload_token_granularity": 8
+    },
+    "evaluation_context_sha256": "bef3b968b8190f9db763e81b5dbaaef2cd43a710d248d97a778129f21448b9c1",
+    "generator": {
+      "module": "prefix_cache_evolve.evaluators.workloads",
+      "python_implementation": "CPython",
+      "python_version": "3.11.9",
+      "source_file": "workloads.py",
+      "source_sha256": "30156514b5aa79a9415e12936fc32f0bc020b9d9599c11f74e96cf3da7dba5f1"
+    },
+    "panel_sha256": "f20ef11d1bfff7e58139725cb20a001c56c8b48309c513d2a8059dfa465d7351",
+    "schema": "prefix-kv-cache-workload-manifest-v1",
+    "streams": [
+      {
+        "actual_seed": 1011,
+        "arrival_span_steps": 12,
+        "base_seed": 11,
+        "family": "agent_trace_branching",
+        "request_count": 12,
+        "request_stream_sha256": "a97f04804f15fb1014c0aee6362a2efcfb51e50a8145370f87e1d9e5fa022c83",
+        "request_type_counts": {
+          "agent_loop": 11,
+          "agent_retry": 1
+        },
+        "seed_offset": 1000,
+        "split": "probe",
+        "total_output_tokens": 2332,
+        "total_prompt_tokens": 1159,
+        "unique_prompt_count": 12
+      },
+      {
+        "actual_seed": 2011,
+        "arrival_span_steps": 12,
+        "base_seed": 11,
+        "family": "cyclic_working_set_pressure",
+        "request_count": 12,
+        "request_stream_sha256": "a083dab59d75a525f56113fa833ca185038698cd66b6219023a2c6c7d61e9c9b",
+        "request_type_counts": {
+          "cyclic_working_set_large": 6,
+          "cyclic_working_set_small": 6
+        },
+        "seed_offset": 2000,
+        "split": "probe",
+        "total_output_tokens": 1094,
+        "total_prompt_tokens": 432,
+        "unique_prompt_count": 12
+      },
+      {
+        "actual_seed": 0,
+        "arrival_span_steps": 34211,
+        "base_seed": 0,
+        "family": "wildchat",
+        "request_count": 35,
+        "request_stream_sha256": "3a562490add234d5ae0f498d2345316d72b5bf6c27961f203a32e56d1c2b95bb",
+        "request_type_counts": {
+          "wildchat": 35
+        },
+        "seed_offset": 0,
+        "source": {
+          "arrival_bucket_ms": 100,
+          "block_size_tokens": 16,
+          "kind": "anonymized_trace",
+          "sha256": "c7e451264380bc64200967b80256fd8b7fd7e15d0f704a1b961f92e226dafa39"
+        },
+        "split": "train",
+        "total_output_tokens": 10619,
+        "total_prompt_tokens": 15659,
+        "unique_prompt_count": 35
+      },
+      {
+        "actual_seed": 0,
+        "arrival_span_steps": 22361,
+        "base_seed": 0,
+        "family": "wildchat",
+        "request_count": 11,
+        "request_stream_sha256": "bbfa56fc16fa0892170ecf33d6db4b538daa3c0a91308b4d39bd91c50016c982",
+        "request_type_counts": {
+          "wildchat": 11
+        },
+        "seed_offset": 0,
+        "source": {
+          "arrival_bucket_ms": 100,
+          "block_size_tokens": 16,
+          "kind": "anonymized_trace",
+          "sha256": "4610506cdcdeb5f6bd2392f7a9bc0b29f3b0c11473b7ab725898ebe3675105bf"
+        },
+        "split": "validation",
+        "total_output_tokens": 2999,
+        "total_prompt_tokens": 10082,
+        "unique_prompt_count": 11
+      }
+    ],
+    "verifier_version": "1.0.0"
+  }
+}

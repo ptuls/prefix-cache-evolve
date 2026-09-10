@@ -13,9 +13,19 @@ from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.registry import (
 )
 from prefix_cache_evolve.tools.ablate_structured import main as structured_ablation
 from prefix_cache_evolve.tools.analyze_eviction import main as eviction_analysis
+from prefix_cache_evolve.tools.analyze_policy_costs import main as policy_cost_analysis
 from prefix_cache_evolve.tools.analyze_reasoning_kv import main as reasoning_kv_analysis
 from prefix_cache_evolve.tools.analyze_rediscovery import main as rediscovery_analysis
 from prefix_cache_evolve.tools.analyze_regret import main as regret_analysis
+from prefix_cache_evolve.tools.attach_holdout import main as attach_holdout
+from prefix_cache_evolve.tools.prepare_agentx import main as prepare_agentx
+from prefix_cache_evolve.tools.prepare_lmcache_agentic import main as prepare_lmcache_agentic
+from prefix_cache_evolve.tools.prepare_mooncake import main as prepare_mooncake
+from prefix_cache_evolve.tools.prepare_qwen import main as prepare_qwen
+from prefix_cache_evolve.tools.prepare_temporal_trace_panel import (
+    main as prepare_temporal_trace_panel,
+)
+from prefix_cache_evolve.tools.prepare_trace_panel import main as prepare_trace_panel
 from prefix_cache_evolve.tools.prepare_wildchat import main as prepare_wildchat
 from prefix_cache_evolve.tools.tune_compact import main as compact_tuning
 
@@ -85,8 +95,16 @@ analyze.add_command(eviction_analysis, name="eviction")
 analyze.add_command(rediscovery_analysis, name="rediscovery")
 analyze.add_command(regret_analysis, name="regret")
 analyze.add_command(reasoning_kv_analysis, name="reasoning-kv")
+analyze.add_command(policy_cost_analysis, name="policy-costs")
 ablate.add_command(structured_ablation, name="structured")
 datasets.add_command(prepare_wildchat, name="wildchat")
+datasets.add_command(prepare_lmcache_agentic, name="lmcache-agentic")
+datasets.add_command(prepare_mooncake, name="mooncake")
+datasets.add_command(prepare_qwen, name="qwen")
+datasets.add_command(prepare_agentx, name="agentx")
+datasets.add_command(attach_holdout, name="attach-holdout")
+datasets.add_command(prepare_trace_panel, name="trace-panel")
+datasets.add_command(prepare_temporal_trace_panel, name="temporal-trace-panel")
 tune.add_command(compact_tuning, name="compact")
 
 

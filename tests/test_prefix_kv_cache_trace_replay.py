@@ -17,8 +17,54 @@ from prefix_cache_evolve.problems.prefix_kv_cache.runner import (
 )
 from prefix_cache_evolve.problems.prefix_kv_cache.trace_replay import (
     calibrate_anonymized_trace,
+    iter_trace_records,
     load_anonymized_trace,
 )
+
+
+@pytest.mark.parametrize("session", [None, "mooncake:unknown"])
+def test_unknown_sessions_reach_policy_as_none(tmp_path, session):
+    path = tmp_path / "trace.jsonl"
+    record = _record(timestamp_ms=0, prefix_path=["root"], prompt_length=4, request_type="agent")
+    record["session_hash"] = session
+    _write_trace(path, [record, dict(record, timestamp_ms=100)])
+    requests = load_anonymized_trace(path, block_size_tokens=4)
+    seen = []
+
+    class ObserveSessions:
+        def on_request_start(self, request, now):
+            seen.append(request.session_id)
+
+        def on_cache_hit(self, block, request, now):
+            pass
+
+        def on_cache_miss(self, block, request, now):
+            pass
+
+        def score_admission(self, block, now):
+            return 1.0
+
+        def score_eviction(self, block, now):
+            return 0.0
+
+    PrefixKVCacheEvaluator(
+        EvaluatorConfig(block_size_tokens=4, capacity_sweep_blocks=(4,))
+    ).evaluate_requests(lambda *args: ObserveSessions(), requests)
+    assert seen == [None, None]
+    assert all(record.as_dict()["session_hash"] is None for record in iter_trace_records(path))
+    calibration = calibrate_anonymized_trace(path)
+    assert calibration["session_count"] == 0
+    assert calibration["requests_without_session"] == 2
+
+
+@pytest.mark.parametrize("field", ["tenant_hash", "session_hash", "prefix_path"])
+def test_empty_opaque_ids_cannot_alias_unrelated_requests(tmp_path, field):
+    path = tmp_path / "trace.jsonl"
+    record = _record(timestamp_ms=0, prefix_path=["root"], prompt_length=4, request_type="agent")
+    record[field] = [" "] if field == "prefix_path" else " "
+    _write_trace(path, [record])
+    with pytest.raises(ValueError, match="must not be empty"):
+        load_anonymized_trace(path, block_size_tokens=4)
 
 
 def test_trace_loader_hides_content_and_preserves_opaque_prefix_reuse(tmp_path) -> None:

@@ -18,9 +18,6 @@ from prefix_cache_evolve.evaluators.contracts import PrefixBlockInfo
 from prefix_cache_evolve.evaluators.prefix_kv_cache import (
     EvaluatorConfig,
 )
-from prefix_cache_evolve.evaluators.prefix_kv_cache import (
-    PrefixBlockInfo as CompatiblePrefixBlockInfo,
-)
 
 
 def test_baseline_registry_separates_deployable_and_reporting_policies() -> None:
@@ -87,10 +84,6 @@ def test_sglang_radix_attention_matches_leaf_lru_contract() -> None:
     assert radix.score_admission(block, now=10) > 0.0
     assert radix.score_admission(block, now=10) == lru.score_admission(block, now=10)
     assert radix.score_eviction(block, now=10) == lru.score_eviction(block, now=10)
-
-
-def test_evaluator_reexports_candidate_visible_contracts() -> None:
-    assert CompatiblePrefixBlockInfo is PrefixBlockInfo
 
 
 def test_baseline_suite_configures_each_evaluator_from_capabilities() -> None:

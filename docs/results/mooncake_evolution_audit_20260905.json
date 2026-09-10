@@ -1,0 +1,365 @@
+{
+  "baseline_comparisons": {
+    "incumbent": {
+      "charged_score": 40.46454312924343,
+      "raw_score_before_complexity": 48.06711226577263,
+      "score_breakdown": {
+        "churn_cost": 17.189264036418816,
+        "combined_score": 40.46454312924343,
+        "complexity_cost": 7.602569136529197,
+        "fairness_cost": 0.0,
+        "mean_workload_score": 45.49012619780722,
+        "min_workload_contribution": 21.71306571732236,
+        "min_workload_score": 43.42613143464472,
+        "policy_underfill_rate": 0.16223463441151068,
+        "underfill_cost": 1.9468156129381282,
+        "validation_trial_count": 6.0
+      },
+      "source_complexity": 572.0,
+      "validation": {
+        "avoidable_rejection_regret_token_rate": 1.7647592300623356,
+        "block_hit_rate": 0.339197855923372,
+        "cache_churn_per_1k": 1145.9509357612544,
+        "policy_underfill_rate": 0.16223463441151068,
+        "request_token_hit_rate_p10": 0.014577757530892318,
+        "token_hit_rate": 0.3502416170229044,
+        "value_weighted_avoidable_eviction_regret_token_rate": 0.005084888238864986,
+        "wasted_admission_token_rate": 0.9604945422950444,
+        "worst_quarter_token_hit_rate": 0.2608600757391591
+      }
+    },
+    "lru": {
+      "charged_score": 39.477818392299014,
+      "raw_score_before_complexity": 39.477818392299014,
+      "score_breakdown": {
+        "churn_cost": 25.0,
+        "combined_score": 39.477818392299014,
+        "complexity_cost": 0.0,
+        "fairness_cost": 0.0,
+        "mean_workload_score": 44.46823415099449,
+        "min_workload_contribution": 20.00958424130453,
+        "min_workload_score": 40.01916848260906,
+        "policy_underfill_rate": 0.0,
+        "underfill_cost": 0.0,
+        "validation_trial_count": 6.0
+      },
+      "source_complexity": 0.0,
+      "validation": {
+        "avoidable_rejection_regret_token_rate": 0.0,
+        "block_hit_rate": 0.34078675605526454,
+        "cache_churn_per_1k": 7809.64044849098,
+        "policy_underfill_rate": 0.0,
+        "request_token_hit_rate_p10": 0.02441767052982063,
+        "token_hit_rate": 0.35189811352804423,
+        "value_weighted_avoidable_eviction_regret_token_rate": 0.3297467630266944,
+        "wasted_admission_token_rate": 0.9818561790598803,
+        "worst_quarter_token_hit_rate": 0.25992169432980017
+      }
+    },
+    "tinylfu_lru": {
+      "charged_score": 63.708845065591476,
+      "raw_score_before_complexity": 63.708845065591476,
+      "score_breakdown": {
+        "churn_cost": 4.100682852807283,
+        "combined_score": 63.708845065591476,
+        "complexity_cost": 0.0,
+        "fairness_cost": 0.0,
+        "mean_workload_score": 48.36098464996245,
+        "min_workload_contribution": 23.339647268723546,
+        "min_workload_score": 46.67929453744709,
+        "policy_underfill_rate": 0.3242586666906024,
+        "underfill_cost": 3.8911040002872284,
+        "validation_trial_count": 6.0
+      },
+      "source_complexity": 0.0,
+      "validation": {
+        "avoidable_rejection_regret_token_rate": 0.03407967400981135,
+        "block_hit_rate": 0.35119859489330235,
+        "cache_churn_per_1k": 273.3788568538189,
+        "policy_underfill_rate": 0.3242586666906024,
+        "request_token_hit_rate_p10": 0.02930132360651791,
+        "token_hit_rate": 0.3626489572181955,
+        "value_weighted_avoidable_eviction_regret_token_rate": 0.004440050935574842,
+        "wasted_admission_token_rate": 0.8926110107214759,
+        "worst_quarter_token_hit_rate": 0.2743183400560807
+      }
+    },
+    "vllm_apc": {
+      "charged_score": 39.95666367572722,
+      "raw_score_before_complexity": 39.95666367572722,
+      "score_breakdown": {
+        "churn_cost": 25.0,
+        "combined_score": 39.95666367572722,
+        "complexity_cost": 0.0,
+        "fairness_cost": 0.0,
+        "mean_workload_score": 44.72027886336341,
+        "min_workload_contribution": 20.260551109633536,
+        "min_workload_score": 40.52110221926707,
+        "policy_underfill_rate": 0.0020138581058104406,
+        "underfill_cost": 0.024166297269725287,
+        "validation_trial_count": 6.0
+      },
+      "source_complexity": 0.0,
+      "validation": {
+        "avoidable_rejection_regret_token_rate": 5.778450028762198e-05,
+        "block_hit_rate": 0.34235105371804114,
+        "cache_churn_per_1k": 7080.808885516776,
+        "policy_underfill_rate": 0.0020138581058104406,
+        "request_token_hit_rate_p10": 0.025570917215848026,
+        "token_hit_rate": 0.35351344846732513,
+        "value_weighted_avoidable_eviction_regret_token_rate": 0.16142423519026858,
+        "wasted_admission_token_rate": 0.9865339350336073,
+        "worst_quarter_token_hit_rate": 0.2617912281973928
+      }
+    }
+  },
+  "budget_limitations": "In-flight calls may exceed the accounted-dollar threshold; external review, offline preflight, and final reports are outside the search budget.",
+  "configured_search_budget": {
+    "dollars": 8,
+    "evaluations": 32,
+    "seconds": 3600
+  },
+  "container_isolation": {
+    "cap_drop": [
+      "CHOWN",
+      "DAC_OVERRIDE",
+      "FOWNER",
+      "FSETID",
+      "KILL",
+      "NET_BIND_SERVICE",
+      "SETFCAP",
+      "SETGID",
+      "SETPCAP",
+      "SETUID",
+      "SYS_CHROOT"
+    ],
+    "memory_bytes": 2147483648,
+    "mounts": [
+      {
+        "destination": "/inputs",
+        "read_write": false
+      }
+    ],
+    "network_mode": "none",
+    "provider_credential_present": false,
+    "read_only_rootfs": true,
+    "security_opt": [
+      "no-new-privileges"
+    ],
+    "user": "10001:10001"
+  },
+  "date": "2026-09-05",
+  "evidence_sha256": {
+    "baseline-results.json": "5ca6a215b3bc714841e7788e98fee232395cb06ba7e84764daef1f599ecf89ed",
+    "frozen-inputs.json": "d0151f272d53c6a605638059f631d7b2562cf237683f381363b9c51a5cd357c7",
+    "image-source-verification.json": "3c127c1bb37df1a180b3da0b0e46ebdd5078611e4f77c0662c77b7a26e30b461",
+    "isolation.json": "cbdef5a2df3ec2375569b41b2385b40d8dd159ce37824f8366fe70437666882b",
+    "lru-trials.json": "1adaa2d53e55c605d0f17a333c8c41b0f1363ac058de5bbf1a545276b30b9a8f",
+    "parity-differences.json": "b6ab26d02b752584bae8c58ae04516524c08207a872d60a43c28352913a8ba4b",
+    "preflight.json": "941c03fee9fba47a58003692808dd058e3bd60db5afe6f4ab73f70f71c1f5770",
+    "preflight.py": "f127cd1b0e1f845df4d3943364613d410050c7998b7769a725b23e9ea4b0a364",
+    "search.yaml": "967e33ffd81f7fe6ad6205fc8db1213c2ff28413d88820b803b04e43d24ceb52",
+    "seed-container-trials.json": "9bc0f369841f5287249202de50f49ac1e434191eef6ffd20c85abf5ad2ee0b9d",
+    "seed-trials.json": "687bfa10719a91f1ac228a5fcc0c3fe46d2971782923cde0383b0a1f086e9c55",
+    "seed-worker-evaluation.json": "53f23192e8ee705bdf1a8cda378537813d5c13b71e7fe4cc03734cee2ea3ad6d",
+    "seed.py": "0c19deaec83d83f776e837c58822ac4cada611caa0a5504d17816e50e08f0037",
+    "test-preflight-final.txt": "09c986a2cc52627cb08c49070d0c4a5e376c6aa7e49dd1a86e19c4c17fd53a05",
+    "tinylfu_lru-trials.json": "350be71574786cd4078ce68d0fcd30d8be9ed0f23376f080037a1a7041b7a497",
+    "vllm_apc-trials.json": "61a1585761e10695e7bc91134b66ff37089904cddad35f20e6547df012892f76"
+  },
+  "evolution_status": "not_started_pending_external_review_and_user_approval",
+  "external_review": {
+    "attempt": "automatic_approval_review_rejected",
+    "evolution_payload": "Policy source and aggregate evaluator feedback; no trace records or credentials.",
+    "reason": "The audit request did not explicitly authorize sending the current private-code review payload to OpenAI.",
+    "review_payload": "Changed code, tests, config, and documentation; no trace records or credentials.",
+    "status": "approval_pending"
+  },
+  "hidden_evaluated": false,
+  "identities": {
+    "evaluation_context_sha256": "0644b00177018ecedf2131f12d19208447f7c7693d3da8819d5809efa06e0de2",
+    "panel_sha256": "39b9f190369bcd16aef3fd9a5c518249d35341dc5222d7c45df46b9dc614ad80",
+    "verifier_version": "1.0.0"
+  },
+  "image_source_files_verified": 73,
+  "maximum_reporting_rounding_difference": 4.440892098500626e-16,
+  "model_calls": 0,
+  "panel_manifest": {
+    "arrival_bucket_ms": 100,
+    "base_config_sha256": "9c0a7e8ccd6e4fb266603af80985d5c74cda8226db68fcf44addd73c5bc14eaa",
+    "block_size_tokens": 512,
+    "excluded_request_count": 19274,
+    "limitations": [
+      "Chronological separation does not establish session or tenant independence.",
+      "Prefixes and sessions can recur across windows; policy/cache state resets.",
+      "Validation is visible to evolution; hidden is reserved for final evaluation.",
+      "Omitted gaps and cold starts change the serving state of the original capture.",
+      "Arrival buckets and output-length pinning are proxies, not measured latency."
+    ],
+    "partition": {
+      "algorithm": "half-open-time-windows-v1",
+      "cold_start_per_window": true
+    },
+    "schema": "prefix-kv-cache-temporal-trace-panel-v1",
+    "source": {
+      "path": "artifacts/traces/mooncake-toolagent.jsonl",
+      "request_count": 23608,
+      "sha256": "d7f6e234b4b40d0c8d98d03bf2e0d03a93570641dfafbe12ac096df57997fb6e"
+    },
+    "source_manifest_sha256": "07f1fa7a98b0584b8b360d129e4ebc555b9a8149922758f3d12c649d530db129",
+    "traces": [
+      {
+        "family": "mooncake_toolagent_1",
+        "first_timestamp_ms": 0.0,
+        "last_timestamp_ms": 86999.0,
+        "path": "train-1.jsonl",
+        "request_count": 483,
+        "sha256": "bbc22d036815251830cc3b2aa2879c76464d87d959c44b0c5de5e77986a0dd4c",
+        "source_record_start": 0,
+        "source_record_stop": 483,
+        "split": "train",
+        "time_window": {
+          "end_ms": 90000.0,
+          "source_sha256": "d7f6e234b4b40d0c8d98d03bf2e0d03a93570641dfafbe12ac096df57997fb6e",
+          "start_ms": 0.0
+        },
+        "total_prompt_tokens": 4680571
+      },
+      {
+        "family": "mooncake_toolagent_1",
+        "first_timestamp_ms": 1203000.0,
+        "last_timestamp_ms": 1286999.0,
+        "path": "validation-1.jsonl",
+        "request_count": 600,
+        "sha256": "cbde8d71b2e698e7378fbfea8a5cba66f8db13d3bffa69dcab0adfff4b01aa34",
+        "source_record_start": 7291,
+        "source_record_stop": 7891,
+        "split": "validation",
+        "time_window": {
+          "end_ms": 1290000.0,
+          "source_sha256": "d7f6e234b4b40d0c8d98d03bf2e0d03a93570641dfafbe12ac096df57997fb6e",
+          "start_ms": 1200000.0
+        },
+        "total_prompt_tokens": 5191348
+      },
+      {
+        "family": "mooncake_toolagent_2",
+        "first_timestamp_ms": 2100000.0,
+        "last_timestamp_ms": 2189999.0,
+        "path": "validation-2.jsonl",
+        "request_count": 659,
+        "sha256": "91bd82f917ccc7cfd72c55e59660f725ced0998cdad5bb0fe9245976325932d3",
+        "source_record_start": 13431,
+        "source_record_stop": 14090,
+        "split": "validation",
+        "time_window": {
+          "end_ms": 2190000.0,
+          "source_sha256": "d7f6e234b4b40d0c8d98d03bf2e0d03a93570641dfafbe12ac096df57997fb6e",
+          "start_ms": 2100000.0
+        },
+        "total_prompt_tokens": 5638767
+      },
+      {
+        "family": "mooncake_toolagent_1",
+        "first_timestamp_ms": 3003000.0,
+        "last_timestamp_ms": 3176999.0,
+        "path": "hidden-1.jsonl",
+        "request_count": 1296,
+        "sha256": "1a5afbb5d9588e3beab1b097402fe2ea60132ff0412f00f374ef5b9da7441c2a",
+        "source_record_start": 19772,
+        "source_record_stop": 21068,
+        "split": "hidden",
+        "time_window": {
+          "end_ms": 3180000.0,
+          "source_sha256": "d7f6e234b4b40d0c8d98d03bf2e0d03a93570641dfafbe12ac096df57997fb6e",
+          "start_ms": 3000000.0
+        },
+        "total_prompt_tokens": 11089082
+      },
+      {
+        "family": "mooncake_toolagent_2",
+        "first_timestamp_ms": 3300000.0,
+        "last_timestamp_ms": 3477000.0,
+        "path": "hidden-2.jsonl",
+        "request_count": 1296,
+        "sha256": "9535ac1a04ddab3e42adabfaad9920701b2f84c361eb5f700d7eb70b526702d4",
+        "source_record_start": 21902,
+        "source_record_stop": 23198,
+        "split": "hidden",
+        "time_window": {
+          "end_ms": 3480000.0,
+          "source_sha256": "d7f6e234b4b40d0c8d98d03bf2e0d03a93570641dfafbe12ac096df57997fb6e",
+          "start_ms": 3300000.0
+        },
+        "total_prompt_tokens": 10961476
+      }
+    ]
+  },
+  "parent_source_sha256": "0c19deaec83d83f776e837c58822ac4cada611caa0a5504d17816e50e08f0037",
+  "runtime_preflight": {
+    "host_container_parity": "exact scores, identities, and per-request hit lengths",
+    "model_calls": 0,
+    "reporting_only_differences": [
+      {
+        "container": 0.06970872197476728,
+        "host": 0.0697087219747673,
+        "key": "/artifacts/workload_metrics/validation/mooncake_toolagent_2/shadow_price_tracking_bias"
+      },
+      {
+        "container": 0.18431787666223476,
+        "host": 0.1843178766622348,
+        "key": "/raw_result/trials/0/shadow_price_tracking_bias"
+      },
+      {
+        "container": 0.07259753662282684,
+        "host": 0.07259753662282685,
+        "key": "/raw_result/trials/6/shadow_price_tracking_bias"
+      },
+      {
+        "container": 3.3782897532944607,
+        "host": 3.3782897532944602,
+        "key": "/raw_result/trials/6/shadow_price_tracking_mae"
+      },
+      {
+        "container": 0.09555511235241734,
+        "host": 0.09555511235241736,
+        "key": "/raw_result/trials/7/shadow_price_tracking_bias"
+      },
+      {
+        "container": 0.04097351694905767,
+        "host": 0.040973516949057674,
+        "key": "/raw_result/trials/8/shadow_price_tracking_bias"
+      },
+      {
+        "container": 0.06970872197476728,
+        "host": 0.0697087219747673,
+        "key": "/raw_result/workload_metrics/validation/mooncake_toolagent_2/shadow_price_tracking_bias"
+      }
+    ],
+    "sandbox_image": "sha256:d2b930fa37ab0245e9dd90483125c0ffcf6440910c307c0caf9becd72afb7c95",
+    "search_config_sha256": "967e33ffd81f7fe6ad6205fc8db1213c2ff28413d88820b803b04e43d24ceb52",
+    "seed_worker_seconds": 145.29951137502212,
+    "status": "passed"
+  },
+  "sandbox_image": "sha256:d2b930fa37ab0245e9dd90483125c0ffcf6440910c307c0caf9becd72afb7c95",
+  "schema": "prefix-cache-production-evolution-audit-v1",
+  "search_config_sha256": "967e33ffd81f7fe6ad6205fc8db1213c2ff28413d88820b803b04e43d24ceb52",
+  "search_cost_usd": 0,
+  "source": {
+    "bytes": 4415857,
+    "committed_at": "2025-02-21T10:31:44Z",
+    "path": ".cache/mooncake/toolagent_trace.jsonl",
+    "repository": "https://github.com/kvcache-ai/Mooncake",
+    "revision": "3cca71daccf2a7afb8fe3f0295358f70e3a69fdb",
+    "sha256": "48a2db1a13d3bc05e6330140c64f604ba366df20d3c9e128b5c35a01c1fa5f71",
+    "url": "https://raw.githubusercontent.com/kvcache-ai/Mooncake/3cca71daccf2a7afb8fe3f0295358f70e3a69fdb/FAST25-release/traces/toolagent_trace.jsonl"
+  },
+  "status": "offline_audit_passed_external_review_pending",
+  "validation": {
+    "coverage_percent": 87.22,
+    "immutable_incumbent_bundles": 4,
+    "mypy": "passed",
+    "pytest_passed": 444,
+    "ruff": "passed"
+  }
+}

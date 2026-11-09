@@ -9,6 +9,10 @@ from typing import Any
 
 import click
 
+from prefix_cache_evolve.problems.prefix_kv_cache.candidate_panels import (
+    CandidatePanelBuilder,
+    evaluate_candidate_program,
+)
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import (
     DEFAULT_CONFIG_PATH,
     REDISCOVERY_CONFIG_PATH,
@@ -18,9 +22,9 @@ from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.registry import (
     current_incumbent,
     incumbent_record,
 )
-from prefix_cache_evolve.problems.prefix_kv_cache.runner import _candidate_panel_decomposition
 from prefix_cache_evolve.problems.prefix_kv_cache.utilities import (
     agentic_surrogate_probe_gate,
+    evaluation_result_summary,
     normalized_source,
     write_json,
 )
@@ -38,6 +42,10 @@ _REFERENCE_PATHS = {
     "incumbent": current_incumbent("production").source_path,
 }
 _PANELS = ("selection", "probe", "hidden")
+_CANDIDATE_PANELS = CandidatePanelBuilder(
+    evaluate_program=evaluate_candidate_program,
+    summarize_result=evaluation_result_summary,
+)
 
 
 def _raw_score(panel: dict[str, Any]) -> float:
@@ -149,7 +157,7 @@ def _evaluate_path(
     """Evaluate one source path once per analysis."""
     key = normalized_source(path.read_text(encoding="utf-8"))
     if key not in cache:
-        cache[key] = _candidate_panel_decomposition(config, path, include_hidden=True)
+        cache[key] = _CANDIDATE_PANELS.build_decomposition(config, path, include_hidden=True)
     return cache[key]
 
 

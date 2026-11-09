@@ -50,7 +50,7 @@ from prefix_cache_evolve.artifacts import write_json
 from prefix_cache_evolve.evaluators.baselines import BASELINE_REGISTRY
 from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
 from prefix_cache_evolve.evaluators.contracts import PrefixKVPolicy
-from prefix_cache_evolve.evaluators.prefix_kv_cache import PrefixKVCacheEvaluator
+from prefix_cache_evolve.evaluators.evaluation import PrefixKVCacheEvaluator
 from prefix_cache_evolve.evaluators.results import TrialMetrics
 from prefix_cache_evolve.evaluators.scoring import workload_base_score
 from prefix_cache_evolve.evaluators.verifier import require_single_score_identity

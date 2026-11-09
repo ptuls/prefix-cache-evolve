@@ -9,14 +9,12 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
+from prefix_cache_evolve.evaluators.baselines import baseline_lru_blocks
+from prefix_cache_evolve.evaluators.evaluation import PrefixKVCacheEvaluator
 from prefix_cache_evolve.evaluators.panels import prepare_workloads
-from prefix_cache_evolve.evaluators.prefix_kv_cache import (
-    PrefixKVCacheEvaluator,
-    baseline_lru_blocks,
-)
+from prefix_cache_evolve.evaluators.trace_replay import load_anonymized_trace
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import load_evaluator_config
 from prefix_cache_evolve.problems.prefix_kv_cache.reproducibility import file_sha256
-from prefix_cache_evolve.problems.prefix_kv_cache.trace_replay import load_anonymized_trace
 from prefix_cache_evolve.tools.attach_holdout import attach_holdout
 from prefix_cache_evolve.tools.cli import main
 from prefix_cache_evolve.tools.hashed_trace import scope_key

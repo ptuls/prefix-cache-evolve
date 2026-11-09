@@ -6,12 +6,10 @@ from pathlib import Path
 
 import pytest
 
+from prefix_cache_evolve.evaluators.baselines import baseline_lru_blocks
 from prefix_cache_evolve.evaluators.complexity import scoring_fn_complexity
-from prefix_cache_evolve.evaluators.prefix_kv_cache import (
-    EvaluatorConfig,
-    PrefixKVCacheEvaluator,
-    baseline_lru_blocks,
-)
+from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
+from prefix_cache_evolve.evaluators.evaluation import PrefixKVCacheEvaluator
 from prefix_cache_evolve.evaluators.verifier import VERIFIER_VERSION
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import load_evaluator_config
 from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.registry import (

@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Mapping
 
-from prefix_cache_evolve.evaluators.prefix_kv_cache import EvaluatorConfig
+from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
 from prefix_cache_evolve.workflow.config import WorkflowFileConfig, load_yaml_document
 
 PREFIX_KV_CONFIG_ENV = "PREFIX_CACHE_EVOLVE_CONFIG"

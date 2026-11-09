@@ -25,17 +25,16 @@ from pydantic import TypeAdapter
 
 from prefix_cache_evolve.evaluator_entry import load_candidate_factory_from_source
 from prefix_cache_evolve.evaluators.baselines import BASELINE_REGISTRY
+from prefix_cache_evolve.evaluators.complexity import scoring_fn_complexity
 from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
 from prefix_cache_evolve.evaluators.policy_costs import (
     PROFILE_CONTRACT,
     baseline_source,
     profile_policy,
 )
-from prefix_cache_evolve.evaluators.prefix_kv_cache import (
-    EvaluationResult,
-    _build_policy,
-    scoring_fn_complexity,
-)
+from prefix_cache_evolve.evaluators.policy_factory import build_policy as _build_policy
+from prefix_cache_evolve.evaluators.results import EvaluationResult
+from prefix_cache_evolve.evaluators.trace_replay import TRACE_REPLAY_CONTRACT
 from prefix_cache_evolve.problems.prefix_kv_cache.primitives import (
     MultiTimescaleDecay,
     decay_vector,
@@ -46,7 +45,6 @@ from prefix_cache_evolve.problems.prefix_kv_cache.specialist import (
     candidate_evaluator,
     candidate_exported_names,
 )
-from prefix_cache_evolve.problems.prefix_kv_cache.trace_replay import TRACE_REPLAY_CONTRACT
 
 _SCOPE_ENV = "PREFIX_CACHE_EVOLVE_SANDBOX_SCOPE"
 _SCOPE_LABEL = "prefix-cache-evolve.scope"

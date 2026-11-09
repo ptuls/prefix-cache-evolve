@@ -14,7 +14,7 @@ import click
 from prefix_cache_evolve.evaluators.baselines import BASELINE_REGISTRY
 from prefix_cache_evolve.evaluators.complexity import scoring_fn_complexity
 from prefix_cache_evolve.evaluators.policy_costs import baseline_source, equivalent_behavior
-from prefix_cache_evolve.evaluators.prefix_kv_cache import EvaluationResult
+from prefix_cache_evolve.evaluators.results import EvaluationResult
 from prefix_cache_evolve.evaluators.verifier import require_single_score_identity
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import load_evaluator_config
 from prefix_cache_evolve.problems.prefix_kv_cache.sandbox import evaluate_in_docker

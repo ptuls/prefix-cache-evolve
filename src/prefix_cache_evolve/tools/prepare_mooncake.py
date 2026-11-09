@@ -10,8 +10,8 @@ from typing import Any
 
 import click
 
+from prefix_cache_evolve.evaluators.trace_replay import iter_trace_records
 from prefix_cache_evolve.problems.prefix_kv_cache.reproducibility import file_sha256
-from prefix_cache_evolve.problems.prefix_kv_cache.trace_replay import iter_trace_records
 
 _BLOCK_SIZE_TOKENS = 512
 _SOURCE_FIELDS = {"timestamp", "input_length", "output_length", "hash_ids"}

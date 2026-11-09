@@ -12,11 +12,9 @@ from prefix_cache_evolve.artifacts import write_json
 from prefix_cache_evolve.evaluators.complexity import scoring_fn_complexity
 from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
 from prefix_cache_evolve.evaluators.contracts import PrefixBlockInfo, RequestInfo
-from prefix_cache_evolve.evaluators.prefix_kv_cache import (
-    PrefixKVCacheEvaluator,
-    PrefixKVCacheSimulator,
-)
+from prefix_cache_evolve.evaluators.evaluation import PrefixKVCacheEvaluator
 from prefix_cache_evolve.evaluators.results import EvaluationResult
+from prefix_cache_evolve.evaluators.simulator import PrefixKVCacheSimulator
 from prefix_cache_evolve.evaluators.telemetry import EvictionDecisionSnapshot
 from prefix_cache_evolve.evaluators.verifier import (
     require_single_score_identity,

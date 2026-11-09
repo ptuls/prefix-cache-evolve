@@ -53,6 +53,12 @@ _TUNE_COMMANDS = {
         "Tune the compact deployable policy.",
     ),
 }
+_EXPERIMENT_COMMANDS = {
+    "seed-comparison": LazyCommand(
+        "prefix_cache_evolve.tools.seed_comparison:main",
+        "Freeze matched, repeated comparisons of minimal and strong seeds.",
+    ),
+}
 _DATASET_COMMANDS = {
     "lmcache-agentic": LazyCommand(
         "prefix_cache_evolve.tools.prepare_lmcache_agentic:main",
@@ -112,6 +118,11 @@ def ablate() -> None:
 @main.group(cls=LazyGroup, lazy_subcommands=_TUNE_COMMANDS)
 def tune() -> None:
     """Run deterministic policy tuning."""
+
+
+@main.group(cls=LazyGroup, lazy_subcommands=_EXPERIMENT_COMMANDS)
+def experiments() -> None:
+    """Prepare reproducible search experiments."""
 
 
 @main.group()

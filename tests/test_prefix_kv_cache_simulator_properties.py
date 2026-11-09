@@ -15,8 +15,8 @@ from prefix_cache_evolve.evaluators.baselines import (
     baseline_no_cache,
 )
 from prefix_cache_evolve.evaluators.contracts import PolicyFactory
-from prefix_cache_evolve.evaluators.prefix_kv_cache import PrefixKVCacheSimulator
 from prefix_cache_evolve.evaluators.results import TrialMetrics
+from prefix_cache_evolve.evaluators.simulator import PrefixKVCacheSimulator
 from prefix_cache_evolve.evaluators.telemetry import (
     EvictionDecisionSnapshot,
     RequestSnapshot,

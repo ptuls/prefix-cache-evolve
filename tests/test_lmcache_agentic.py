@@ -6,11 +6,11 @@ import json
 
 import pytest
 
+from prefix_cache_evolve.evaluators.trace_replay import load_anonymized_trace
 from prefix_cache_evolve.problems.prefix_kv_cache.lmcache_agentic import (
     LmcacheAgenticConversionConfig,
     convert_lmcache_agentic_rows,
 )
-from prefix_cache_evolve.problems.prefix_kv_cache.trace_replay import load_anonymized_trace
 
 _HASH_KEY = b"test-key-material-with-at-least-32-bytes"
 

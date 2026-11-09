@@ -9,12 +9,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from prefix_cache_evolve.evaluators.prefix_kv_cache import (
-    EvaluatorConfig,
-    PrefixKVCacheSimulator,
-    baseline_lru_blocks,
-    build_workload,
-)
+from prefix_cache_evolve.evaluators.baselines import baseline_lru_blocks
+from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
+from prefix_cache_evolve.evaluators.simulator import PrefixKVCacheSimulator
+from prefix_cache_evolve.evaluators.workloads import build_workload
 from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.registry import current_incumbent
 from prefix_cache_evolve.problems.prefix_kv_cache.lab import LabRequestHandler, SimulationLab
 

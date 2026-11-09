@@ -177,6 +177,10 @@ class LeviRunner:
         search_seed = int(getattr(config, "search_seed", 0))
         runtime_settings = LeviRuntimeSettings(
             search_seed=search_seed,
+            preserve_initial_centroids=(getattr(config, "cvt", {}) or {}).get(
+                "data_driven_centroids"
+            )
+            is False,
             paradigm_max_tokens=paradigm_max_tokens,
             paradigm_model_names=paradigm_model_names,
             api_base=getattr(config, "api_base", None),

@@ -10,7 +10,7 @@ from prefix_cache_evolve.evaluators.baselines import (
     PolicyFactory,
 )
 from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
-from prefix_cache_evolve.evaluators.prefix_kv_cache import PrefixKVCacheEvaluator
+from prefix_cache_evolve.evaluators.evaluation import PrefixKVCacheEvaluator
 from prefix_cache_evolve.evaluators.results import EvaluationResult
 from prefix_cache_evolve.evaluators.workloads import WorkloadRequest
 
@@ -80,3 +80,13 @@ class BaselineSuiteEvaluator:
 
 
 BASELINE_SUITE_EVALUATOR = BaselineSuiteEvaluator()
+
+
+def select_baselines(
+    baselines: Mapping[str, PolicyFactory], names: tuple[str, ...]
+) -> dict[str, PolicyFactory]:
+    """Select each requested baseline once and reject unknown programmatic names."""
+    unknown = sorted(set(names) - baselines.keys())
+    if unknown:
+        raise ValueError("unknown report baselines: " + ", ".join(unknown))
+    return {name: baselines[name] for name in dict.fromkeys(names or tuple(baselines))}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -392,8 +393,8 @@ def test_run_analysis_prefers_generated_mutation_and_reports_preliminary(
 
     monkeypatch.setattr(
         analyze_rediscovery,
-        "_candidate_panel_decomposition",
-        fake_decomposition,
+        "_CANDIDATE_PANELS",
+        SimpleNamespace(build_decomposition=fake_decomposition),
     )
 
     payload = analyze_rediscovery.run_analysis(config_path, run_dirs=(run_dir,))
@@ -453,8 +454,8 @@ def test_run_analysis_rejects_close_result_when_agentic_gate_fails(
 
     monkeypatch.setattr(
         analyze_rediscovery,
-        "_candidate_panel_decomposition",
-        fake_decomposition,
+        "_CANDIDATE_PANELS",
+        SimpleNamespace(build_decomposition=fake_decomposition),
     )
 
     run = analyze_rediscovery.run_analysis(config_path, run_dirs=(run_dir,))["runs"][0]

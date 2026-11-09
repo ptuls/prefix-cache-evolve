@@ -11,6 +11,8 @@ from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
 from prefix_cache_evolve.evaluators.results import EvaluationResult
 from prefix_cache_evolve.evaluators.verifier import require_single_score_identity
 
+from .configuration import DEFAULT_CONFIG_PATH
+
 QUICK_REPORT_WARNING = (
     "SMOKE-ONLY: `--quick` uses synthetic `request_count=36` and one seed; traces stay complete. "
     "Do not use this table for policy ranking decisions; rerun without `--quick`."
@@ -535,3 +537,28 @@ def _palette(index: int) -> str:
         "#4f46e5",
     )
     return colors[index % len(colors)]
+
+
+def baseline_report_command(
+    *,
+    quick: bool,
+    capacity_sweep_blocks: tuple[int, ...],
+    candidate_program: Path,
+    config_file: str = str(DEFAULT_CONFIG_PATH),
+    baseline_names: tuple[str, ...] = (),
+) -> str:
+    """Build the reproducible command included in a baseline report."""
+    parts = [
+        ".venv/bin/python -m prefix_cache_evolve.problems.prefix_kv_cache.runner",
+        "--baseline-report",
+    ]
+    if quick:
+        parts.append("--quick")
+    if capacity_sweep_blocks:
+        parts.append(
+            "--capacity-sweep-blocks " + ",".join(str(value) for value in capacity_sweep_blocks)
+        )
+    parts.append(f"--candidate-program {candidate_program}")
+    parts.append(f"--config {config_file}")
+    parts.extend(f"--report-baseline {name}" for name in dict.fromkeys(baseline_names))
+    return " ".join(parts)

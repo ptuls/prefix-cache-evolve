@@ -10,6 +10,7 @@ import pytest
 from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
 from prefix_cache_evolve.problems.prefix_kv_cache import candidate_panels, runner
 from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.registry import current_incumbent
+from prefix_cache_evolve.problems.prefix_kv_cache.utilities import evaluation_result_summary
 from tests.support import score_record
 
 _VALID_CANDIDATE = """\
@@ -164,9 +165,8 @@ def test_candidate_decomposition_preserves_schema_and_hidden_quarantine(
     assert complexity_calls == [(_VALID_CANDIDATE, False), (_VALID_CANDIDATE, True)]
 
 
-def test_runner_candidate_decomposition_preserves_artifact_schema(
+def test_candidate_decomposition_preserves_artifact_schema(
     candidate_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     scores = {
         candidate_panels.SELECTION_PANEL.splits: 12.0,
@@ -188,9 +188,11 @@ def test_runner_candidate_decomposition_preserves_artifact_schema(
             score_breakdown={},
         )
 
-    monkeypatch.setattr(runner, "_evaluate_candidate_program", evaluate_candidate)
-
-    payload = runner._candidate_panel_decomposition(
+    builder = candidate_panels.CandidatePanelBuilder(
+        evaluate_program=evaluate_candidate,
+        summarize_result=evaluation_result_summary,
+    )
+    payload = builder.build_decomposition(
         EvaluatorConfig(),
         candidate_path,
         include_hidden=True,

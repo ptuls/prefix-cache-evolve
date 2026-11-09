@@ -21,7 +21,7 @@ from prefix_cache_evolve.evaluators.baselines import (
 )
 from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
 from prefix_cache_evolve.evaluators.contracts import PrefixKVPolicy
-from prefix_cache_evolve.evaluators.prefix_kv_cache import PrefixKVCacheEvaluator
+from prefix_cache_evolve.evaluators.evaluation import PrefixKVCacheEvaluator
 from prefix_cache_evolve.evaluators.results import (
     AdmissionDecisionDiagnostic,
     TrialMetrics,

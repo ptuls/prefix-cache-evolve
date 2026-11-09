@@ -11,14 +11,13 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
+from prefix_cache_evolve.evaluators.baselines import baseline_lru_blocks
+from prefix_cache_evolve.evaluators.evaluation import PrefixKVCacheEvaluator
 from prefix_cache_evolve.evaluators.panels import prepare_workloads
-from prefix_cache_evolve.evaluators.prefix_kv_cache import (
-    PrefixKVCacheEvaluator,
-    baseline_lru_blocks,
-)
 from prefix_cache_evolve.evaluators.verifier import VERIFIER_VERSION
 from prefix_cache_evolve.problems.prefix_kv_cache import evaluator as levi_evaluator
 from prefix_cache_evolve.problems.prefix_kv_cache import runner
+from prefix_cache_evolve.problems.prefix_kv_cache.candidate_panels import CandidatePanelBuilder
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import (
     load_evaluator_config,
     prefix_kv_config_environment,
@@ -222,7 +221,7 @@ def test_saved_run_replays_without_hidden_or_original_panel(
     def unexpected_adjudication(*args, **kwargs):
         pytest.fail("automatic run saving must not evaluate the hidden panel")
 
-    monkeypatch.setattr(runner, "_candidate_panel_decomposition", unexpected_adjudication)
+    monkeypatch.setattr(CandidatePanelBuilder, "build_decomposition", unexpected_adjudication)
     monkeypatch.setattr(
         runner,
         "_evaluate_baselines",

@@ -203,6 +203,10 @@ The highest-value contributions are:
 
 ## Documentation Map
 
+- [`seed_comparison.md`](seed_comparison.md) preregisters matched repeated searches,
+  initialization gates, search-level replication and frozen campaign preparation.
+- [`architecture.md`](architecture.md) explains the simulator/evolver/verifier
+  pattern, module ownership, the SOLID audit, and the path to a second domain.
 - [`technical_report.tex`](technical_report.tex) is the paper-like current
   account: method, current evidence, principles, limitations, and
   reproducibility.

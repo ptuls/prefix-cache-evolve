@@ -11,8 +11,8 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
+from prefix_cache_evolve.evaluators.trace_replay import iter_trace_records
 from prefix_cache_evolve.problems.prefix_kv_cache.reproducibility import file_sha256
-from prefix_cache_evolve.problems.prefix_kv_cache.trace_replay import iter_trace_records
 
 
 def read_jsonl(path: Path) -> Iterator[dict[str, Any]]:

@@ -4,12 +4,8 @@ import math
 
 import pytest
 
-from prefix_cache_evolve.problems.prefix_kv_cache.primitives import (
-    MAX_DECAY_TIMESCALES,
-    MultiTimescaleDecay,
-    decay_vector,
-    threshold_excess,
-)
+from prefix_cache_evolve import MultiTimescaleDecay, decay_vector, threshold_excess
+from prefix_cache_evolve.problems.prefix_kv_cache.primitives import MAX_DECAY_TIMESCALES
 
 
 def test_threshold_excess_is_a_finite_positive_hinge() -> None:

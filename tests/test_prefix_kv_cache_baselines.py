@@ -14,10 +14,8 @@ from prefix_cache_evolve.evaluators.baselines import (
     baseline_lru_blocks,
     baseline_sglang_radix_attention,
 )
+from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
 from prefix_cache_evolve.evaluators.contracts import PrefixBlockInfo
-from prefix_cache_evolve.evaluators.prefix_kv_cache import (
-    EvaluatorConfig,
-)
 
 
 def test_baseline_registry_separates_deployable_and_reporting_policies() -> None:

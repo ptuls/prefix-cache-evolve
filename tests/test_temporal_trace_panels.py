@@ -15,15 +15,14 @@ import yaml
 from click.testing import CliRunner
 from pydantic import TypeAdapter
 
+from prefix_cache_evolve.evaluators.baselines import baseline_lru_blocks
+from prefix_cache_evolve.evaluators.complexity import scoring_fn_complexity
 from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
+from prefix_cache_evolve.evaluators.evaluation import PrefixKVCacheEvaluator
 from prefix_cache_evolve.evaluators.fingerprints import evaluation_context_sha256
 from prefix_cache_evolve.evaluators.panels import prepare_workloads
-from prefix_cache_evolve.evaluators.prefix_kv_cache import (
-    EvaluationResult,
-    PrefixKVCacheEvaluator,
-    baseline_lru_blocks,
-    scoring_fn_complexity,
-)
+from prefix_cache_evolve.evaluators.results import EvaluationResult
+from prefix_cache_evolve.evaluators.trace_replay import iter_trace_records
 from prefix_cache_evolve.evaluators.verifier import VERIFIER_VERSION
 from prefix_cache_evolve.problems.prefix_kv_cache import evaluator, runner, sandbox
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import (
@@ -35,7 +34,6 @@ from prefix_cache_evolve.problems.prefix_kv_cache.reproducibility import (
     file_sha256,
     stable_workload_manifest_payload,
 )
-from prefix_cache_evolve.problems.prefix_kv_cache.trace_replay import iter_trace_records
 from prefix_cache_evolve.tools.cli import main as tools_main
 from prefix_cache_evolve.workflow.config import ConfigLoader
 

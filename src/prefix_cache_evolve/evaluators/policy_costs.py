@@ -19,13 +19,10 @@ from typing import Any
 from prefix_cache_evolve.evaluators.baselines import BASELINE_REGISTRY
 from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
 from prefix_cache_evolve.evaluators.contracts import PrefixBlockInfo, PrefixKVPolicy, RequestInfo
-from prefix_cache_evolve.evaluators.prefix_kv_cache import (
-    EvaluationResult,
-    PrefixKVCacheEvaluator,
-    PrefixKVCacheSimulator,
-    TrialMetrics,
-    WorkloadRequest,
-)
+from prefix_cache_evolve.evaluators.evaluation import PrefixKVCacheEvaluator
+from prefix_cache_evolve.evaluators.results import EvaluationResult, TrialMetrics
+from prefix_cache_evolve.evaluators.simulator import PrefixKVCacheSimulator
+from prefix_cache_evolve.evaluators.workloads import WorkloadRequest
 
 PROFILE_CONTRACT = "prefix-kv-cache-policy-costs-v3"
 CALLBACKS = (

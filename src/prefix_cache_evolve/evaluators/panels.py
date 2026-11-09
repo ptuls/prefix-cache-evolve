@@ -8,11 +8,8 @@ from pathlib import Path
 
 from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig, TraceWorkloadConfig
 from prefix_cache_evolve.evaluators.fingerprints import request_stream_fingerprint_record
+from prefix_cache_evolve.evaluators.trace_replay import TRACE_REPLAY_CONTRACT, load_anonymized_trace
 from prefix_cache_evolve.evaluators.workloads import WorkloadRequest, build_workload
-from prefix_cache_evolve.problems.prefix_kv_cache.trace_replay import (
-    TRACE_REPLAY_CONTRACT,
-    load_anonymized_trace,
-)
 
 
 @dataclass(frozen=True)

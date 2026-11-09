@@ -14,9 +14,9 @@ import click
 import yaml
 
 from prefix_cache_evolve.evaluators.configuration import TraceTimeWindow, TraceWorkloadConfig
+from prefix_cache_evolve.evaluators.trace_replay import iter_trace_records
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import load_evaluator_config
 from prefix_cache_evolve.problems.prefix_kv_cache.reproducibility import file_sha256
-from prefix_cache_evolve.problems.prefix_kv_cache.trace_replay import iter_trace_records
 from prefix_cache_evolve.workflow.config import WorkflowFileConfig, load_yaml_document
 
 _SPLITS = ("train", "validation", "hidden")

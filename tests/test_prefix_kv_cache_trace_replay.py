@@ -6,20 +6,18 @@ import json
 
 import pytest
 
-from prefix_cache_evolve.evaluators.prefix_kv_cache import (
-    EvaluatorConfig,
-    PrefixKVCacheEvaluator,
-    baseline_lru_blocks,
+from prefix_cache_evolve.evaluators.baselines import baseline_lru_blocks
+from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
+from prefix_cache_evolve.evaluators.evaluation import PrefixKVCacheEvaluator
+from prefix_cache_evolve.evaluators.trace_replay import (
+    calibrate_anonymized_trace,
+    iter_trace_records,
+    load_anonymized_trace,
 )
 from prefix_cache_evolve.problems.prefix_kv_cache.incumbents.registry import current_incumbent
 from prefix_cache_evolve.problems.prefix_kv_cache.runner import (
     calibrate_trace_report,
     replay_trace_report,
-)
-from prefix_cache_evolve.problems.prefix_kv_cache.trace_replay import (
-    calibrate_anonymized_trace,
-    iter_trace_records,
-    load_anonymized_trace,
 )
 
 

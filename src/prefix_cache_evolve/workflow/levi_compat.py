@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import os
 import random
@@ -24,6 +25,7 @@ class LeviRuntimeSettings:
     """Per-run settings consumed by installed Levi compatibility adapters."""
 
     search_seed: int
+    preserve_initial_centroids: bool = False
     paradigm_max_tokens: int | None = None
     paradigm_model_names: frozenset[str] = frozenset()
     api_base: str | None = None
@@ -119,6 +121,39 @@ def _install_levi_compatibility() -> None:
     _install_degenerate_centroid_adapter()
     _install_completion_adapter()
     _install_paradigm_candidate_adapter()
+    _install_evaluation_drain_adapter()
+
+
+def _install_evaluation_drain_adapter() -> None:
+    """Finish reserved evaluations before an evaluation-budget shutdown."""
+    from levi.pipeline.runner import PipelineRunner
+
+    original = PipelineRunner._wait_for_completion
+    if getattr(original, "_prefix_cache_evolve_evaluation_drain_patch", False):
+        return
+
+    async def wait_with_evaluation_drain(self):
+        await original(self)
+        if _ACTIVE_RUNTIME.get() is None:
+            return
+        state = self.state
+        budget = state.budget
+        # Levi counts reservations toward exhaustion, then cancels consumers.
+        # Producers also set stop_event on reservation exhaustion, so that event
+        # cannot distinguish a budget stop. Cost/time limits and task cancellation
+        # still interrupt draining; no new evaluations are started here.
+        while (
+            budget.evaluations is not None
+            and state.eval_count + state.eval_in_flight >= budget.evaluations
+            and state.eval_in_flight > 0
+            and (budget.dollars is None or state.total_cost < budget.dollars)
+            and (budget.seconds is None or state.elapsed_seconds < budget.seconds)
+            and (budget.target_score is None or state.best_score_so_far < budget.target_score)
+        ):
+            await asyncio.sleep(0.05)
+
+    setattr(wait_with_evaluation_drain, "_prefix_cache_evolve_evaluation_drain_patch", True)
+    PipelineRunner._wait_for_completion = wait_with_evaluation_drain
 
 
 def _install_code_feedback_adapter() -> None:
@@ -192,15 +227,23 @@ def _install_degenerate_centroid_adapter() -> None:
         return
 
     def set_centroids_with_fallback(self, behavior_vectors, n_centroids=50):
-        if _ACTIVE_RUNTIME.get() is None:
+        runtime = _ACTIVE_RUNTIME.get()
+        if runtime is None:
             return original(self, behavior_vectors, n_centroids)
         data = np.asarray(behavior_vectors, dtype=float)
+        fixed = runtime.settings.preserve_initial_centroids
         # Sparse initialization must not permanently collapse the archive to one cell.
-        if not len(data) or len(np.unique(data, axis=0)) >= n_centroids:
+        if not len(data) or (not fixed and len(np.unique(data, axis=0)) >= n_centroids):
             return original(self, behavior_vectors, n_centroids)
 
         self._n_centroids = n_centroids
-        self._centroids = self._init_cvt_centroids()
+        if fixed:
+            if self._centroids is None or len(self._centroids) != n_centroids:
+                raise ValueError(
+                    "fixed archive centroids must be initialized before diversification"
+                )
+        else:
+            self._centroids = self._init_cvt_centroids()
         self._mins = np.zeros(self._n_dims)
         self._maxs = np.ones(self._n_dims)
         self._ranges = np.ones(self._n_dims)

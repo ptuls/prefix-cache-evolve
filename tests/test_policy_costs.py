@@ -12,6 +12,7 @@ from click.testing import CliRunner
 from prefix_cache_evolve.evaluators.baselines import BASELINE_REGISTRY
 from prefix_cache_evolve.evaluators.complexity import scoring_fn_complexity
 from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
+from prefix_cache_evolve.evaluators.evaluation import PrefixKVCacheEvaluator
 from prefix_cache_evolve.evaluators.policy_costs import (
     Distribution,
     baseline_source,
@@ -19,12 +20,13 @@ from prefix_cache_evolve.evaluators.policy_costs import (
     profile_policy,
     retained_size,
 )
-from prefix_cache_evolve.evaluators.prefix_kv_cache import PrefixKVCacheEvaluator
-from prefix_cache_evolve.problems.prefix_kv_cache import runner
+from prefix_cache_evolve.problems.prefix_kv_cache import run_artifacts, runner
 from prefix_cache_evolve.problems.prefix_kv_cache.configuration import load_evaluator_config
 from prefix_cache_evolve.problems.prefix_kv_cache.evaluator import _candidate_source_violations
-from prefix_cache_evolve.problems.prefix_kv_cache.runner import (
+from prefix_cache_evolve.problems.prefix_kv_cache.run_artifacts import (
     _persist_behavior_size_frontier,
+)
+from prefix_cache_evolve.problems.prefix_kv_cache.runner import (
     _resolve_search_seed,
 )
 from prefix_cache_evolve.problems.prefix_kv_cache.sandbox import _fresh_policy
@@ -347,7 +349,7 @@ def test_synthetic_snapshot_resolves_archived_seed_after_relocation(
     }
     monkeypatch.setattr(runner, "_evaluate_baselines", lambda *args, **kwargs: {})
     monkeypatch.setattr(runner, "_evaluate_candidate_program", lambda *args: evaluation)
-    monkeypatch.setattr(runner, "_repository_state", lambda: {})
+    monkeypatch.setattr(run_artifacts, "_repository_state", lambda: {})
     saved = runner.save_run_artifacts(
         SimpleNamespace(best_program=source, metrics=identity, artifacts=identity),
         tmp_path / "runs",

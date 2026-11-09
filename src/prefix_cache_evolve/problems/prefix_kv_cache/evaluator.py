@@ -16,7 +16,7 @@ from prefix_cache_evolve.evaluator_entry import (
 )
 from prefix_cache_evolve.evaluators.complexity import scoring_fn_complexity
 from prefix_cache_evolve.evaluators.configuration import EvaluatorConfig
-from prefix_cache_evolve.evaluators.prefix_kv_cache import PrefixKVCacheEvaluator
+from prefix_cache_evolve.evaluators.evaluation import PrefixKVCacheEvaluator
 from prefix_cache_evolve.evaluators.results import EvaluationResult as PrefixEvaluationResult
 from prefix_cache_evolve.problems.prefix_kv_cache import candidate_validation
 from prefix_cache_evolve.problems.prefix_kv_cache.candidate_contracts import (

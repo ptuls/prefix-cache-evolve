@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+from prefix_cache_evolve.evaluators.trace_replay import load_anonymized_trace
 from prefix_cache_evolve.problems.prefix_kv_cache.runner import main as replay_main
-from prefix_cache_evolve.problems.prefix_kv_cache.trace_replay import load_anonymized_trace
 from prefix_cache_evolve.tools.cli import main as tools_main
 from prefix_cache_evolve.tools.prepare_mooncake import convert_mooncake_trace
 

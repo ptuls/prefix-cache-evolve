@@ -352,6 +352,72 @@ def test_levi_sufficient_initialization_keeps_data_driven_centroids(monkeypatch)
 
 
 @requires_levi
+@pytest.mark.parametrize("values", [[0.2], [0.2, 0.8, 0.9, 0.95]])
+def test_fixed_archive_geometry_survives_initialization(monkeypatch, values):
+    from levi.behavior import BehaviorExtractor
+    from levi.pool.cvt_map_elites import CVTMAPElitesPool
+
+    extractor = BehaviorExtractor(ast_features=["cyclomatic_complexity"])
+    centroids = np.array([[0.1], [0.9]])
+    monkeypatch.setattr(CVTMAPElitesPool, "_init_cvt_centroids", lambda self: centroids.copy())
+    with activate_levi_runtime(LeviRuntimeSettings(search_seed=0, preserve_initial_centroids=True)):
+        pool = CVTMAPElitesPool(extractor, n_centroids=2, data_driven_centroids=False)
+        count, labels = pool.set_centroids_from_data(
+            [np.array([value]) for value in values], n_centroids=2
+        )
+    assert count == 2
+    np.testing.assert_array_equal(pool._centroids, centroids)
+    np.testing.assert_array_equal(labels, [int(value > 0.5) for value in values])
+
+
+@requires_levi
+@pytest.mark.parametrize("stop", ["evaluation", "cost", "time", "producer", "unscoped"])
+def test_reserved_final_evaluation_drains_only_for_evaluation_budget(monkeypatch, stop):
+    from levi.config.models import BudgetConfig
+    from levi.pipeline.runner import PipelineRunner
+    from levi.pipeline.state import PipelineState
+
+    async def original_wait(_self):
+        return None
+
+    monkeypatch.setattr(PipelineRunner, "_wait_for_completion", original_wait)
+
+    async def exercise():
+        state = PipelineState(BudgetConfig(evaluations=2, dollars=2, seconds=60))
+        state.eval_count = 1
+        assert await state.try_start_evaluation()
+        runner = SimpleNamespace(state=state, stop_event=asyncio.Event())
+        if stop == "cost":
+            state.total_cost = 2
+        if stop == "time":
+            state.start_time -= 61
+        if stop == "producer":
+            runner.stop_event.set()
+
+        async def finish():
+            await asyncio.sleep(0.01)
+            state.record_accept()
+            await state.finish_evaluation()
+
+        task = asyncio.create_task(finish())
+        try:
+            await asyncio.wait_for(PipelineRunner._wait_for_completion(runner), timeout=1)
+            assert state.eval_count == (2 if stop in {"evaluation", "producer"} else 1)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    if stop == "unscoped":
+        # Install adapters, then prove the wrapper is inactive outside its scope.
+        with activate_levi_runtime(LeviRuntimeSettings(search_seed=0)):
+            pass
+        asyncio.run(exercise())
+    else:
+        with activate_levi_runtime(LeviRuntimeSettings(search_seed=0)):
+            asyncio.run(exercise())
+
+
+@requires_levi
 def test_compact_paradigm_shift_override_reaches_levi_prompt() -> None:
     from levi.artifacts.code import CodeAdapter
     from levi.config import BudgetConfig, LeviConfig

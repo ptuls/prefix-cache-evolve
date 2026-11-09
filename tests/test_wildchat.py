@@ -12,9 +12,7 @@ import textwrap
 import pytest
 from click.testing import CliRunner
 
-from prefix_cache_evolve.problems.prefix_kv_cache.trace_replay import (
-    load_anonymized_trace,
-)
+from prefix_cache_evolve.evaluators.trace_replay import load_anonymized_trace
 from prefix_cache_evolve.problems.prefix_kv_cache.wildchat import (
     WildChatConversionConfig,
     convert_wildchat_rows,

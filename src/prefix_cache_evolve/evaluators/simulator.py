@@ -1,0 +1,1416 @@
+"""Deterministic prefix-cache state transitions and per-trial measurements."""
+
+from __future__ import annotations
+
+import math
+import tracemalloc
+from collections import deque
+from dataclasses import replace
+from statistics import mean, pstdev
+from typing import Callable
+
+from prefix_cache_evolve.evaluators.contracts import PrefixBlockInfo, PrefixKVPolicy
+from prefix_cache_evolve.evaluators.results import TrialMetrics
+from prefix_cache_evolve.evaluators.simulator_support import (
+    _ActiveDecode,
+    _AdmissionAccounting,
+    _AdmissionAudit,
+    _AdmissionOutcome,
+    _BlockState,
+    _CapacityOutcome,
+    _FutureReuseTracker,
+    _request_arrival_steps,
+    _window_mean,
+)
+from prefix_cache_evolve.evaluators.telemetry import (
+    CacheBlockSnapshot,
+    EvictionCandidateSnapshot,
+    EvictionDecisionObserver,
+    EvictionDecisionSnapshot,
+    RequestSnapshot,
+    SimulatorObserver,
+)
+from prefix_cache_evolve.evaluators.utilities import depth_band as _depth_band
+from prefix_cache_evolve.evaluators.utilities import jain_fairness as _jain_fairness
+from prefix_cache_evolve.evaluators.utilities import percentile as _percentile
+from prefix_cache_evolve.evaluators.utilities import prefix_role as _prefix_role
+from prefix_cache_evolve.evaluators.utilities import request_prefix_hashes as _request_prefix_hashes
+from prefix_cache_evolve.evaluators.utilities import stable_hash as _stable_hash
+from prefix_cache_evolve.evaluators.utilities import structural_metrics as _structural_metrics
+from prefix_cache_evolve.evaluators.utilities import (
+    window_token_hit_rates as _window_token_hit_rates,
+)
+from prefix_cache_evolve.evaluators.workloads import WorkloadRequest
+
+_HIGH_DESCENDANT_MIN_COUNT = 2
+
+_COLD_DEEP_MIN_DEPTH = 5
+
+_SHORT_REUSE_DISTANCE_STEPS = 8
+
+_TEMPORAL_WINDOWS = 4
+
+_ACCESS_GAP_EW_ALPHA = 0.25
+
+_REGIME_WINDOW_REQUESTS = 32
+
+_KV_CAPACITY_MODES = ("prefix_only", "shared")
+
+
+class InvalidCandidateError(RuntimeError):
+    """Raised when a candidate returns an invalid score or crashes."""
+
+
+class PrefixKVCacheSimulator:
+    """Owns cache state and applies scoring-only candidate policies."""
+
+    def __init__(
+        self,
+        *,
+        capacity_blocks: int,
+        block_size_tokens: int,
+        prefill_cost_per_token: float,
+        lookup_cost_per_block: float,
+        eviction_cost_per_block: float,
+        active_tokens_per_step: int = 64,
+        kv_capacity_mode: str = "prefix_only",
+        expose_future_reuse: bool = False,
+        max_memory_bytes: int | None = None,
+        observer: SimulatorObserver | None = None,
+        eviction_decision_observer: EvictionDecisionObserver | None = None,
+        record_admission_diagnostics: bool = False,
+        oracle_admission: bool = False,
+        oracle_eviction: bool = False,
+    ) -> None:
+        self.capacity_blocks = capacity_blocks
+        self.block_size_tokens = block_size_tokens
+        self.prefill_cost_per_token = prefill_cost_per_token
+        self.lookup_cost_per_block = lookup_cost_per_block
+        self.eviction_cost_per_block = eviction_cost_per_block
+        self.active_tokens_per_step = active_tokens_per_step
+        if kv_capacity_mode not in _KV_CAPACITY_MODES:
+            raise ValueError(f"kv capacity mode must be one of {', '.join(_KV_CAPACITY_MODES)}")
+        self.kv_capacity_mode = kv_capacity_mode
+        self.expose_future_reuse = expose_future_reuse
+        self.max_memory_bytes = max_memory_bytes
+        self.observer = observer
+        self.eviction_decision_observer = eviction_decision_observer
+        self.record_admission_diagnostics = record_admission_diagnostics
+        self.oracle_admission = oracle_admission
+        self.oracle_eviction = oracle_eviction
+        self.blocks: dict[int, _BlockState] = {}
+        self._release_events: dict[int, list[int]] = {}
+        self._resident_hashes: set[int] = set()
+        self._leaf_hashes: set[int] = set()
+        self._descendant_counts: dict[int, int] = {}
+        self._subtree_access_counts: dict[int, int] = {}
+        self._subtree_hit_counts: dict[int, int] = {}
+        self._subtree_active_ref_counts: dict[int, int] = {}
+        self._evicted_hashes: set[int] = set()
+        self._last_evicted_at: dict[int, int] = {}
+        self._active_decodes: list[_ActiveDecode] = []
+        self._decode_resident_blocks = 0
+        self._decode_step: int | None = None
+        self._recent_admission_pressure: deque[float] = deque(maxlen=_REGIME_WINDOW_REQUESTS)
+        self._recent_miss_rates: deque[float] = deque(maxlen=_REGIME_WINDOW_REQUESTS)
+
+    def run(
+        self,
+        policy: PrefixKVPolicy,
+        requests: tuple[WorkloadRequest, ...],
+        *,
+        split: str,
+        workload: str,
+        seed: int,
+        scoring_fn_complexity: int = 0,
+    ) -> TrialMetrics:
+        """Simulate a policy over a fixed request sequence."""
+        total_blocks = 0
+        total_tokens = 0
+        hit_blocks = 0
+        hit_tokens = 0
+        priority_weighted_total_tokens = 0
+        priority_weighted_hit_tokens = 0
+        high_priority_tokens = 0
+        high_priority_hit_tokens = 0
+        high_priority_request_count = 0
+        low_priority_tokens = 0
+        low_priority_hit_tokens = 0
+        recompute_tokens = 0
+        recompute_cost = 0.0
+        lookup_block_count = 0
+        admission_count = 0
+        admission_score_count = 0
+        admission_rejection_count = 0
+        policy_bypass_tokens = 0
+        eviction_count = 0
+        forced_bypass_count = 0
+        forced_bypass_tokens = 0
+        latencies: list[float] = []
+        high_priority_latencies: list[float] = []
+        high_priority_request_token_hit_rates: list[float] = []
+        recompute_costs: list[float] = []
+        request_token_hit_rates: list[float] = []
+        request_hit_records: list[tuple[int, int]] = []
+        recovery_hit_tokens = 0
+        recovery_tokens = 0
+        recovery_latencies: list[float] = []
+        recovery_request_count = 0
+        recovery_phase_records: list[list[tuple[int, int, float]]] = []
+        previous_was_recovery = False
+        occupancies: list[int] = []
+        prefix_occupancies: list[int] = []
+        decode_occupancies: list[int] = []
+        active_request_releases: dict[int, int] = {}
+        active_request_count = 0
+        active_request_count_peak = 0
+        max_prefill_cost = 0.0
+        matched_lengths: list[int] = []
+        tenant_hits: dict[int, int] = {}
+        tenant_tokens: dict[int, int] = {}
+        depth_total_blocks: dict[str, int] = {}
+        depth_hit_blocks: dict[str, int] = {}
+        depth_total_tokens: dict[str, int] = {}
+        depth_hit_tokens: dict[str, int] = {}
+        prefix_role_hit_tokens: dict[str, int] = {
+            "system": 0,
+            "developer": 0,
+            "user": 0,
+        }
+        high_descendant_evictions = 0
+        cold_deep_admission_opportunities = 0
+        cold_deep_admissions = 0
+        reuse_after_eviction_missed_blocks = 0
+        reuse_after_eviction_missed_tokens = 0
+        short_reuse_after_eviction_missed_tokens = 0
+        eviction_reuse_distances: list[float] = []
+        admission_accounting = _AdmissionAccounting()
+        admission_audit = _AdmissionAudit(
+            record_decisions=self.record_admission_diagnostics,
+        )
+        avoidable_eviction_count = 0
+        avoidable_short_reuse_eviction_count = 0
+        value_weighted_avoidable_eviction_count = 0
+        value_weighted_avoidable_eviction_regret_tokens = 0.0
+        decode_capacity_outcome = _CapacityOutcome()
+
+        try:
+            self._validate_policy(policy)
+            self._check_memory_limit()
+            future_reuse = _FutureReuseTracker(
+                requests,
+                block_size_tokens=self.block_size_tokens,
+                enabled=self.expose_future_reuse,
+            )
+            audit_future_reuse = _FutureReuseTracker(
+                requests,
+                block_size_tokens=self.block_size_tokens,
+                enabled=True,
+            )
+            arrival_steps = _request_arrival_steps(requests)
+            for request_index, (now, request) in enumerate(
+                zip(arrival_steps, requests, strict=True)
+            ):
+                decode_capacity_outcome.merge(
+                    self._advance_decodes(
+                        policy,
+                        now,
+                        future_reuse,
+                        audit_future_reuse,
+                        admission_accounting,
+                    )
+                )
+                self._release_expired(now)
+                for release_at in sorted(step for step in active_request_releases if step <= now):
+                    active_request_count -= active_request_releases.pop(release_at)
+                request_blocks = self._materialize_chain(request, now)
+                future_reuse.advance(request_blocks, now)
+                audit_future_reuse.advance(request_blocks, now)
+                max_prefill_cost = max(
+                    max_prefill_cost,
+                    sum(self._estimated_recompute_cost(block) for block in request_blocks),
+                )
+                total_blocks += len(request_blocks)
+                total_tokens += request.info.prompt_length
+                for block in request_blocks:
+                    band = _depth_band(block.depth)
+                    depth_total_blocks[band] = depth_total_blocks.get(band, 0) + 1
+                    depth_total_tokens[band] = depth_total_tokens.get(band, 0) + block.token_count
+                tenant_tokens[request.info.tenant_id] = (
+                    tenant_tokens.get(request.info.tenant_id, 0) + request.info.prompt_length
+                )
+
+                visible_request = replace(
+                    request.info,
+                    request_id=_stable_hash(("candidate-request", seed, request.info.request_id)),
+                    request_type="request",
+                    prompt_tokens=(),
+                    recent_admission_pressure=_window_mean(self._recent_admission_pressure),
+                    recent_miss_rate=_window_mean(self._recent_miss_rates),
+                )
+                self._call_hook(policy.on_request_start, visible_request, now)
+                matched_len = self.match_resident_prefix(request_blocks)
+                lookup_blocks = matched_len + int(matched_len < len(request_blocks))
+                lookup_block_count += lookup_blocks
+                matched_lengths.append(matched_len)
+                per_request_evictions = 0
+                admission_count_before = admission_count
+                policy_bypass_tokens_before = policy_bypass_tokens
+                forced_bypass_tokens_before = forced_bypass_tokens
+                request_hit_capacity = self.total_resident_count >= self.capacity_blocks
+                hit_blocks += matched_len
+                tokens_hit = sum(block.token_count for block in request_blocks[:matched_len])
+                hit_tokens += tokens_hit
+                priority_weight = 1 + max(0, request.info.priority)
+                priority_weighted_total_tokens += request.info.prompt_length * priority_weight
+                priority_weighted_hit_tokens += tokens_hit * priority_weight
+                if request.info.priority > 0:
+                    high_priority_tokens += request.info.prompt_length
+                    high_priority_hit_tokens += tokens_hit
+                else:
+                    low_priority_tokens += request.info.prompt_length
+                    low_priority_hit_tokens += tokens_hit
+                request_token_hit_rates.append(tokens_hit / max(1, request.info.prompt_length))
+                request_hit_records.append((tokens_hit, request.info.prompt_length))
+                is_recovery_request = "recovery" in request.info.request_type
+                if is_recovery_request:
+                    if not previous_was_recovery:
+                        recovery_phase_records.append([])
+                    recovery_request_count += 1
+                    recovery_hit_tokens += tokens_hit
+                    recovery_tokens += request.info.prompt_length
+                if request.info.priority > 0:
+                    high_priority_request_count += 1
+                    high_priority_request_token_hit_rates.append(
+                        tokens_hit / max(1, request.info.prompt_length)
+                    )
+                tenant_hits[request.info.tenant_id] = (
+                    tenant_hits.get(request.info.tenant_id, 0) + tokens_hit
+                )
+
+                duration = max(
+                    1,
+                    math.ceil(request.true_output_length / self.active_tokens_per_step),
+                )
+                active_request_count += 1
+                active_request_releases[now + duration] = (
+                    active_request_releases.get(now + duration, 0) + 1
+                )
+                active_request_count_peak = max(active_request_count_peak, active_request_count)
+                for block in request_blocks[:matched_len]:
+                    band = _depth_band(block.depth)
+                    depth_hit_blocks[band] = depth_hit_blocks.get(band, 0) + 1
+                    depth_hit_tokens[band] = depth_hit_tokens.get(band, 0) + block.token_count
+                    if block.prefix_role in prefix_role_hit_tokens:
+                        prefix_role_hit_tokens[block.prefix_role] += block.token_count
+                    block.last_accessed_at = now
+                    block.hit_count += 1
+                    self._record_hit(block)
+                    block.resident_hit_count += 1
+                    self._pin(block, now + duration)
+                    self._call_hook(
+                        policy.on_cache_hit,
+                        self._info(block, now, future_reuse),
+                        visible_request,
+                        now,
+                    )
+
+                admission_blocked = False
+                forced_bypass_active = False
+                for block in request_blocks[matched_len:]:
+                    recompute_tokens += block.token_count
+                    recompute_cost += self._estimated_recompute_cost(block)
+                    if block.prefix_hash in self._evicted_hashes:
+                        reuse_after_eviction_missed_blocks += 1
+                        reuse_after_eviction_missed_tokens += block.token_count
+                        reuse_distance = max(
+                            0,
+                            now - self._last_evicted_at.get(block.prefix_hash, now),
+                        )
+                        eviction_reuse_distances.append(float(reuse_distance))
+                        if reuse_distance <= _SHORT_REUSE_DISTANCE_STEPS:
+                            short_reuse_after_eviction_missed_tokens += block.token_count
+                    self._call_hook(
+                        policy.on_cache_miss,
+                        self._info(block, now, future_reuse),
+                        visible_request,
+                        now,
+                    )
+                    is_cold_deep = block.depth >= _COLD_DEEP_MIN_DEPTH and block.hit_count == 0
+                    if is_cold_deep:
+                        cold_deep_admission_opportunities += 1
+                    if admission_blocked:
+                        if forced_bypass_active:
+                            forced_bypass_tokens += block.token_count
+                        else:
+                            policy_bypass_tokens += block.token_count
+                        continue
+                    admission_score_count += 1
+                    score = self._score(
+                        policy.score_admission,
+                        self._info(block, now, future_reuse),
+                        now,
+                    )
+                    (
+                        incoming_value_tokens,
+                        displaced_value_tokens,
+                        admission_feasible,
+                    ) = self._admission_decision_values(block, audit_future_reuse)
+                    if self.oracle_admission:
+                        score = (
+                            incoming_value_tokens - displaced_value_tokens
+                            if admission_feasible
+                            else -1.0
+                        )
+                    admission_audit.record(
+                        now=now,
+                        request_index=request_index,
+                        block=block,
+                        score=score,
+                        accepted=score > 0.0,
+                        feasible=admission_feasible,
+                        incoming_value_tokens=incoming_value_tokens,
+                        displaced_value_tokens=displaced_value_tokens,
+                        capacity_weight_tokens=self.block_size_tokens,
+                    )
+                    if score <= 0.0:
+                        admission_rejection_count += 1
+                        policy_bypass_tokens += block.token_count
+                        admission_blocked = True
+                        continue
+                    admission_outcome = self._admit_block(
+                        policy,
+                        block,
+                        now,
+                        duration,
+                        future_reuse,
+                        audit_future_reuse,
+                        admission_accounting,
+                    )
+                    capacity_outcome = admission_outcome.capacity
+                    per_request_evictions += capacity_outcome.evictions
+                    request_hit_capacity = (
+                        request_hit_capacity
+                        or capacity_outcome.evictions > 0
+                        or self.total_resident_count >= self.capacity_blocks
+                    )
+                    eviction_count += capacity_outcome.evictions
+                    high_descendant_evictions += capacity_outcome.high_descendant_evictions
+                    avoidable_eviction_count += capacity_outcome.avoidable_evictions
+                    avoidable_short_reuse_eviction_count += (
+                        capacity_outcome.avoidable_short_reuse_evictions
+                    )
+                    value_weighted_avoidable_eviction_count += (
+                        capacity_outcome.value_weighted_avoidable_evictions
+                    )
+                    value_weighted_avoidable_eviction_regret_tokens += (
+                        capacity_outcome.value_weighted_avoidable_eviction_regret_tokens
+                    )
+                    if admission_outcome.admitted:
+                        admission_count += 1
+                        if is_cold_deep:
+                            cold_deep_admissions += 1
+                    else:
+                        forced_bypass_count += 1
+                        forced_bypass_tokens += block.token_count
+                        forced_bypass_active = True
+                        admission_blocked = True
+
+                uncached_cost = sum(
+                    self._estimated_recompute_cost(block) for block in request_blocks[matched_len:]
+                )
+                latency = (
+                    uncached_cost
+                    + lookup_blocks * self.lookup_cost_per_block
+                    + per_request_evictions * self.eviction_cost_per_block
+                )
+                latencies.append(latency)
+                recompute_costs.append(uncached_cost)
+                if request.info.priority > 0:
+                    high_priority_latencies.append(latency)
+                if is_recovery_request:
+                    recovery_latencies.append(latency)
+                    recovery_phase_records[-1].append(
+                        (tokens_hit, request.info.prompt_length, latency)
+                    )
+                previous_was_recovery = is_recovery_request
+                decode_start_outcome = self._start_decode(
+                    policy,
+                    now,
+                    request.true_output_length,
+                    duration,
+                    future_reuse,
+                    audit_future_reuse,
+                    admission_accounting,
+                )
+                decode_capacity_outcome.merge(decode_start_outcome)
+                request_hit_capacity = (
+                    request_hit_capacity
+                    or decode_start_outcome.evictions > 0
+                    or self.total_resident_count >= self.capacity_blocks
+                )
+                occupancies.append(self.total_resident_count)
+                prefix_occupancies.append(self.resident_count)
+                decode_occupancies.append(self.decode_resident_count)
+                self._recent_admission_pressure.append(float(request_hit_capacity))
+                self._recent_miss_rates.append(
+                    1.0 - tokens_hit / max(1, request.info.prompt_length)
+                )
+                self._emit_request_snapshot(
+                    index=request_index,
+                    now=now,
+                    request=request,
+                    request_blocks=request_blocks,
+                    matched_len=matched_len,
+                    hit_tokens=tokens_hit,
+                    admissions=admission_count - admission_count_before,
+                    evictions=per_request_evictions + decode_start_outcome.evictions,
+                    bypassed_tokens=(
+                        policy_bypass_tokens
+                        - policy_bypass_tokens_before
+                        + forced_bypass_tokens
+                        - forced_bypass_tokens_before
+                    ),
+                    latency=latency,
+                    cumulative_hit_tokens=hit_tokens,
+                    cumulative_total_tokens=total_tokens,
+                    cumulative_evictions=eviction_count + decode_capacity_outcome.evictions,
+                )
+        except InvalidCandidateError as exc:
+            return TrialMetrics(
+                split=split,
+                workload=workload,
+                seed=seed,
+                capacity_blocks=self.capacity_blocks,
+                block_size_tokens=self.block_size_tokens,
+                scoring_fn_complexity=scoring_fn_complexity,
+                invalid=True,
+                invalid_reason=str(exc),
+                matched_lengths=tuple(matched_lengths),
+            )
+
+        request_count = max(len(requests), 1)
+        tenant_rates = self._tenant_hit_rates(tenant_hits, tenant_tokens)
+        fairness_penalty = max(tenant_rates) - min(tenant_rates) if tenant_rates else 0.0
+        resident_admissions = [
+            block for block in self.blocks.values() if block.resident and block.admission_tracked
+        ]
+        for block in resident_admissions:
+            admission_accounting.record(block, evicted=False)
+        quarter_hit_rates = _window_token_hit_rates(
+            request_hit_records,
+            window_count=_TEMPORAL_WINDOWS,
+        )
+        recovery_phase_hit_rates = [
+            sum(hit_tokens for hit_tokens, _, _ in records)
+            / max(1, sum(tokens for _, tokens, _ in records))
+            for records in recovery_phase_records
+        ]
+        recovery_phase_p95_latencies = [
+            _percentile([latency for _, _, latency in records], 95)
+            for records in recovery_phase_records
+        ]
+        total_eviction_count = eviction_count + decode_capacity_outcome.evictions
+        total_high_descendant_evictions = (
+            high_descendant_evictions + decode_capacity_outcome.high_descendant_evictions
+        )
+        total_avoidable_eviction_count = (
+            avoidable_eviction_count + decode_capacity_outcome.avoidable_evictions
+        )
+        total_avoidable_short_reuse_eviction_count = (
+            avoidable_short_reuse_eviction_count
+            + decode_capacity_outcome.avoidable_short_reuse_evictions
+        )
+        total_value_weighted_avoidable_eviction_count = (
+            value_weighted_avoidable_eviction_count
+            + decode_capacity_outcome.value_weighted_avoidable_evictions
+        )
+        total_value_weighted_avoidable_eviction_regret_tokens = (
+            value_weighted_avoidable_eviction_regret_tokens
+            + decode_capacity_outcome.value_weighted_avoidable_eviction_regret_tokens
+        )
+        memory_occupancy_mean = mean(occupancies) if occupancies else 0.0
+        prefix_kv_occupancy_mean = mean(prefix_occupancies) if prefix_occupancies else 0.0
+        decode_kv_occupancy_mean = mean(decode_occupancies) if decode_occupancies else 0.0
+        policy_bypass_token_rate = policy_bypass_tokens / max(1, total_tokens)
+        policy_underfill_rate = policy_bypass_token_rate * max(
+            0.0,
+            1.0 - prefix_kv_occupancy_mean / self.capacity_blocks,
+        )
+        structural_metrics = _structural_metrics(
+            depth_total_blocks=depth_total_blocks,
+            depth_hit_blocks=depth_hit_blocks,
+            depth_total_tokens=depth_total_tokens,
+            depth_hit_tokens=depth_hit_tokens,
+            prefix_role_hit_tokens=prefix_role_hit_tokens,
+            total_hit_tokens=hit_tokens,
+            high_descendant_evictions=total_high_descendant_evictions,
+            eviction_count=total_eviction_count,
+            cold_deep_admission_opportunities=cold_deep_admission_opportunities,
+            cold_deep_admissions=cold_deep_admissions,
+            reuse_after_eviction_missed_blocks=reuse_after_eviction_missed_blocks,
+            reuse_after_eviction_missed_tokens=reuse_after_eviction_missed_tokens,
+            recompute_tokens=recompute_tokens,
+        )
+        shadow_price_metrics = admission_audit.shadow_price_metrics()
+        return TrialMetrics(
+            split=split,
+            workload=workload,
+            seed=seed,
+            capacity_blocks=self.capacity_blocks,
+            block_size_tokens=self.block_size_tokens,
+            block_hit_rate=hit_blocks / total_blocks if total_blocks else 0.0,
+            token_hit_rate=hit_tokens / total_tokens if total_tokens else 0.0,
+            priority_weighted_token_hit_rate=(
+                priority_weighted_hit_tokens / priority_weighted_total_tokens
+                if priority_weighted_total_tokens
+                else 0.0
+            ),
+            high_priority_token_hit_rate=(
+                high_priority_hit_tokens / high_priority_tokens if high_priority_tokens else 0.0
+            ),
+            low_priority_token_hit_rate=(
+                low_priority_hit_tokens / low_priority_tokens if low_priority_tokens else 0.0
+            ),
+            priority_request_fraction=high_priority_request_count / request_count,
+            request_token_hit_rate_p10=_percentile(request_token_hit_rates, 10),
+            request_token_hit_rate_p50=_percentile(request_token_hit_rates, 50),
+            high_priority_request_token_hit_rate_p10=_percentile(
+                high_priority_request_token_hit_rates,
+                10,
+            ),
+            worst_quarter_token_hit_rate=min(quarter_hit_rates, default=0.0),
+            final_quarter_token_hit_rate=quarter_hit_rates[-1] if quarter_hit_rates else 0.0,
+            quarter_token_hit_rate_stddev=(
+                pstdev(quarter_hit_rates) if len(quarter_hit_rates) > 1 else 0.0
+            ),
+            prefill_tokens_saved=hit_tokens,
+            recompute_tokens=recompute_tokens,
+            recompute_cost=recompute_cost,
+            lookup_block_count=lookup_block_count,
+            lookup_blocks_per_request=lookup_block_count / request_count,
+            eviction_count=total_eviction_count,
+            admission_count=admission_count,
+            admission_score_count=admission_score_count,
+            admission_rejection_count=admission_rejection_count,
+            admission_rate=admission_count / max(1, admission_score_count),
+            avoidable_admission_count=admission_audit.avoidable_admission_count,
+            avoidable_admission_rate=(
+                admission_audit.avoidable_admission_count / max(1, admission_audit.accepted_count)
+            ),
+            avoidable_admission_regret_tokens=(admission_audit.avoidable_admission_regret_tokens),
+            avoidable_admission_regret_token_rate=(
+                admission_audit.avoidable_admission_regret_tokens / max(1, total_tokens)
+            ),
+            avoidable_rejection_count=admission_audit.avoidable_rejection_count,
+            avoidable_rejection_rate=(
+                admission_audit.avoidable_rejection_count / max(1, admission_audit.rejected_count)
+            ),
+            avoidable_rejection_regret_tokens=(admission_audit.avoidable_rejection_regret_tokens),
+            avoidable_rejection_regret_token_rate=(
+                admission_audit.avoidable_rejection_regret_tokens / max(1, total_tokens)
+            ),
+            oracle_shadow_price_mean=shadow_price_metrics.get(
+                "oracle_shadow_price_mean",
+                0.0,
+            ),
+            oracle_shadow_price_stddev=shadow_price_metrics.get(
+                "oracle_shadow_price_stddev",
+                0.0,
+            ),
+            oracle_shadow_price_change_mean=shadow_price_metrics.get(
+                "oracle_shadow_price_change_mean",
+                0.0,
+            ),
+            oracle_shadow_price_change_p95=shadow_price_metrics.get(
+                "oracle_shadow_price_change_p95",
+                0.0,
+            ),
+            shadow_price_score_scale=shadow_price_metrics.get(
+                "shadow_price_score_scale",
+                0.0,
+            ),
+            shadow_price_tracking_rmse=shadow_price_metrics.get(
+                "shadow_price_tracking_rmse",
+                0.0,
+            ),
+            shadow_price_tracking_mae=shadow_price_metrics.get(
+                "shadow_price_tracking_mae",
+                0.0,
+            ),
+            shadow_price_tracking_bias=shadow_price_metrics.get(
+                "shadow_price_tracking_bias",
+                0.0,
+            ),
+            fast_shadow_price_decision_fraction=shadow_price_metrics.get(
+                "fast_shadow_price_decision_fraction",
+                0.0,
+            ),
+            fast_shadow_price_regret_share=shadow_price_metrics.get(
+                "fast_shadow_price_regret_share",
+                0.0,
+            ),
+            fast_shadow_price_regret_lift=shadow_price_metrics.get(
+                "fast_shadow_price_regret_lift",
+                0.0,
+            ),
+            shadow_price_change_regret_correlation=shadow_price_metrics.get(
+                "shadow_price_change_regret_correlation",
+                0.0,
+            ),
+            useful_admission_count=admission_accounting.useful_count,
+            useful_admission_rate=(admission_accounting.useful_count / max(1, admission_count)),
+            wasted_admission_count=admission_accounting.wasted_count,
+            wasted_admission_rate=(admission_accounting.wasted_count / max(1, admission_count)),
+            admitted_token_count=admission_accounting.admitted_tokens,
+            useful_admission_token_count=admission_accounting.useful_tokens,
+            useful_admission_token_rate=(
+                admission_accounting.useful_tokens / max(1, admission_accounting.admitted_tokens)
+            ),
+            wasted_admission_token_count=admission_accounting.wasted_tokens,
+            wasted_admission_token_rate=(
+                admission_accounting.wasted_tokens / max(1, admission_accounting.admitted_tokens)
+            ),
+            admission_saved_tokens=admission_accounting.saved_tokens,
+            admission_saved_tokens_per_admission=(
+                admission_accounting.saved_tokens / max(1, admission_count)
+            ),
+            admission_token_utility=(
+                admission_accounting.saved_tokens / max(1, admission_count * self.block_size_tokens)
+            ),
+            evicted_without_hit_count=admission_accounting.evicted_without_hit_count,
+            evicted_without_hit_rate=(
+                admission_accounting.evicted_without_hit_count / max(1, total_eviction_count)
+            ),
+            policy_bypass_tokens=policy_bypass_tokens,
+            policy_bypass_token_rate=policy_bypass_token_rate,
+            policy_underfill_rate=policy_underfill_rate,
+            cache_churn_per_1k=total_eviction_count * 1000.0 / request_count,
+            forced_bypass_count=forced_bypass_count,
+            forced_bypass_tokens=forced_bypass_tokens,
+            forced_bypass_token_rate=forced_bypass_tokens / max(1, total_tokens),
+            short_reuse_after_eviction_missed_tokens=(short_reuse_after_eviction_missed_tokens),
+            short_reuse_after_eviction_missed_token_rate=(
+                short_reuse_after_eviction_missed_tokens / max(1, recompute_tokens)
+            ),
+            eviction_reuse_distance_p50=_percentile(eviction_reuse_distances, 50),
+            eviction_reuse_distance_p95=_percentile(eviction_reuse_distances, 95),
+            avoidable_eviction_count=total_avoidable_eviction_count,
+            avoidable_eviction_rate=total_avoidable_eviction_count / max(1, total_eviction_count),
+            avoidable_short_reuse_eviction_count=(total_avoidable_short_reuse_eviction_count),
+            avoidable_short_reuse_eviction_rate=(
+                total_avoidable_short_reuse_eviction_count / max(1, total_eviction_count)
+            ),
+            value_weighted_avoidable_eviction_count=(total_value_weighted_avoidable_eviction_count),
+            value_weighted_avoidable_eviction_rate=(
+                total_value_weighted_avoidable_eviction_count / max(1, total_eviction_count)
+            ),
+            value_weighted_avoidable_eviction_regret_tokens=(
+                total_value_weighted_avoidable_eviction_regret_tokens
+            ),
+            value_weighted_avoidable_eviction_regret_token_rate=(
+                total_value_weighted_avoidable_eviction_regret_tokens / max(1, total_tokens)
+            ),
+            tenant_count=len(tenant_rates),
+            tenant_fairness_penalty=fairness_penalty,
+            tenant_token_hit_rate_p10=_percentile(tenant_rates, 10),
+            tenant_jain_fairness=_jain_fairness(tenant_rates),
+            p50_latency_proxy=_percentile(latencies, 50),
+            p95_latency_proxy=_percentile(latencies, 95),
+            p99_latency_proxy=_percentile(latencies, 99),
+            high_priority_p95_latency_proxy=_percentile(high_priority_latencies, 95),
+            high_priority_p99_latency_proxy=_percentile(high_priority_latencies, 99),
+            p95_recompute_cost=_percentile(recompute_costs, 95),
+            recovery_request_count=recovery_request_count,
+            recovery_token_hit_rate=recovery_hit_tokens / max(1, recovery_tokens),
+            recovery_p95_latency_proxy=_percentile(recovery_latencies, 95),
+            recovery_phase_count=len(recovery_phase_records),
+            worst_recovery_phase_token_hit_rate=min(
+                recovery_phase_hit_rates,
+                default=0.0,
+            ),
+            final_recovery_phase_token_hit_rate=(
+                recovery_phase_hit_rates[-1] if recovery_phase_hit_rates else 0.0
+            ),
+            worst_recovery_phase_p95_latency_proxy=max(
+                recovery_phase_p95_latencies,
+                default=0.0,
+            ),
+            memory_occupancy_mean=memory_occupancy_mean,
+            memory_occupancy_peak=max(occupancies) if occupancies else 0,
+            prefix_kv_occupancy_mean=prefix_kv_occupancy_mean,
+            prefix_kv_occupancy_peak=max(prefix_occupancies) if prefix_occupancies else 0,
+            decode_kv_occupancy_mean=decode_kv_occupancy_mean,
+            decode_kv_occupancy_peak=max(decode_occupancies) if decode_occupancies else 0,
+            decode_kv_blocks_requested=decode_capacity_outcome.decode_blocks_requested,
+            decode_kv_blocks_allocated=decode_capacity_outcome.decode_blocks_allocated,
+            decode_kv_allocation_failure_blocks=(
+                decode_capacity_outcome.decode_allocation_failure_blocks
+            ),
+            decode_kv_allocation_failure_rate=(
+                decode_capacity_outcome.decode_allocation_failure_blocks
+                / max(1, decode_capacity_outcome.decode_blocks_requested)
+            ),
+            decode_pressure_eviction_count=decode_capacity_outcome.decode_pressure_evictions,
+            decode_pressure_eviction_rate=(
+                decode_capacity_outcome.decode_pressure_evictions / max(1, total_eviction_count)
+            ),
+            arrival_span_steps=(arrival_steps[-1] - arrival_steps[0] + 1 if arrival_steps else 0),
+            active_request_count_peak=active_request_count_peak,
+            max_prefill_cost=max_prefill_cost,
+            scoring_fn_complexity=scoring_fn_complexity,
+            matched_lengths=tuple(matched_lengths),
+            structural_metrics=structural_metrics,
+            admission_decisions=(
+                tuple(admission_audit.decisions) if self.record_admission_diagnostics else ()
+            ),
+        )
+
+    @property
+    def resident_count(self) -> int:
+        """Return the number of resident prefix blocks."""
+        return len(self._resident_hashes)
+
+    @property
+    def decode_resident_count(self) -> int:
+        """Return the number of resident decode blocks."""
+        return self._decode_resident_blocks
+
+    @property
+    def total_resident_count(self) -> int:
+        """Return total resident prefix and decode blocks."""
+        return self.resident_count + self.decode_resident_count
+
+    def match_resident_prefix(self, blocks: list[_BlockState]) -> int:
+        """Return the largest root-contiguous resident prefix length."""
+        matched = 0
+        for block in blocks:
+            if not block.resident:
+                break
+            matched += 1
+        return matched
+
+    def _emit_request_snapshot(
+        self,
+        *,
+        index: int,
+        now: int,
+        request: WorkloadRequest,
+        request_blocks: list[_BlockState],
+        matched_len: int,
+        hit_tokens: int,
+        admissions: int,
+        evictions: int,
+        bypassed_tokens: int,
+        latency: float,
+        cumulative_hit_tokens: int,
+        cumulative_total_tokens: int,
+        cumulative_evictions: int,
+    ) -> None:
+        """Emit a request-complete snapshot when observability is enabled."""
+        if self.observer is None:
+            return
+        request_hashes = {block.prefix_hash for block in request_blocks}
+        hit_hashes = {block.prefix_hash for block in request_blocks[:matched_len]}
+        cache = tuple(
+            CacheBlockSnapshot(
+                block_id=f"{block.prefix_hash:016x}",
+                parent_id=(f"{block.parent_hash:016x}" if block.parent_hash is not None else None),
+                depth=block.depth,
+                token_count=block.token_count,
+                prefix_role=block.prefix_role,
+                tenant_id=block.tenant_id,
+                hit_count=block.hit_count,
+                active_ref_count=block.active_ref_count,
+                descendant_count=self._descendant_counts.get(block.prefix_hash, 0),
+                last_accessed_at=block.last_accessed_at,
+                is_leaf=block.prefix_hash in self._leaf_hashes,
+                in_request=block.prefix_hash in request_hashes,
+                hit_this_request=block.prefix_hash in hit_hashes,
+            )
+            for block in sorted(
+                (self.blocks[prefix_hash] for prefix_hash in self._resident_hashes),
+                key=lambda value: (value.depth, value.prefix_hash),
+            )
+        )
+        self.observer.on_request_complete(
+            RequestSnapshot(
+                index=index,
+                now=now,
+                request_id=request.info.request_id,
+                tenant_id=request.info.tenant_id,
+                priority=request.info.priority,
+                request_type=request.info.request_type,
+                prompt_blocks=len(request_blocks),
+                prompt_tokens=request.info.prompt_length,
+                matched_blocks=matched_len,
+                hit_tokens=hit_tokens,
+                admissions=admissions,
+                evictions=evictions,
+                bypassed_tokens=bypassed_tokens,
+                resident_blocks=self.resident_count,
+                capacity_blocks=self.capacity_blocks,
+                latency_proxy=latency,
+                cumulative_token_hit_rate=(cumulative_hit_tokens / max(1, cumulative_total_tokens)),
+                cumulative_evictions=cumulative_evictions,
+                cache=cache,
+            )
+        )
+
+    def evict_block(self, prefix_hash: int) -> None:
+        """Evict a resident leaf block; useful for direct simulator tests."""
+        block = self.blocks[prefix_hash]
+        if block.active_ref_count or block.resident_children:
+            raise ValueError("only inactive resident leaves can be evicted")
+        self._remove_resident(block)
+
+    def _admit_block(
+        self,
+        policy: PrefixKVPolicy,
+        block: _BlockState,
+        now: int,
+        duration: int,
+        future_reuse: _FutureReuseTracker,
+        audit_future_reuse: _FutureReuseTracker,
+        admission_accounting: _AdmissionAccounting,
+    ) -> _AdmissionOutcome:
+        if block.resident:
+            self._pin(block, now + duration)
+            return _AdmissionOutcome(admitted=True)
+
+        if block.parent_hash is not None:
+            parent = self.blocks.get(block.parent_hash)
+            if parent is None or not parent.resident:
+                return _AdmissionOutcome()
+
+        self._make_resident(block)
+        block.last_accessed_at = now
+        release_at = now + duration
+        self._pin(block, release_at)
+        capacity_outcome = _CapacityOutcome()
+        while self.total_resident_count > self.capacity_blocks:
+            outcome = self._evict_one(
+                policy,
+                now,
+                future_reuse,
+                audit_future_reuse,
+                admission_accounting,
+            )
+            if outcome is None:
+                self._unpin(block)
+                self._cancel_release(block, release_at)
+                self._remove_resident(block)
+                return _AdmissionOutcome(capacity=capacity_outcome)
+            capacity_outcome.merge(outcome)
+        block.admission_tracked = True
+        return _AdmissionOutcome(admitted=True, capacity=capacity_outcome)
+
+    def _evict_one(
+        self,
+        policy: PrefixKVPolicy,
+        now: int,
+        future_reuse: _FutureReuseTracker,
+        audit_future_reuse: _FutureReuseTracker,
+        admission_accounting: _AdmissionAccounting,
+    ) -> _CapacityOutcome | None:
+        """Evict one legal prefix leaf using the candidate policy."""
+        evictable = self._evictable_blocks()
+        if not evictable:
+            return None
+        scored = []
+        for candidate in evictable:
+            info = self._info(candidate, now, future_reuse)
+            scored.append(
+                (
+                    self._score(policy.score_eviction, info, now),
+                    candidate.prefix_hash,
+                    candidate,
+                    info,
+                )
+            )
+        if self.oracle_eviction:
+            _, _, victim, _ = min(
+                scored,
+                key=lambda item: self._oracle_eviction_key(
+                    item[2],
+                    now,
+                    audit_future_reuse,
+                ),
+            )
+        else:
+            _, _, victim, _ = max(scored, key=lambda item: (item[0], item[1]))
+        victim_next_reuse = audit_future_reuse.next_distance(victim.prefix_hash, now)
+        future_values = {
+            candidate.prefix_hash: self._future_value_tokens(candidate, audit_future_reuse)
+            for candidate in evictable
+        }
+        if self.eviction_decision_observer is not None:
+            self.eviction_decision_observer.on_eviction_decision(
+                EvictionDecisionSnapshot(
+                    now=now,
+                    victim_prefix_hash=victim.prefix_hash,
+                    candidates=tuple(
+                        EvictionCandidateSnapshot(
+                            block=info,
+                            score=score,
+                            next_reuse_distance=audit_future_reuse.next_distance(
+                                candidate.prefix_hash,
+                                now,
+                            ),
+                        )
+                        for score, _, candidate, info in scored
+                    ),
+                )
+            )
+        alternative_next_reuse = [
+            audit_future_reuse.next_distance(candidate.prefix_hash, now)
+            for candidate in evictable
+            if candidate.prefix_hash != victim.prefix_hash
+        ]
+        furthest_alternative_reuse = max(
+            (distance for distance in alternative_next_reuse if distance is not None),
+            default=None,
+        )
+        outcome = _CapacityOutcome(evictions=1)
+        minimum_future_value = min(future_values.values())
+        value_regret = future_values[victim.prefix_hash] - minimum_future_value
+        if value_regret > 0.0:
+            outcome.value_weighted_avoidable_evictions = 1
+            outcome.value_weighted_avoidable_eviction_regret_tokens = value_regret
+        if (
+            victim_next_reuse is not None
+            and furthest_alternative_reuse is not None
+            and victim_next_reuse < furthest_alternative_reuse
+        ):
+            outcome.avoidable_evictions = 1
+            if (
+                victim_next_reuse <= _SHORT_REUSE_DISTANCE_STEPS
+                and furthest_alternative_reuse > _SHORT_REUSE_DISTANCE_STEPS
+            ):
+                outcome.avoidable_short_reuse_evictions = 1
+        if self._descendant_counts.get(victim.prefix_hash, 0) >= _HIGH_DESCENDANT_MIN_COUNT:
+            outcome.high_descendant_evictions = 1
+        admission_accounting.record(victim, evicted=True)
+        self._evicted_hashes.add(victim.prefix_hash)
+        self._last_evicted_at[victim.prefix_hash] = now
+        self._remove_resident(victim)
+        return outcome
+
+    def _admission_decision_values(
+        self,
+        block: _BlockState,
+        audit_future_reuse: _FutureReuseTracker,
+    ) -> tuple[float, float, bool]:
+        """Return incoming value, cheapest displacement, and admission feasibility."""
+        incoming_value = self._future_value_tokens(block, audit_future_reuse)
+        required_evictions = max(0, self.total_resident_count + 1 - self.capacity_blocks)
+        if required_evictions == 0:
+            return incoming_value, 0.0, True
+        candidate_values = sorted(
+            self._future_value_tokens(candidate, audit_future_reuse)
+            for candidate in self._admission_victim_candidates(block)
+        )
+        if len(candidate_values) < required_evictions:
+            return incoming_value, 0.0, False
+        return incoming_value, sum(candidate_values[:required_evictions]), True
+
+    def _admission_victim_candidates(self, incoming: _BlockState) -> list[_BlockState]:
+        """Return blocks that would remain legal victims after admitting `incoming`."""
+        return [
+            candidate
+            for candidate in self._evictable_blocks()
+            if candidate.prefix_hash != incoming.parent_hash
+        ]
+
+    @staticmethod
+    def _future_value_tokens(
+        block: _BlockState,
+        audit_future_reuse: _FutureReuseTracker,
+    ) -> float:
+        """Return the oracle upper bound on future token hits for one block."""
+        remaining_reuse = audit_future_reuse.remaining_count(block.prefix_hash)
+        return block.token_count * max(0.0, remaining_reuse or 0.0)
+
+    def _oracle_eviction_key(
+        self,
+        block: _BlockState,
+        now: int,
+        audit_future_reuse: _FutureReuseTracker,
+    ) -> tuple[float, float, int]:
+        """Rank legal victims by future value, then furthest next use."""
+        next_distance = audit_future_reuse.next_distance(block.prefix_hash, now)
+        tie_distance = math.inf if next_distance is None else next_distance
+        return (
+            self._future_value_tokens(block, audit_future_reuse),
+            -tie_distance,
+            block.prefix_hash,
+        )
+
+    def _advance_decodes(
+        self,
+        policy: PrefixKVPolicy,
+        now: int,
+        future_reuse: _FutureReuseTracker,
+        audit_future_reuse: _FutureReuseTracker,
+        admission_accounting: _AdmissionAccounting,
+    ) -> _CapacityOutcome:
+        """Advance in-flight decode KV through the current logical step."""
+        outcome = _CapacityOutcome()
+        if self.kv_capacity_mode != "shared":
+            return outcome
+        previous_step = self._decode_step
+        first_step = now if previous_step is None else previous_step + 1
+        for step in range(first_step, now + 1):
+            self._release_expired(step)
+            retained_decodes = []
+            for decode in self._active_decodes:
+                if decode.release_at <= step:
+                    self._decode_resident_blocks -= decode.allocated_blocks
+                else:
+                    retained_decodes.append(decode)
+            self._active_decodes = retained_decodes
+            outcome.merge(
+                self._grow_decodes(
+                    policy,
+                    step,
+                    future_reuse,
+                    audit_future_reuse,
+                    admission_accounting,
+                )
+            )
+        self._decode_step = now
+        return outcome
+
+    def _start_decode(
+        self,
+        policy: PrefixKVPolicy,
+        now: int,
+        true_output_length: int,
+        duration: int,
+        future_reuse: _FutureReuseTracker,
+        audit_future_reuse: _FutureReuseTracker,
+        admission_accounting: _AdmissionAccounting,
+    ) -> _CapacityOutcome:
+        """Start one decode and allocate its first generated KV blocks."""
+        if self.kv_capacity_mode != "shared":
+            return _CapacityOutcome()
+        self._active_decodes.append(
+            _ActiveDecode(
+                started_at=now,
+                release_at=now + duration,
+                total_tokens=max(0, true_output_length),
+            )
+        )
+        return self._grow_decodes(
+            policy,
+            now,
+            future_reuse,
+            audit_future_reuse,
+            admission_accounting,
+        )
+
+    def _grow_decodes(
+        self,
+        policy: PrefixKVPolicy,
+        now: int,
+        future_reuse: _FutureReuseTracker,
+        audit_future_reuse: _FutureReuseTracker,
+        admission_accounting: _AdmissionAccounting,
+    ) -> _CapacityOutcome:
+        """Allocate newly generated decode blocks at one logical step."""
+        outcome = _CapacityOutcome()
+        for decode in self._active_decodes:
+            generated_tokens = min(
+                decode.total_tokens,
+                max(0, now - decode.started_at + 1) * self.active_tokens_per_step,
+            )
+            target_blocks = math.ceil(generated_tokens / self.block_size_tokens)
+            requested_blocks = max(0, target_blocks - decode.attempted_blocks)
+            decode.attempted_blocks = target_blocks
+            allocation = self._allocate_decode_blocks(
+                policy,
+                now,
+                requested_blocks,
+                future_reuse,
+                audit_future_reuse,
+                admission_accounting,
+            )
+            decode.allocated_blocks += allocation.decode_blocks_allocated
+            outcome.merge(allocation)
+        return outcome
+
+    def _allocate_decode_blocks(
+        self,
+        policy: PrefixKVPolicy,
+        now: int,
+        requested_blocks: int,
+        future_reuse: _FutureReuseTracker,
+        audit_future_reuse: _FutureReuseTracker,
+        admission_accounting: _AdmissionAccounting,
+    ) -> _CapacityOutcome:
+        """Allocate non-evictable decode blocks, evicting prefix leaves as needed."""
+        outcome = _CapacityOutcome(decode_blocks_requested=requested_blocks)
+        if requested_blocks <= 0:
+            return outcome
+        self._decode_resident_blocks += requested_blocks
+        while self.total_resident_count > self.capacity_blocks:
+            eviction = self._evict_one(
+                policy,
+                now,
+                future_reuse,
+                audit_future_reuse,
+                admission_accounting,
+            )
+            if eviction is None:
+                break
+            outcome.merge(eviction)
+            outcome.decode_pressure_evictions += eviction.evictions
+        overflow = max(0, self.total_resident_count - self.capacity_blocks)
+        if overflow:
+            self._decode_resident_blocks -= overflow
+        outcome.decode_allocation_failure_blocks = overflow
+        outcome.decode_blocks_allocated = requested_blocks - overflow
+        return outcome
+
+    def _evictable_blocks(self) -> list[_BlockState]:
+        return [
+            self.blocks[prefix_hash]
+            for prefix_hash in self._leaf_hashes
+            if self.blocks[prefix_hash].active_ref_count == 0
+        ]
+
+    def _materialize_chain(
+        self,
+        request: WorkloadRequest,
+        now: int,
+    ) -> list[_BlockState]:
+        blocks: list[_BlockState] = []
+        tokens = request.prompt_tokens or request.info.prompt_tokens
+        hashes = _request_prefix_hashes(request, self.block_size_tokens)
+        for depth, prefix_hash in enumerate(hashes, start=1):
+            start = (depth - 1) * self.block_size_tokens
+            chunk = tokens[start : start + self.block_size_tokens]
+            parent_hash = blocks[-1].prefix_hash if blocks else None
+            if prefix_hash not in self.blocks:
+                self.blocks[prefix_hash] = _BlockState(
+                    prefix_hash=prefix_hash,
+                    parent_hash=parent_hash,
+                    depth=depth,
+                    start_token=start,
+                    end_token=start + len(chunk),
+                    token_count=len(chunk),
+                    prefix_role=_prefix_role(
+                        request.prompt_token_roles[start : start + len(chunk)]
+                    ),
+                    tenant_id=request.info.tenant_id,
+                    created_at=now,
+                    last_accessed_at=now,
+                )
+                if parent_hash is not None:
+                    self.blocks[parent_hash].known_children.add(prefix_hash)
+                    ancestor_hash: int | None = parent_hash
+                    while ancestor_hash is not None:
+                        self._descendant_counts[ancestor_hash] = (
+                            self._descendant_counts.get(ancestor_hash, 0) + 1
+                        )
+                        ancestor_hash = self.blocks[ancestor_hash].parent_hash
+            block = self.blocks[prefix_hash]
+            self._record_access(block, now)
+            blocks.append(block)
+        return blocks
+
+    def _record_access(self, block: _BlockState, now: int) -> None:
+        """Record online recurrence timing before candidate callbacks fire."""
+        self._adjust_subtree_counter(self._subtree_access_counts, block, 1)
+        previous = block.observed_accessed_at
+        block.prev_last_accessed_at = previous
+        block.last_access_gap = None if previous is None else max(0, now - previous)
+        block.observed_accessed_at = now
+        if block.last_access_gap is None:
+            return
+        gap = float(block.last_access_gap)
+        if block.access_gap_mean is None or block.access_gap_mean_square is None:
+            block.access_gap_mean = gap
+            block.access_gap_mean_square = gap * gap
+        else:
+            alpha = _ACCESS_GAP_EW_ALPHA
+            block.access_gap_mean += alpha * (gap - block.access_gap_mean)
+            block.access_gap_mean_square += alpha * (gap * gap - block.access_gap_mean_square)
+        block.access_gap_sample_count = min(2, block.access_gap_sample_count + 1)
+
+    def _record_hit(self, block: _BlockState) -> None:
+        """Record one hit in the online subtree aggregate."""
+        self._adjust_subtree_counter(self._subtree_hit_counts, block, 1)
+
+    def _adjust_subtree_counter(
+        self,
+        counts: dict[int, int],
+        block: _BlockState,
+        delta: int,
+    ) -> None:
+        """Apply a block contribution to itself and each known ancestor."""
+        prefix_hash: int | None = block.prefix_hash
+        while prefix_hash is not None:
+            counts[prefix_hash] = max(0, counts.get(prefix_hash, 0) + delta)
+            prefix_hash = self.blocks[prefix_hash].parent_hash
+
+    def _make_resident(self, block: _BlockState) -> None:
+        if block.resident:
+            return
+        block.resident = True
+        block.admission_tracked = False
+        block.resident_hit_count = 0
+        self._resident_hashes.add(block.prefix_hash)
+        self._leaf_hashes.add(block.prefix_hash)
+        if block.parent_hash is not None and block.parent_hash in self.blocks:
+            parent = self.blocks[block.parent_hash]
+            if parent.resident:
+                parent.resident_children.add(block.prefix_hash)
+                self._leaf_hashes.discard(parent.prefix_hash)
+
+    def _remove_resident(self, block: _BlockState) -> None:
+        if not block.resident:
+            return
+        if block.parent_hash is not None and block.parent_hash in self.blocks:
+            parent = self.blocks[block.parent_hash]
+            parent.resident_children.discard(block.prefix_hash)
+            if parent.resident and not parent.resident_children:
+                self._leaf_hashes.add(parent.prefix_hash)
+        block.resident = False
+        block.admission_tracked = False
+        block.resident_hit_count = 0
+        self._resident_hashes.discard(block.prefix_hash)
+        self._leaf_hashes.discard(block.prefix_hash)
+        block.resident_children.clear()
+
+    def _pin(self, block: _BlockState, release_at: int) -> None:
+        block.active_ref_count += 1
+        self._adjust_subtree_counter(self._subtree_active_ref_counts, block, 1)
+        self._release_events.setdefault(release_at, []).append(block.prefix_hash)
+
+    def _unpin(self, block: _BlockState) -> None:
+        if block.active_ref_count <= 0:
+            return
+        block.active_ref_count -= 1
+        self._adjust_subtree_counter(self._subtree_active_ref_counts, block, -1)
+
+    def _cancel_release(self, block: _BlockState, release_at: int) -> None:
+        events = self._release_events.get(release_at)
+        if not events:
+            return
+        try:
+            events.remove(block.prefix_hash)
+        except ValueError:
+            return
+        if not events:
+            self._release_events.pop(release_at, None)
+
+    def _release_expired(self, now: int) -> None:
+        for release_at in sorted([key for key in self._release_events if key <= now]):
+            for prefix_hash in self._release_events.pop(release_at):
+                block = self.blocks.get(prefix_hash)
+                if block is not None:
+                    self._unpin(block)
+
+    def _info(
+        self,
+        block: _BlockState,
+        now: int,
+        future_reuse: _FutureReuseTracker,
+    ) -> PrefixBlockInfo:
+        return PrefixBlockInfo(
+            block_id=block.block_id,
+            prefix_hash=block.prefix_hash,
+            parent_hash=block.parent_hash,
+            depth=block.depth,
+            start_token=block.start_token,
+            end_token=block.end_token,
+            token_count=block.token_count,
+            tenant_id=block.tenant_id,
+            created_at=block.created_at,
+            last_accessed_at=block.last_accessed_at,
+            hit_count=block.hit_count,
+            descendant_count=self._descendant_counts.get(block.prefix_hash, 0),
+            active_ref_count=block.active_ref_count,
+            estimated_recompute_cost=self._estimated_recompute_cost(block),
+            prev_last_accessed_at=block.prev_last_accessed_at,
+            last_access_gap=block.last_access_gap,
+            access_gap_mean=(block.access_gap_mean if block.access_gap_sample_count >= 2 else None),
+            access_gap_var=(
+                max(
+                    0.0,
+                    block.access_gap_mean_square - block.access_gap_mean**2,
+                )
+                if block.access_gap_sample_count >= 2
+                and block.access_gap_mean is not None
+                and block.access_gap_mean_square is not None
+                else None
+            ),
+            subtree_hit_rate=(
+                self._subtree_hit_counts.get(block.prefix_hash, 0)
+                / max(1, self._subtree_access_counts.get(block.prefix_hash, 0))
+            ),
+            subtree_active_ref_count=self._subtree_active_ref_counts.get(
+                block.prefix_hash,
+                0,
+            ),
+            estimated_future_reuse=future_reuse.remaining_count(block.prefix_hash),
+            estimated_next_reuse_distance=future_reuse.next_distance(block.prefix_hash, now),
+        )
+
+    def _estimated_recompute_cost(self, block: _BlockState) -> float:
+        return block.end_token * self.prefill_cost_per_token
+
+    def _score(self, func: Callable[[PrefixBlockInfo, int], float], *args) -> float:
+        try:
+            score = func(*args)
+        except Exception as exc:  # pragma: no cover - exercised by tests
+            raise InvalidCandidateError(f"{func.__name__} raised {type(exc).__name__}") from exc
+        if isinstance(score, bool) or not isinstance(score, (float, int)):
+            raise InvalidCandidateError(f"{func.__name__} returned non-numeric score")
+        score = float(score)
+        if not math.isfinite(score):
+            raise InvalidCandidateError(f"{func.__name__} returned non-finite score")
+        self._check_memory_limit()
+        return score
+
+    def _call_hook(self, func: Callable, *args) -> None:
+        try:
+            func(*args)
+        except Exception as exc:  # pragma: no cover - defensive
+            raise InvalidCandidateError(f"{func.__name__} raised {type(exc).__name__}") from exc
+        self._check_memory_limit()
+
+    def _check_memory_limit(self) -> None:
+        if not self.max_memory_bytes or not tracemalloc.is_tracing():
+            return
+        _, peak_memory_bytes = tracemalloc.get_traced_memory()
+        if peak_memory_bytes > self.max_memory_bytes:
+            raise InvalidCandidateError(
+                f"candidate used {peak_memory_bytes} bytes (> {self.max_memory_bytes})"
+            )
+
+    @staticmethod
+    def _validate_policy(policy: PrefixKVPolicy) -> None:
+        """Ensures missing hooks become structured invalid-candidate results."""
+        required_methods = (
+            "on_request_start",
+            "score_admission",
+            "score_eviction",
+            "on_cache_hit",
+            "on_cache_miss",
+        )
+        for method_name in required_methods:
+            if not callable(getattr(policy, method_name, None)):
+                raise InvalidCandidateError(f"policy must implement {method_name}()")
+
+    @staticmethod
+    def _tenant_hit_rates(
+        tenant_hits: dict[int, int],
+        tenant_tokens: dict[int, int],
+    ) -> list[float]:
+        return [
+            tenant_hits.get(tenant, 0) / tokens
+            for tenant, tokens in tenant_tokens.items()
+            if tokens > 0
+        ]
